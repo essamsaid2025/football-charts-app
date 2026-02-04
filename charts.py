@@ -3,13 +3,14 @@ import re
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-from mplsoccer import Pitch
+from mplsoccer import Pitch, PyPizza
 
 PASS_ORDER = ["unsuccessful", "successful", "key pass", "assist"]
 SHOT_ORDER = ["off target", "ontarget", "goal"]
 
 SHOT_TYPES = set(SHOT_ORDER)
 REQUIRED = ["outcome", "x", "y"]  # x2,y2 optional (required only for pass arrows)
+
 
 def _norm_outcome(s: str) -> str:
     if s is None:
@@ -33,6 +34,7 @@ def _norm_outcome(s: str) -> str:
     }
     return aliases.get(s, s)
 
+
 def load_data(path: str) -> pd.DataFrame:
     ext = os.path.splitext(path)[1].lower()
     if ext == ".csv":
@@ -41,13 +43,16 @@ def load_data(path: str) -> pd.DataFrame:
         return pd.read_excel(path)
     raise ValueError("Unsupported file type. Use CSV or Excel.")
 
+
 def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [c.strip().lower() for c in df.columns]
 
     missing = [c for c in REQUIRED if c not in df.columns]
     if missing:
-        raise ValueError(f"Missing columns: {missing}. Required columns are: {REQUIRED} (x2,y2 needed for pass arrows).")
+        raise ValueError(
+            f"Missing columns: {missing}. Required columns are: {REQUIRED} (x2,y2 needed for pass arrows)."
+        )
 
     for c in ["x", "y", "x2", "y2"]:
         if c in df.columns:
@@ -60,12 +65,13 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df.loc[df["outcome"].isin(SHOT_TYPES), "event_type"] = "shot"
     return df
 
+
 def apply_pitch_transforms(
     df: pd.DataFrame,
     attack_direction: str = "ltr",
     flip_y: bool = False,
-    pitch_mode: str = "rect",  # "rect" or "square"
-    pitch_width: float = 64.0, # used only for rect mode
+    pitch_mode: str = "rect",   # "rect" or "square"
+    pitch_width: float = 64.0,  # used only for rect mode
 ) -> pd.DataFrame:
     """
     Your tag tool coordinates assumed 0-100 for both axes.
@@ -99,6 +105,7 @@ def apply_pitch_transforms(
 
     return df
 
+
 def make_pitch(pitch_mode: str = "rect", pitch_width: float = 64.0):
     """
     Custom pitch that matches your coordinate system:
@@ -106,9 +113,20 @@ def make_pitch(pitch_mode: str = "rect", pitch_width: float = 64.0):
     - rect: 100 x pitch_width (looks like a real pitch)
     """
     if pitch_mode == "square":
-        return Pitch(pitch_type="custom", pitch_length=100, pitch_width=100, line_zorder=2)
+        return Pitch(
+            pitch_type="custom",
+            pitch_length=100,
+            pitch_width=100,
+            line_zorder=2,
+        )
 
-    return Pitch(pitch_type="custom", pitch_length=100, pitch_width=pitch_width, line_zorder=2)
+    return Pitch(
+        pitch_type="custom",
+        pitch_length=100,
+        pitch_width=pitch_width,
+        line_zorder=2,
+    )
+
 
 # ----------------------------
 # Charts
@@ -118,7 +136,6 @@ def outcome_bar(df: pd.DataFrame, title: str = "", bar_colors: dict | None = Non
     counts = df["outcome"].value_counts()
 
     fig, ax = plt.subplots(figsize=(8, 4))
-    # colors per bar (fallback لو مفيش لون)
     colors = [bar_colors.get(k, None) for k in counts.index.astype(str)]
     ax.bar(counts.index.astype(str), counts.values, color=colors)
 
@@ -127,14 +144,24 @@ def outcome_bar(df: pd.DataFrame, title: str = "", bar_colors: dict | None = Non
     ax.tick_params(axis="x", rotation=25)
     return fig
 
-def start_location_heatmap(df: pd.DataFrame, title: str = "", pitch_mode: str = "rect", pitch_width: float = 64.0):
+
+def start_location_heatmap(
+    df: pd.DataFrame, title: str = "", pitch_mode: str = "rect", pitch_width: float = 64.0
+):
     pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width)
     fig, ax = pitch.draw(figsize=(7.6, 4.8))
     pitch.kdeplot(df["x"], df["y"], ax=ax, fill=True, levels=50)
     ax.set_title((title + "\nStart Locations Heatmap").strip())
     return fig
 
-def pass_map(df: pd.DataFrame, title: str = "", pass_colors: dict | None = None, pitch_mode: str = "rect", pitch_width: float = 64.0):
+
+def pass_map(
+    df: pd.DataFrame,
+    title: str = "",
+    pass_colors: dict | None = None,
+    pitch_mode: str = "rect",
+    pitch_width: float = 64.0,
+):
     pass_colors = pass_colors or {}
     d = df[df["event_type"] == "pass"].copy()
 
@@ -150,14 +177,28 @@ def pass_map(df: pd.DataFrame, title: str = "", pass_colors: dict | None = None,
         dt = d[d["outcome"] == t]
         if len(dt) == 0:
             continue
-        pitch.arrows(dt["x"], dt["y"], dt["x2"], dt["y2"],
-                     ax=ax, width=2, alpha=0.85,
-                     color=pass_colors.get(t, None))
+        pitch.arrows(
+            dt["x"],
+            dt["y"],
+            dt["x2"],
+            dt["y2"],
+            ax=ax,
+            width=2,
+            alpha=0.85,
+            color=pass_colors.get(t, None),
+        )
 
     ax.set_title((title + "\nPass Map (successful / unsuccessful / key pass / assist)").strip())
     return fig
 
-def shot_map(df: pd.DataFrame, title: str = "", shot_colors: dict | None = None, pitch_mode: str = "rect", pitch_width: float = 64.0):
+
+def shot_map(
+    df: pd.DataFrame,
+    title: str = "",
+    shot_colors: dict | None = None,
+    pitch_mode: str = "rect",
+    pitch_width: float = 64.0,
+):
     shot_colors = shot_colors or {}
     s = df[df["event_type"] == "shot"].copy()
 
@@ -168,10 +209,18 @@ def shot_map(df: pd.DataFrame, title: str = "", shot_colors: dict | None = None,
         st = s[s["outcome"] == t]
         if len(st) == 0:
             continue
-        pitch.scatter(st["x"], st["y"], ax=ax, s=90, alpha=0.95, color=shot_colors.get(t, None))
+        pitch.scatter(
+            st["x"],
+            st["y"],
+            ax=ax,
+            s=90,
+            alpha=0.95,
+            color=shot_colors.get(t, None),
+        )
 
     ax.set_title((title + "\nShot Map (off target / on target / goal)").strip())
     return fig
+
 
 def build_report_from_df(
     df: pd.DataFrame,
@@ -183,18 +232,34 @@ def build_report_from_df(
     pitch_width: float = 64.0,
     pass_colors: dict | None = None,
     shot_colors: dict | None = None,
+    bar_colors: dict | None = None,
 ):
     os.makedirs(out_dir, exist_ok=True)
     pdf_path = os.path.join(out_dir, "report.pdf")
 
-    df2 = apply_pitch_transforms(df, attack_direction=attack_direction, flip_y=flip_y, pitch_mode=pitch_mode, pitch_width=pitch_width)
+    df2 = apply_pitch_transforms(
+        df,
+        attack_direction=attack_direction,
+        flip_y=flip_y,
+        pitch_mode=pitch_mode,
+        pitch_width=pitch_width,
+    )
 
     with PdfPages(pdf_path) as pdf:
         figs = [
-            ("outcome_bar", outcome_bar(df2, title=title)),
-            ("start_heatmap", start_location_heatmap(df2, title=title, pitch_mode=pitch_mode, pitch_width=pitch_width)),
-            ("pass_map", pass_map(df2, title=title, pass_colors=pass_colors, pitch_mode=pitch_mode, pitch_width=pitch_width)),
-            ("shot_map", shot_map(df2, title=title, shot_colors=shot_colors, pitch_mode=pitch_mode, pitch_width=pitch_width)),
+            ("outcome_bar", outcome_bar(df2, title=title, bar_colors=bar_colors)),
+            (
+                "start_heatmap",
+                start_location_heatmap(df2, title=title, pitch_mode=pitch_mode, pitch_width=pitch_width),
+            ),
+            (
+                "pass_map",
+                pass_map(df2, title=title, pass_colors=pass_colors, pitch_mode=pitch_mode, pitch_width=pitch_width),
+            ),
+            (
+                "shot_map",
+                shot_map(df2, title=title, shot_colors=shot_colors, pitch_mode=pitch_mode, pitch_width=pitch_width),
+            ),
         ]
 
         pngs = []
@@ -206,3 +271,57 @@ def build_report_from_df(
             pngs.append(png_path)
 
     return pdf_path, pngs
+
+
+# ----------------------------
+# Pizza chart (for player comparison)
+# ----------------------------
+def pizza_chart(df_pizza: pd.DataFrame, title: str = "", subtitle: str = ""):
+    """
+    df_pizza لازم يكون فيه الأعمدة دي:
+      - metric
+      - value
+      - percentile  (0-100) -> بتحدد طول كل slice
+
+    ملاحظة:
+    - percentiles إحنا بنحسبها في app.py تلقائيًا من ملف اللاعبين (per90).
+    - value هي القيم اللي هتظهر جوه القطع (per90).
+    """
+    dfp = df_pizza.copy()
+    dfp.columns = [c.strip().lower() for c in dfp.columns]
+
+    required = {"metric", "value", "percentile"}
+    if not required.issubset(set(dfp.columns)):
+        raise ValueError("Pizza input لازم يحتوي أعمدة: metric, value, percentile")
+
+    params = dfp["metric"].astype(str).tolist()
+    values = pd.to_numeric(dfp["percentile"], errors="coerce").fillna(0).tolist()
+    value_text = dfp["value"].astype(str).tolist()
+
+    pizza = PyPizza(
+        params=params,
+        background_color="#111111",
+        straight_line_color="#000000",
+        straight_line_lw=1,
+        last_circle_lw=1,
+        last_circle_color="#000000",
+    )
+
+    fig, ax = pizza.make_pizza(
+        values,
+        figsize=(10, 10),
+        blank_alpha=0.2,
+        value_bck_colors=["#1f77b4"] * len(values),
+        kwargs_slices=dict(edgecolor="#000000", linewidth=1),
+        kwargs_params=dict(color="white", fontsize=12),
+        kwargs_values=dict(color="white", fontsize=12),
+    )
+
+    fig.text(0.5, 0.98, title, ha="center", va="top", color="white", fontsize=18)
+    fig.text(0.5, 0.945, subtitle, ha="center", va="top", color="white", fontsize=12)
+
+    # بدل ما يظهر percentile كأرقام، نخلي اللي يظهر هو value الحقيقي
+    for t, txt in zip(ax.texts[-len(values):], value_text):
+        t.set_text(txt)
+
+    return fig
