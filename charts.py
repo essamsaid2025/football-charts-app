@@ -276,17 +276,20 @@ def build_report_from_df(
 # ----------------------------
 # Pizza chart (for player comparison)
 # ----------------------------
-def pizza_chart(df_pizza: pd.DataFrame, title: str = "", subtitle: str = ""):
+def pizza_chart(
+    df_pizza: pd.DataFrame,
+    title: str = "",
+    subtitle: str = "",
+    slice_colors: list | None = None,
+    show_values_legend: bool = True,
+):
     """
-    df_pizza لازم يكون فيه الأعمدة دي:
+    df_pizza لازم يحتوي الأعمدة:
       - metric
-      - value
-      - percentile  (0-100) -> بتحدد طول كل slice
-
-    ملاحظة:
-    - percentiles إحنا بنحسبها في app.py تلقائيًا من ملف اللاعبين (per90).
-    - value هي القيم اللي هتظهر جوه القطع (per90).
+      - value        (per90 value يظهر في Legend)
+      - percentile   (0-100 -> طول الـ slice + الرقم داخل الـ slice)
     """
+
     dfp = df_pizza.copy()
     dfp.columns = [c.strip().lower() for c in dfp.columns]
 
@@ -295,8 +298,12 @@ def pizza_chart(df_pizza: pd.DataFrame, title: str = "", subtitle: str = ""):
         raise ValueError("Pizza input لازم يحتوي أعمدة: metric, value, percentile")
 
     params = dfp["metric"].astype(str).tolist()
-    values = pd.to_numeric(dfp["percentile"], errors="coerce").fillna(0).tolist()
+    values = pd.to_numeric(dfp["percentile"], errors="coerce").fillna(0).tolist()  # THIS IS PERCENTILE
     value_text = dfp["value"].astype(str).tolist()
+
+    # default slice colors (if none provided)
+    if slice_colors is None or len(slice_colors) != len(values):
+        slice_colors = ["#1f77b4"] * len(values)
 
     pizza = PyPizza(
         params=params,
@@ -307,21 +314,48 @@ def pizza_chart(df_pizza: pd.DataFrame, title: str = "", subtitle: str = ""):
         last_circle_color="#000000",
     )
 
-    fig, ax = pizza.make_pizza(
-        values,
-        figsize=(10, 10),
-        blank_alpha=0.2,
-        value_bck_colors=["#1f77b4"] * len(values),
-        kwargs_slices=dict(edgecolor="#000000", linewidth=1),
-        kwargs_params=dict(color="white", fontsize=12),
-        kwargs_values=dict(color="white", fontsize=12),
-    )
+    # try to pass per-slice colors (depends on mplsoccer version)
+    try:
+        fig, ax = pizza.make_pizza(
+            values,
+            figsize=(10, 10),
+            blank_alpha=0.25,
+            slice_colors=slice_colors,  # per-slice colors (if supported)
+            kwargs_slices=dict(edgecolor="#000000", linewidth=1),
+            kwargs_params=dict(color="white", fontsize=12),
+            kwargs_values=dict(color="white", fontsize=12),  # show PERCENTILE numbers
+        )
+    except TypeError:
+        # fallback: single color (won't crash)
+        fig, ax = pizza.make_pizza(
+            values,
+            figsize=(10, 10),
+            blank_alpha=0.25,
+            value_bck_colors=["#1f77b4"] * len(values),
+            kwargs_slices=dict(edgecolor="#000000", linewidth=1),
+            kwargs_params=dict(color="white", fontsize=12),
+            kwargs_values=dict(color="white", fontsize=12),  # show PERCENTILE numbers
+        )
 
-    fig.text(0.5, 0.98, title, ha="center", va="top", color="white", fontsize=18)
-    fig.text(0.5, 0.945, subtitle, ha="center", va="top", color="white", fontsize=12)
+    # Titles
+    fig.text(0.5, 0.985, title, ha="center", va="top", color="white", fontsize=18)
+    fig.text(0.5, 0.955, subtitle, ha="center", va="top", color="white", fontsize=12)
 
-    # بدل ما يظهر percentile كأرقام، نخلي اللي يظهر هو value الحقيقي
-    for t, txt in zip(ax.texts[-len(values):], value_text):
-        t.set_text(txt)
+    # Legend showing per90 values (so you see BOTH percentile + value)
+    if show_values_legend:
+        lines = []
+        for m, v, p in zip(params, value_text, values):
+            lines.append(f"{m}: {v}   (pct {p:.1f})")
+
+        legend_text = "\n".join(lines)
+        fig.text(
+            0.02, 0.02,
+            legend_text,
+            ha="left", va="bottom",
+            color="white",
+            fontsize=10,
+            family="monospace",
+        )
 
     return fig
+
