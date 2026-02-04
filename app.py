@@ -46,6 +46,8 @@ shot_colors = {
     "goal": col_shot_goal,
 }
 
+mode = st.radio("Choose output type", ["Match Charts", "Pizza Chart"])
+
 uploaded = st.file_uploader("Upload your file", type=["csv", "xlsx", "xls"])
 
 if uploaded:
@@ -59,7 +61,48 @@ if uploaded:
             df = validate_and_clean(df)
         except Exception as e:
             st.error(str(e))
+            st.stop() 
+                    except Exception as e:
+            st.error(str(e))
             st.stop()
+        # ----------------------------
+        # PIZZA MODE
+        # ----------------------------
+        if mode == "Pizza Chart":
+            # df currently contains the uploaded file contents (loaded above)
+            st.success(f"Loaded ✅ rows: {len(df)}")
+            st.dataframe(df.head(25), use_container_width=True)
+
+            pizza_title = st.text_input("Pizza title", value="Player – League")
+            pizza_subtitle = st.text_input("Pizza subtitle", value="Percentile Rank vs Peers")
+
+            if st.button("Generate Pizza"):
+                from charts import pizza_chart  # we will add this function in charts.py
+
+                fig = pizza_chart(df, title=pizza_title, subtitle=pizza_subtitle)
+
+                out_dir = os.path.join(tmp, "output")
+                os.makedirs(out_dir, exist_ok=True)
+
+                png_path = os.path.join(out_dir, "pizza.png")
+                pdf_path = os.path.join(out_dir, "pizza.pdf")
+
+                fig.savefig(png_path, dpi=220, bbox_inches="tight")
+
+                from matplotlib.backends.backend_pdf import PdfPages
+                with PdfPages(pdf_path) as pdf:
+                    pdf.savefig(fig, bbox_inches="tight")
+
+                st.pyplot(fig)
+
+                with open(pdf_path, "rb") as f:
+                    st.download_button("⬇️ Download pizza.pdf", f, file_name="pizza.pdf")
+
+                with open(png_path, "rb") as f:
+                    st.download_button("⬇️ Download pizza.png", f, file_name="pizza.png")
+
+            st.stop()
+
 
         st.success(f"Loaded ✅ rows: {len(df)}")
 
