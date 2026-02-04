@@ -173,7 +173,27 @@ if uploaded:
 
                 try:
                     pizza_df = build_pizza_df(dfp_filtered, player_col, selected_player, selected_metrics)
-                    fig = pizza_chart(pizza_df, title=pizza_title, subtitle=pizza_subtitle)
+                   base_colors = [
+    "#1f77b4",  # blue
+    "#d62728",  # red
+    "#ff7f0e",  # orange
+    "#2ca02c",  # green
+    "#9467bd",  # purple
+    "#17becf",  # cyan
+]
+
+slice_colors = [
+    base_colors[i % len(base_colors)]
+    for i in range(len(pizza_df))
+]
+
+fig = pizza_chart(
+    pizza_df,
+    title=pizza_title,
+    subtitle=pizza_subtitle,
+    slice_colors=slice_colors
+)
+
                 except Exception as e:
                     st.error(f"Pizza error: {e}")
                     st.stop()
