@@ -113,10 +113,15 @@ def make_pitch(pitch_mode: str = "rect", pitch_width: float = 64.0):
 # ----------------------------
 # Charts
 # ----------------------------
-def outcome_bar(df: pd.DataFrame, title: str = ""):
+def outcome_bar(df: pd.DataFrame, title: str = "", bar_colors: dict | None = None):
+    bar_colors = bar_colors or {}
     counts = df["outcome"].value_counts()
+
     fig, ax = plt.subplots(figsize=(8, 4))
-    ax.bar(counts.index.astype(str), counts.values)
+    # colors per bar (fallback لو مفيش لون)
+    colors = [bar_colors.get(k, None) for k in counts.index.astype(str)]
+    ax.bar(counts.index.astype(str), counts.values, color=colors)
+
     ax.set_title((title + "\nOutcome Distribution").strip())
     ax.set_ylabel("Count")
     ax.tick_params(axis="x", rotation=25)
