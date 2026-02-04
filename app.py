@@ -76,6 +76,7 @@ mode = st.radio("Choose output type", ["Match Charts", "Pizza Chart"])
 
 uploaded = st.file_uploader("Upload your file", type=["csv", "xlsx", "xls"])
 
+
 # ----------------------------
 # Helpers for Pizza
 # ----------------------------
@@ -96,12 +97,15 @@ def build_pizza_df(players_df: pd.DataFrame, player_col: str, player_name: str, 
     for m in metrics:
         val = pd.to_numeric(row.iloc[0][m], errors="coerce")
         pct = _percentile_rank(players_df[m], val)
-        out.append({
-            "metric": m,
-            "value": "" if pd.isna(val) else round(float(val), 2),
-            "percentile": 0 if pd.isna(pct) else round(float(pct), 1),
-        })
+        out.append(
+            {
+                "metric": m,
+                "value": "" if pd.isna(val) else round(float(val), 2),
+                "percentile": 0 if pd.isna(pct) else round(float(pct), 1),
+            }
+        )
     return pd.DataFrame(out)
+
 
 # ----------------------------
 # Main
@@ -117,7 +121,7 @@ if uploaded:
         # ============================
         if mode == "Pizza Chart":
             try:
-                dfp = load_data(path)  # IMPORTANT: no validate_and_clean هنا
+                dfp = load_data(path)  # IMPORTANT: no validate_and_clean here
             except Exception as e:
                 st.error(f"Error reading file: {e}")
                 st.stop()
@@ -173,26 +177,23 @@ if uploaded:
 
                 try:
                     pizza_df = build_pizza_df(dfp_filtered, player_col, selected_player, selected_metrics)
-                   base_colors = [
-    "#1f77b4",  # blue
-    "#d62728",  # red
-    "#ff7f0e",  # orange
-    "#2ca02c",  # green
-    "#9467bd",  # purple
-    "#17becf",  # cyan
-]
 
-slice_colors = [
-    base_colors[i % len(base_colors)]
-    for i in range(len(pizza_df))
-]
+                    base_colors = [
+                        "#1f77b4",  # blue
+                        "#d62728",  # red
+                        "#ff7f0e",  # orange
+                        "#2ca02c",  # green
+                        "#9467bd",  # purple
+                        "#17becf",  # cyan
+                    ]
+                    slice_colors = [base_colors[i % len(base_colors)] for i in range(len(pizza_df))]
 
-fig = pizza_chart(
-    pizza_df,
-    title=pizza_title,
-    subtitle=pizza_subtitle,
-    slice_colors=slice_colors
-)
+                    fig = pizza_chart(
+                        pizza_df,
+                        title=pizza_title,
+                        subtitle=pizza_subtitle,
+                        slice_colors=slice_colors
+                    )
 
                 except Exception as e:
                     st.error(f"Pizza error: {e}")
