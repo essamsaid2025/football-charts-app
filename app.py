@@ -1,3 +1,11 @@
+# app.py  (FULL UPDATED APP)
+# =========================================
+# Uses the NEW correct pipeline:
+# - prepare_df_for_charts (clean + transforms + end-location + zone-xG) ONCE
+# - build_report_from_prepared_df for Match Charts
+# - Shot Detail Card uses dropdown (no confusing index) + NO shot type (handled in charts.py)
+# =========================================
+
 import os
 import tempfile
 
@@ -7,17 +15,20 @@ import numpy as np
 
 from charts import (
     load_data,
-    validate_and_clean,
-    build_report_from_df,
+    prepare_df_for_charts,
+    build_report_from_prepared_df,
     pizza_chart,
-    apply_pitch_transforms,
     shot_detail_card,
 )
 
 st.set_page_config(page_title="Football Charts Generator", layout="wide")
 
 st.title("⚽ Football Charts Generator (Upload CSV / Excel)")
-st.caption("Match Charts: required outcome,x,y (passes need x2,y2) | Pizza: players table (per90) | Shot Card: shots need x2,y2")
+st.caption(
+    "Match Charts: required outcome,x,y (passes need x2,y2) | "
+    "Pizza: players table (per90) | "
+    "Shot Card: shots need x,y (x2,y2 optional)"
+)
 
 # ----------------------------
 # Settings (match charts + general)
@@ -84,7 +95,6 @@ bar_colors = {
 }
 
 mode = st.radio("Choose output type", ["Match Charts", "Pizza Chart", "Shot Detail Card"])
-
 uploaded = st.file_uploader("Upload your file", type=["csv", "xlsx", "xls"])
 
 
@@ -131,7 +141,7 @@ if uploaded:
         # ============================
         if mode == "Pizza Chart":
             try:
-                dfp = load_data(path)  # IMPORTANT: no validate_and_clean here
+                dfp = load_data(path)  # IMPORTANT: no prepare_df_for_charts here
             except Exception as e:
                 st.error(f"Error reading file: {e}")
                 st.stop()
@@ -188,14 +198,7 @@ if uploaded:
                 try:
                     pizza_df = build_pizza_df(dfp_filtered, player_col, selected_player, selected_metrics)
 
-                    base_colors = [
-                        "#1f77b4",  # blue
-                        "#d62728",  # red
-                        "#ff7f0e",  # orange
-                        "#2ca02c",  # green
-                        "#9467bd",  # purple
-                        "#17becf",  # cyan
-                    ]
+                    base_colors = ["#1f77b4", "#d62728", "#ff7f0e", "#2ca02c", "#9467bd", "#17becf"]
                     slice_colors = [base_colors[i % len(base_colors)] for i in range(len(pizza_df))]
 
                     fig = pizza_chart(
@@ -231,38 +234,36 @@ if uploaded:
             st.stop()
 
         # ============================
-        # MATCH + SHOT CARD (same file structure)
+        # MATCH + SHOT CARD (prepared once)
         # ============================
         try:
-            df = load_data(path)
-            df = validate_and_clean(df)
-        except Exception as e:
-            st.error(str(e))
-            st.stop()
-
-        st.success(f"Loaded ✅ rows: {len(df)}")
-
-        with st.expander("Preview data (first 25 rows)"):
-            st.dataframe(df.head(25), use_container_width=True)
-
-        cols = st.columns(2)
-        with cols[0]:
-            st.write("Detected event types:")
-            st.write(df["event_type"].value_counts())
-        with cols[1]:
-            st.write("Detected outcomes (top 12):")
-            st.write(df["outcome"].value_counts().head(12))
-
-        # ---------- SHOT DETAIL CARD MODE ----------
-        if mode == "Shot Detail Card":
-            df2 = apply_pitch_transforms(
-                df,
+            df_raw = load_data(path)
+            df2 = prepare_df_for_charts(
+                df_raw,
                 attack_direction=attack_dir,
                 flip_y=flip_y,
                 pitch_mode=pitch_mode,
                 pitch_width=pitch_width,
             )
+        except Exception as e:
+            st.error(str(e))
+            st.stop()
 
+        st.success(f"Loaded ✅ rows: {len(df2)}")
+
+        with st.expander("Preview prepared data (first 25 rows)"):
+            st.dataframe(df2.head(25), use_container_width=True)
+
+        cols = st.columns(2)
+        with cols[0]:
+            st.write("Detected event types:")
+            st.write(df2["event_type"].value_counts())
+        with cols[1]:
+            st.write("Detected outcomes (top 12):")
+            st.write(df2["outcome"].value_counts().head(12))
+
+        # ---------- SHOT DETAIL CARD MODE ----------
+        if mode == "Shot Detail Card":
             shots_only = df2[df2["event_type"] == "shot"].copy().reset_index(drop=True)
             if shots_only.empty:
                 st.error("No shots found in this file.")
@@ -272,24 +273,26 @@ if uploaded:
             with st.expander("Shots table (first 50)", expanded=False):
                 st.dataframe(shots_only.head(50), use_container_width=True)
 
-            shot_idx = st.number_input(
-                "Choose shot index (0-based)",
-                min_value=0,
-                max_value=len(shots_only) - 1,
-                value=0,
-                step=1
+            # Dropdown instead of raw index
+            shots_only["label"] = shots_only.apply(
+                lambda r: f'{r.name+1} | {str(r["outcome"]).upper()} | xG {float(r["xg"]):.2f} | ({float(r["x"]):.1f},{float(r["y"]):.1f})',
+                axis=1
             )
+            selected = st.selectbox("Select a shot", shots_only["label"].tolist(), index=0)
+            shot_index = int(selected.split("|")[0].strip()) - 1
+
             card_title = st.text_input("Card title", value="Shot Detail")
 
             if st.button("Generate Shot Card"):
                 try:
                     fig, _ = shot_detail_card(
                         df2,
-                        shot_index=int(shot_idx),
+                        shot_index=int(shot_index),
                         title=card_title,
                         pitch_mode=pitch_mode,
                         pitch_width=pitch_width,
                         shot_colors=shot_colors,
+                        theme_name="Opta Dark",
                     )
                 except Exception as e:
                     st.error(str(e))
@@ -320,12 +323,10 @@ if uploaded:
         # ---------- MATCH CHARTS MODE ----------
         if st.button("Generate Report"):
             out_dir = os.path.join(tmp, "output")
-            pdf_path, png_paths = build_report_from_df(
-                df,
+            pdf_path, png_paths = build_report_from_prepared_df(
+                df2,
                 out_dir=out_dir,
                 title=title_text,
-                attack_direction=attack_dir,
-                flip_y=flip_y,
                 pitch_mode=pitch_mode,
                 pitch_width=pitch_width,
                 pass_colors=pass_colors,
