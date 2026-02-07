@@ -5,12 +5,19 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-from charts import load_data, validate_and_clean, build_report_from_df, pizza_chart
+from charts import (
+    load_data,
+    validate_and_clean,
+    build_report_from_df,
+    pizza_chart,
+    apply_pitch_transforms,
+    shot_detail_card,
+)
 
 st.set_page_config(page_title="Football Charts Generator", layout="wide")
 
 st.title("⚽ Football Charts Generator (Upload CSV / Excel)")
-st.caption("Match Charts: required outcome,x,y (passes need x2,y2) | Pizza: players table (per90)")
+st.caption("Match Charts: required outcome,x,y (passes need x2,y2) | Pizza: players table (per90) | Shot Card: shots need x2,y2")
 
 # ----------------------------
 # Settings (match charts + general)
@@ -41,6 +48,7 @@ with st.expander("🎛️ Settings", expanded=True):
     col_shot_off = st.color_picker("Off target", "#FF8A00")
     col_shot_on = st.color_picker("On target", "#00C2FF")
     col_shot_goal = st.color_picker("Goal", "#00FF6A")
+    col_shot_blocked = st.color_picker("Blocked", "#AAAAAA")
 
     st.markdown("### Outcome bar colors")
     bar_success = st.color_picker("Bar: successful", "#00FF6A")
@@ -50,6 +58,7 @@ with st.expander("🎛️ Settings", expanded=True):
     bar_ont = st.color_picker("Bar: ontarget", "#00C2FF")
     bar_off = st.color_picker("Bar: off target", "#FF8A00")
     bar_goal = st.color_picker("Bar: goal", "#00FF6A")
+    bar_blocked = st.color_picker("Bar: blocked", "#AAAAAA")
 
 pass_colors = {
     "successful": col_pass_success,
@@ -61,6 +70,7 @@ shot_colors = {
     "off target": col_shot_off,
     "ontarget": col_shot_on,
     "goal": col_shot_goal,
+    "blocked": col_shot_blocked,
 }
 bar_colors = {
     "successful": bar_success,
@@ -70,9 +80,10 @@ bar_colors = {
     "ontarget": bar_ont,
     "off target": bar_off,
     "goal": bar_goal,
+    "blocked": bar_blocked,
 }
 
-mode = st.radio("Choose output type", ["Match Charts", "Pizza Chart"])
+mode = st.radio("Choose output type", ["Match Charts", "Pizza Chart", "Shot Detail Card"])
 
 uploaded = st.file_uploader("Upload your file", type=["csv", "xlsx", "xls"])
 
@@ -81,7 +92,6 @@ uploaded = st.file_uploader("Upload your file", type=["csv", "xlsx", "xls"])
 # Helpers for Pizza
 # ----------------------------
 def _percentile_rank(series: pd.Series, value: float) -> float:
-    """Percentile as share of values below the player's value (0-100)."""
     s = pd.to_numeric(series, errors="coerce").dropna()
     if len(s) == 0 or pd.isna(value):
         return np.nan
@@ -117,7 +127,7 @@ if uploaded:
             f.write(uploaded.getbuffer())
 
         # ============================
-        # PIZZA MODE (players per90 table)
+        # PIZZA MODE
         # ============================
         if mode == "Pizza Chart":
             try:
@@ -221,7 +231,7 @@ if uploaded:
             st.stop()
 
         # ============================
-        # MATCH CHARTS MODE
+        # MATCH + SHOT CARD (same file structure)
         # ============================
         try:
             df = load_data(path)
@@ -243,6 +253,71 @@ if uploaded:
             st.write("Detected outcomes (top 12):")
             st.write(df["outcome"].value_counts().head(12))
 
+        # ---------- SHOT DETAIL CARD MODE ----------
+        if mode == "Shot Detail Card":
+            df2 = apply_pitch_transforms(
+                df,
+                attack_direction=attack_dir,
+                flip_y=flip_y,
+                pitch_mode=pitch_mode,
+                pitch_width=pitch_width,
+            )
+
+            shots_only = df2[df2["event_type"] == "shot"].copy().reset_index(drop=True)
+            if shots_only.empty:
+                st.error("No shots found in this file.")
+                st.stop()
+
+            st.write(f"Shots found: {len(shots_only)}")
+            with st.expander("Shots table (first 50)", expanded=False):
+                st.dataframe(shots_only.head(50), use_container_width=True)
+
+            shot_idx = st.number_input(
+                "Choose shot index (0-based)",
+                min_value=0,
+                max_value=len(shots_only) - 1,
+                value=0,
+                step=1
+            )
+            card_title = st.text_input("Card title", value="Shot Detail")
+
+            if st.button("Generate Shot Card"):
+                try:
+                    fig, _ = shot_detail_card(
+                        df2,
+                        shot_index=int(shot_idx),
+                        title=card_title,
+                        pitch_mode=pitch_mode,
+                        pitch_width=pitch_width,
+                        shot_colors=shot_colors,
+                    )
+                except Exception as e:
+                    st.error(str(e))
+                    st.stop()
+
+                out_dir = os.path.join(tmp, "output")
+                os.makedirs(out_dir, exist_ok=True)
+
+                png_path = os.path.join(out_dir, "shot_card.png")
+                pdf_path = os.path.join(out_dir, "shot_card.pdf")
+
+                fig.savefig(png_path, dpi=220, bbox_inches="tight")
+
+                from matplotlib.backends.backend_pdf import PdfPages
+                with PdfPages(pdf_path) as pdf:
+                    pdf.savefig(fig, bbox_inches="tight")
+
+                st.pyplot(fig)
+
+                with open(png_path, "rb") as f:
+                    st.download_button("⬇️ Download shot_card.png", f, file_name="shot_card.png")
+
+                with open(pdf_path, "rb") as f:
+                    st.download_button("⬇️ Download shot_card.pdf", f, file_name="shot_card.pdf")
+
+            st.stop()
+
+        # ---------- MATCH CHARTS MODE ----------
         if st.button("Generate Report"):
             out_dir = os.path.join(tmp, "output")
             pdf_path, png_paths = build_report_from_df(
