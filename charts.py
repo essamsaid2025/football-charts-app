@@ -1,16 +1,17 @@
-# ===========================
-# Football Charts Generator
-# FULL CODE (Fix 1-2-3-4) + Correct Pipeline
+# charts.py  (FULL UPDATED) — Zone + Model xG
+# =========================================
 # - Fix outcome like "1ontarget"
-# - Zone-based xG (distance+angle bins) (no logistic)
-# - Opta-ish end location (goal/ontarget on goal line)
-# - Shot Detail Card (NO shot type) + mini goal correct + no clipping
-# - IMPORTANT: avoid double transforms (prepare once, then draw/report)
-# ===========================
+# - Prepare once (clean + transforms + end-location + xG)
+# - xG: computes BOTH xg_zone + xg_model (if model_pipe provided)
+# - Final xg column based on xg_method ("zone" / "model") with fallback
+# - Adds xg_source column for transparency
+# - Charts + Shot Detail Card + Pizza chart
+# =========================================
 
 import os
 import re
 import math
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
@@ -121,29 +122,27 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [c.strip().lower() for c in df.columns]
 
-    missing = [c for c in REQUIRED if c not in df.columns]
-    if missing:
-        raise ValueError(f"Missing columns: {missing}. Required: {REQUIRED}")
-
-    # allow X,Y uppercase from your export
-    if "x" not in df.columns and "x " in df.columns:
-        df.rename(columns={"x ": "x"}, inplace=True)
-    if "y" not in df.columns and "y " in df.columns:
-        df.rename(columns={"y ": "y"}, inplace=True)
-
     # common uppercase columns
     for c in ["x", "y", "x2", "y2"]:
         if c not in df.columns and c.upper() in df.columns:
             df.rename(columns={c.upper(): c}, inplace=True)
 
+    # allow trailing space columns
+    if "x" not in df.columns and "x " in df.columns:
+        df.rename(columns={"x ": "x"}, inplace=True)
+    if "y" not in df.columns and "y " in df.columns:
+        df.rename(columns={"y ": "y"}, inplace=True)
+
+    missing = [c for c in REQUIRED if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing columns: {missing}. Required: {REQUIRED}")
+
     for c in ["x", "y", "x2", "y2"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # normalize outcomes
-    # sometimes outcome column name has trailing space
+    # normalize outcome col name if weird spacing/case
     if "outcome" not in df.columns:
-        # find column that startswith outcome
         for c in df.columns:
             if c.strip().lower() == "outcome":
                 df.rename(columns={c: "outcome"}, inplace=True)
@@ -156,7 +155,7 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df["event_type"] = "pass"
     df.loc[df["outcome"].isin(SHOT_TYPES), "event_type"] = "shot"
 
-    # keep only supported outcomes per type (prevents "outcome not showing")
+    # keep only supported outcomes per type
     df_pass = df[df["event_type"] == "pass"].copy()
     df_shot = df[df["event_type"] == "shot"].copy()
 
@@ -178,7 +177,7 @@ def apply_pitch_transforms(
     pitch_width: float = 64.0,
 ) -> pd.DataFrame:
     """
-    Your tag tool coords assumed 0-100 for both axes.
+    Input coords assumed 0-100 for both axes.
 
     - flip_y: flips Y in original 0-100 space
     - attack_direction == "rtl": flips X in original 0-100 space
@@ -218,9 +217,9 @@ def _goal_mouth_bounds(pitch_mode="rect", pitch_width=64.0):
     return gy - goal_mouth / 2.0, gy + goal_mouth / 2.0
 
 # ----------------------------
-# 2) Zone-based xG (distance + angle bins)
+# Angle / Distance helpers (used by zone + model features)
 # ----------------------------
-def _shot_angle_and_distance_units(x: float, y: float, pitch_mode: str, pitch_width: float):
+def _shot_angle_radians(x: float, y: float, pitch_mode: str, pitch_width: float) -> float:
     goal_x = 100.0
     goal_y = (pitch_width / 2.0) if pitch_mode == "rect" else 50.0
 
@@ -228,20 +227,14 @@ def _shot_angle_and_distance_units(x: float, y: float, pitch_mode: str, pitch_wi
     left_post_y = goal_y - goal_mouth / 2.0
     right_post_y = goal_y + goal_mouth / 2.0
 
-    dx = goal_x - x
-    dy = goal_y - y
-    dist_units = math.sqrt(dx * dx + dy * dy) + 1e-9
-
     a = math.atan2(right_post_y - y, goal_x - x)
     b = math.atan2(left_post_y - y, goal_x - x)
     angle = abs(a - b)
     if angle > math.pi:
         angle = 2 * math.pi - angle
+    return float(angle)
 
-    return angle, dist_units
-
-def _meters_distance_approx(x, y, pitch_mode="rect", pitch_width=64.0):
-    # rough mapping to meters (close enough for bins)
+def _meters_distance_approx(x, y, pitch_mode="rect", pitch_width=64.0) -> float:
     length_m = 105.0
     width_m = 68.0 if pitch_mode == "rect" else 105.0
     y_max = pitch_width if pitch_mode == "rect" else 100.0
@@ -253,11 +246,24 @@ def _meters_distance_approx(x, y, pitch_mode="rect", pitch_width=64.0):
 
     dx = goal_xm - xm
     dy = goal_ym - ym
-    return math.sqrt(dx * dx + dy * dy)
+    return float(math.sqrt(dx * dx + dy * dy))
 
+def calculate_angle_degrees(x: float, y: float, pitch_mode="rect", pitch_width=64.0) -> float:
+    return float(np.degrees(_shot_angle_radians(x, y, pitch_mode, pitch_width)))
+
+def calculate_distance_units(x: float, y: float, pitch_mode="rect", pitch_width=64.0) -> float:
+    goal_x = 100.0
+    goal_y = (pitch_width / 2.0) if pitch_mode == "rect" else 50.0
+    dx = goal_x - x
+    dy = goal_y - y
+    return float(math.sqrt(dx * dx + dy * dy) + 1e-9)
+
+# ----------------------------
+# 2) Zone-based xG (distance + angle bins)
+# ----------------------------
 def zone_based_xg(x, y, pitch_mode="rect", pitch_width=64.0):
-    angle, _ = _shot_angle_and_distance_units(x, y, pitch_mode, pitch_width)
-    dist_m = _meters_distance_approx(x, y, pitch_mode, pitch_width)
+    angle = _shot_angle_radians(float(x), float(y), pitch_mode, pitch_width)
+    dist_m = _meters_distance_approx(float(x), float(y), pitch_mode, pitch_width)
 
     # Angle bins
     if angle < 0.35:
@@ -279,7 +285,6 @@ def zone_based_xg(x, y, pitch_mode="rect", pitch_width=64.0):
     else:
         d_bin = "25+"
 
-    # Sofa-ish tuned lookup (edit later to calibrate)
     table = {
         ("0-6", "big"): 0.55,   ("0-6", "mid"): 0.45,   ("0-6", "small"): 0.32,
         ("6-12", "big"): 0.32,  ("6-12", "mid"): 0.22,  ("6-12", "small"): 0.12,
@@ -290,18 +295,128 @@ def zone_based_xg(x, y, pitch_mode="rect", pitch_width=64.0):
     xg = table.get((d_bin, a_bin), 0.02)
     return float(max(0.01, min(0.85, xg)))
 
-def estimate_xg_for_shots(df: pd.DataFrame, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
+def estimate_xg_zone(df: pd.DataFrame, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
     df = df.copy()
-    if "xg" not in df.columns:
-        df["xg"] = pd.NA
+    if "xg_zone" not in df.columns:
+        df["xg_zone"] = pd.NA
 
     mask = df["event_type"] == "shot"
     if mask.any():
-        df.loc[mask, "xg"] = [
+        df.loc[mask, "xg_zone"] = [
             round(zone_based_xg(float(x), float(y), pitch_mode=pitch_mode, pitch_width=pitch_width), 2)
             for x, y in zip(df.loc[mask, "x"], df.loc[mask, "y"])
         ]
     return df
+
+# ----------------------------
+# Model xG support
+# ----------------------------
+def _is_preferable_side(y, body_part_name, pitch_mode="rect", pitch_width=64.0) -> int:
+    """
+    Preferable side idea from the article:
+    - if Right Foot shot from left side OR Left Foot from right side => 1
+    """
+    try:
+        y = float(y)
+    except Exception:
+        return 0
+
+    y_max = pitch_width if pitch_mode == "rect" else 100.0
+    center = y_max / 2.0
+
+    side = "center"
+    if y < center:
+        side = "left"
+    elif y > center:
+        side = "right"
+
+    bp = ("" if body_part_name is None else str(body_part_name)).strip().lower()
+
+    if (side == "left" and "right" in bp) or (side == "right" and "left" in bp):
+        return 1
+    return 0
+
+def _header_flag(body_part_name) -> int:
+    bp = ("" if body_part_name is None else str(body_part_name)).strip().lower()
+    return 1 if "head" in bp else 0
+
+def build_model_features(df_prepared: pd.DataFrame, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
+    """
+    Build a safe feature frame for model_pipe.
+    If your pipeline expects different columns, it's OK as long as the pipeline's preprocessing handles it.
+    """
+    shots = df_prepared[df_prepared["event_type"] == "shot"].copy()
+
+    # ensure basics
+    shots["x"] = pd.to_numeric(shots["x"], errors="coerce")
+    shots["y"] = pd.to_numeric(shots["y"], errors="coerce")
+
+    # derived
+    shots["angle"] = shots.apply(lambda r: calculate_angle_degrees(r["x"], r["y"], pitch_mode, pitch_width), axis=1)
+    shots["distance"] = shots.apply(lambda r: calculate_distance_units(r["x"], r["y"], pitch_mode, pitch_width), axis=1)
+
+    # optional raw cols
+    if "under_pressure" not in shots.columns:
+        shots["under_pressure"] = 0
+    shots["under_pressure"] = pd.to_numeric(shots["under_pressure"], errors="coerce").fillna(0).astype(int)
+
+    if "body_part_name" not in shots.columns:
+        shots["body_part_name"] = ""
+    if "technique_name" not in shots.columns:
+        shots["technique_name"] = "Normal"
+    if "sub_type_name" not in shots.columns:
+        shots["sub_type_name"] = "Open Play"
+
+    shots["preferable_side"] = shots.apply(
+        lambda r: _is_preferable_side(r["y"], r.get("body_part_name", ""), pitch_mode, pitch_width),
+        axis=1
+    )
+    shots["header"] = shots.apply(lambda r: _header_flag(r.get("body_part_name", "")), axis=1)
+
+    # Important: return all potentially useful columns (pipeline may pick what it needs)
+    cols = [
+        "x", "y",
+        "angle", "distance",
+        "under_pressure",
+        "preferable_side", "header",
+        "technique_name", "sub_type_name", "body_part_name",
+    ]
+    for c in cols:
+        if c not in shots.columns:
+            shots[c] = pd.NA
+
+    return shots[cols].copy()
+
+def estimate_xg_model(df: pd.DataFrame, model_pipe=None, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
+    df = df.copy()
+    if "xg_model" not in df.columns:
+        df["xg_model"] = pd.NA
+
+    if model_pipe is None:
+        return df
+
+    mask = df["event_type"] == "shot"
+    if not mask.any():
+        return df
+
+    try:
+        X = build_model_features(df, pitch_mode=pitch_mode, pitch_width=pitch_width)
+
+        # predict probability
+        if hasattr(model_pipe, "predict_proba"):
+            preds = model_pipe.predict_proba(X)[:, 1]
+        else:
+            preds = model_pipe.predict(X)
+
+        preds = np.clip(np.asarray(preds, dtype=float), 0.0, 1.0)
+        preds = np.round(preds, 3)
+
+        df.loc[mask, "xg_model"] = preds.tolist()
+        return df
+
+    except Exception:
+        # If model fails, keep NA and fallback will handle in prepare
+        return df
 
 # ----------------------------
 # 3) Opta-ish End Location
@@ -365,12 +480,47 @@ def prepare_df_for_charts(
     flip_y=False,
     pitch_mode="rect",
     pitch_width=64.0,
+    xg_method: str = "zone",     # "zone" or "model"
+    model_pipe=None,             # sklearn pipeline or model with predict_proba
 ) -> pd.DataFrame:
+    """
+    Creates:
+    - xg_zone (always for shots)
+    - xg_model (if model_pipe provided)
+    - xg (final) chosen by xg_method with fallback
+    - xg_source (zone/model/model->zone fallback)
+    """
     df = validate_and_clean(df_raw)
-    df = apply_pitch_transforms(df, attack_direction=attack_direction, flip_y=flip_y,
-                                pitch_mode=pitch_mode, pitch_width=pitch_width)
+    df = apply_pitch_transforms(
+        df,
+        attack_direction=attack_direction,
+        flip_y=flip_y,
+        pitch_mode=pitch_mode,
+        pitch_width=pitch_width
+    )
     df = fix_shot_end_location(df, pitch_mode=pitch_mode, pitch_width=pitch_width)
-    df = estimate_xg_for_shots(df, pitch_mode=pitch_mode, pitch_width=pitch_width)
+
+    # compute both
+    df = estimate_xg_zone(df, pitch_mode=pitch_mode, pitch_width=pitch_width)
+    df = estimate_xg_model(df, model_pipe=model_pipe, pitch_mode=pitch_mode, pitch_width=pitch_width)
+
+    # final xg selection
+    df["xg_source"] = "zone"
+    df["xg"] = df["xg_zone"]
+
+    xg_method = (xg_method or "zone").strip().lower()
+    if xg_method == "model":
+        # choose model if available else fallback to zone
+        if df["xg_model"].notna().any():
+            df["xg"] = df["xg_model"]
+            df["xg_source"] = "model"
+        else:
+            df["xg"] = df["xg_zone"]
+            df["xg_source"] = "zone (fallback)"
+
+    # keep xg as numeric for shot card labels
+    df["xg"] = pd.to_numeric(df["xg"], errors="coerce")
+
     return df
 
 # ----------------------------
@@ -395,13 +545,8 @@ def start_location_heatmap(df: pd.DataFrame, title: str = "", pitch_mode="rect",
     pitch.kdeplot(df["x"], df["y"], ax=ax, fill=True, levels=50)
     ax.set_title((title + "\nStart Locations Heatmap").strip())
 
-    # padding (avoid clipping)
     ax.set_xlim(-2, 102)
-    if pitch_mode == "rect":
-        ax.set_ylim(-2, pitch_width + 2)
-    else:
-        ax.set_ylim(-2, 102)
-
+    ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
     return fig
 
 def pass_map(df: pd.DataFrame, title: str = "", pass_colors: dict | None = None,
@@ -425,14 +570,8 @@ def pass_map(df: pd.DataFrame, title: str = "", pass_colors: dict | None = None,
                      width=2, alpha=0.85, color=pass_colors.get(t, None))
 
     ax.set_title((title + "\nPass Map (successful / unsuccessful / key pass / assist)").strip())
-
-    # padding
     ax.set_xlim(-2, 102)
-    if pitch_mode == "rect":
-        ax.set_ylim(-2, pitch_width + 2)
-    else:
-        ax.set_ylim(-2, 102)
-
+    ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
     return fig
 
 def shot_map(df: pd.DataFrame, title: str = "", shot_colors: dict | None = None,
@@ -457,19 +596,17 @@ def shot_map(df: pd.DataFrame, title: str = "", shot_colors: dict | None = None,
                 except Exception:
                     pass
 
-    ax.set_title((title + "\nShot Map (off target / on target / goal / blocked)").strip())
+    xg_src = ""
+    if "xg_source" in df.columns and len(df):
+        xg_src = str(df["xg_source"].iloc[0])
+    ax.set_title((title + f"\nShot Map (off target / on target / goal / blocked) — xG: {xg_src}").strip())
 
-    # padding so x=100 doesn't clip
     ax.set_xlim(-2, 102)
-    if pitch_mode == "rect":
-        ax.set_ylim(-2, pitch_width + 2)
-    else:
-        ax.set_ylim(-2, 102)
-
+    ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
     return fig
 
 # ----------------------------
-# Report builder (IMPORTANT: expects prepared df)
+# Report builder (expects prepared df)
 # ----------------------------
 def build_report_from_prepared_df(
     df_prepared: pd.DataFrame,
@@ -505,7 +642,7 @@ def build_report_from_prepared_df(
     return pdf_path, pngs
 
 # ----------------------------
-# 4) Shot Detail Card (NO Shot type) + mini goal correct + no clipping
+# Shot Detail Card (NO shot type)
 # ----------------------------
 def shot_detail_card(
     df_prepared: pd.DataFrame,
@@ -527,7 +664,6 @@ def shot_detail_card(
     shots = df_prepared[df_prepared["event_type"] == "shot"].copy().reset_index(drop=True)
     if shots.empty:
         raise ValueError("No shots found.")
-
     if shot_index < 0 or shot_index >= len(shots):
         raise ValueError("Shot index out of range.")
 
@@ -571,12 +707,8 @@ def shot_detail_card(
     pitch.draw(ax=ax_pitch)
     ax_pitch.set_facecolor(theme["pitch"])
 
-    # padding to avoid clipping
     ax_pitch.set_xlim(-2, 102)
-    if pitch_mode == "rect":
-        ax_pitch.set_ylim(-2, pitch_width + 2)
-    else:
-        ax_pitch.set_ylim(-2, 102)
+    ax_pitch.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
 
     x, y = float(r["x"]), float(r["y"])
     pitch.scatter([x], [y], ax=ax_pitch, s=520, color=c, edgecolors="white", linewidth=2, zorder=5, clip_on=False)
@@ -594,7 +726,6 @@ def shot_detail_card(
         ax_pitch.plot([x, x2], [y, y2], linestyle=":", linewidth=3, color="white", alpha=0.9, zorder=4)
         pitch.scatter([x2], [y2], ax=ax_pitch, s=130, color="white", alpha=0.9, zorder=6, clip_on=False)
 
-        # map y2 into mini goal x-range [25..75]
         def map_to_mini_goal(y_val):
             y_val = float(y_val)
             y_clamped = max(y_low, min(y_high, y_val))
@@ -603,11 +734,12 @@ def shot_detail_card(
 
         gx = map_to_mini_goal(y2)
         ax_goal.scatter([gx], [12], s=240, color=c, edgecolors="white", linewidth=2, zorder=5)
+
     else:
         gy = (pitch_width / 2.0) if pitch_mode == "rect" else 50.0
         ax_pitch.plot([x, 100], [y, gy], linestyle=":", linewidth=3, color="white", alpha=0.6, zorder=4)
 
-    # info panel (NO shot type)
+    # info panel
     ax_info.set_facecolor(theme["panel"])
     ax_info.axis("off")
 
@@ -680,73 +812,3 @@ def pizza_chart(df_pizza: pd.DataFrame, title: str = "", subtitle: str = "",
                  color="white", fontsize=10, family="monospace")
 
     return fig
-
-# ----------------------------
-# Example runner (use this)
-# ----------------------------
-if __name__ == "__main__":
-    # CHANGE PATH
-    path = "/mnt/data/shot map(in).csv"
-    out_dir = "/mnt/data/out"
-
-    df_raw = load_data(path)
-
-    # Prepare ONCE
-    df2 = prepare_df_for_charts(
-        df_raw,
-        attack_direction="ltr",  # or "rtl"
-        flip_y=False,            # True if your Y is inverted
-        pitch_mode="rect",
-        pitch_width=64.0
-    )
-
-    # Build report from prepared df (NO double transforms)
-    pdf_path, pngs = build_report_from_prepared_df(
-        df2,
-        out_dir=out_dir,
-        title="Match Report",
-        pitch_mode="rect",
-        pitch_width=64.0,
-        pass_colors={
-            "successful": "#00C2FF",
-            "unsuccessful": "#FF4D4D",
-            "key pass": "#FFB84D",
-            "assist": "#00FF6A",
-        },
-        shot_colors={
-            "off target": "#FF8A00",
-            "ontarget": "#00C2FF",
-            "goal": "#00FF6A",
-            "blocked": "#AAAAAA",
-        },
-    )
-
-    print("PDF:", pdf_path)
-    print("PNGs:", pngs)
-
-    # Shot card (shot_index = 0 يعني أول شوته في القائمة بعد الفلترة)
-    fig, shots = shot_detail_card(
-        df2,
-        shot_index=0,
-        title="Shot Detail",
-        pitch_mode="rect",
-        pitch_width=64.0,
-        theme_name="Opta Dark"
-    )
-    card_path = os.path.join(out_dir, "shot_card_1.png")
-    fig.savefig(card_path, dpi=220, bbox_inches="tight")
-    plt.close(fig)
-    print("Shot Card:", card_path)
-
-    # ---- Streamlit dropdown snippet (copy to your app) ----
-    """
-    shots = df2[df2["event_type"]=="shot"].copy().reset_index(drop=True)
-    shots["label"] = shots.apply(
-        lambda r: f'{r.name+1} | {str(r["outcome"]).upper()} | xG {float(r["xg"]):.2f}',
-        axis=1
-    )
-    selected = st.selectbox("Select a shot", shots["label"].tolist())
-    shot_index = int(selected.split("|")[0].strip()) - 1
-    fig, _ = shot_detail_card(df2, shot_index=shot_index, theme_name=theme)
-    st.pyplot(fig)
-    """
