@@ -3,3 +3,9 @@ pandas
 matplotlib
 mplsoccer
 openpyxl
+joblib
+scikit-learn
+numpy
+pandas
+matplotlib
+mplsoccer
