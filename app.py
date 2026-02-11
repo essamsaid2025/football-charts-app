@@ -1,12 +1,5 @@
-# app.py  (FULL UPDATED APP) — Zone + Model xG (default auto)
+# app.py  (FULL UPDATED APP) — Zone + Model xG (default auto) + THEMES
 # =========================================
-# Pipeline:
-# - load_data
-# - prepare_df_for_charts (clean + transforms + end-location + xG) ONCE
-# - build_report_from_prepared_df for Match Charts
-# - Shot Detail Card uses dropdown + NO shot type (handled in charts.py)
-# =========================================
-
 import os
 import tempfile
 import inspect
@@ -22,6 +15,7 @@ from charts import (
     build_report_from_prepared_df,
     pizza_chart,
     shot_detail_card,
+    THEMES,   # <-- لازم تكون موجودة في charts.py
 )
 
 st.set_page_config(page_title="Football Charts Generator", layout="wide")
@@ -38,6 +32,15 @@ st.caption(
 # ----------------------------
 with st.expander("🎛️ Settings", expanded=True):
     title_text = st.text_input("Title", value="Match Report")
+
+    # ✅ THEME
+    st.markdown("### Theme")
+    theme_name = st.selectbox(
+        "Choose theme",
+        list(THEMES.keys()),
+        index=list(THEMES.keys()).index("The Athletic Dark") if "The Athletic Dark" in THEMES else 0,
+        help="Controls pitch/background/text styling (Athletic-like themes included)."
+    )
 
     attack_dir_ui = st.selectbox("Attack direction", ["Left → Right", "Right → Left"])
     attack_dir = "ltr" if attack_dir_ui == "Left → Right" else "rtl"
@@ -56,7 +59,6 @@ with st.expander("🎛️ Settings", expanded=True):
     model_file = st.text_input("Model file path", value="xg_pipeline.joblib")
     model_exists = os.path.exists(model_file)
 
-    # Default: Model if file exists, else Zone
     default_xg_ui = "Model" if model_exists else "Zone"
     xg_method_ui = st.radio(
         "xG method",
@@ -157,7 +159,7 @@ if uploaded:
         # ============================
         if mode == "Pizza Chart":
             try:
-                dfp = load_data(path)  # IMPORTANT: no prepare_df_for_charts here
+                dfp = load_data(path)
             except Exception as e:
                 st.error(f"Error reading file: {e}")
                 st.stop()
@@ -223,7 +225,6 @@ if uploaded:
                         subtitle=pizza_subtitle,
                         slice_colors=slice_colors
                     )
-
                 except Exception as e:
                     st.error(f"Pizza error: {e}")
                     st.stop()
@@ -252,7 +253,6 @@ if uploaded:
         # ============================
         # MATCH + SHOT CARD (prepared once) + xG method
         # ============================
-        # Load model if requested and exists
         model_pipe = None
         if xg_method == "model":
             if os.path.exists(model_file):
@@ -268,7 +268,6 @@ if uploaded:
         try:
             df_raw = load_data(path)
 
-            # Call prepare_df_for_charts with extra args ONLY if supported
             sig = inspect.signature(prepare_df_for_charts)
             kwargs = dict(
                 attack_direction=attack_dir,
@@ -289,7 +288,6 @@ if uploaded:
 
         st.success(f"Loaded ✅ rows: {len(df2)}")
 
-        # show which xG used
         if "xg_source" in df2.columns and len(df2):
             st.info(f"xG source used: **{df2['xg_source'].iloc[0]}**")
 
@@ -315,7 +313,6 @@ if uploaded:
             with st.expander("Shots table (first 50)", expanded=False):
                 st.dataframe(shots_only.head(50), use_container_width=True)
 
-            # Dropdown instead of raw index
             def _safe_float(v):
                 try:
                     return float(v)
@@ -340,7 +337,7 @@ if uploaded:
                         pitch_mode=pitch_mode,
                         pitch_width=pitch_width,
                         shot_colors=shot_colors,
-                        theme_name="Opta Dark",
+                        theme_name=theme_name,   # ✅ theme passed
                     )
                 except Exception as e:
                     st.error(str(e))
@@ -375,6 +372,7 @@ if uploaded:
                 df2,
                 out_dir=out_dir,
                 title=title_text,
+                theme_name=theme_name,   # ✅ theme passed
                 pitch_mode=pitch_mode,
                 pitch_width=pitch_width,
                 pass_colors=pass_colors,
