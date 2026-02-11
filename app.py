@@ -6,6 +6,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
+from matplotlib.backends.backend_pdf import PdfPages  # ✅ FIX
+
 from charts import (
     load_data,
     prepare_df_for_charts,
@@ -152,13 +154,16 @@ if uploaded:
                 base_colors = ["#1f77b4", "#d62728", "#ff7f0e", "#2ca02c", "#9467bd", "#17becf"]
                 slice_colors = [base_colors[i % len(base_colors)] for i in range(len(pizza_df))]
                 fig = pizza_chart(pizza_df, title=pizza_title, subtitle=pizza_subtitle, slice_colors=slice_colors)
+
                 out_dir = os.path.join(tmp, "output")
                 os.makedirs(out_dir, exist_ok=True)
                 png_path = os.path.join(out_dir, "pizza.png")
                 pdf_path = os.path.join(out_dir, "pizza.pdf")
+
                 fig.savefig(png_path, dpi=220, bbox_inches="tight")
                 with PdfPages(pdf_path) as pdf:
                     pdf.savefig(fig, bbox_inches="tight")
+
                 st.pyplot(fig)
                 with open(pdf_path, "rb") as f:
                     st.download_button("⬇️ Download pizza.pdf", f, file_name="pizza.pdf")
@@ -234,11 +239,12 @@ if uploaded:
                 os.makedirs(out_dir, exist_ok=True)
                 png_path = os.path.join(out_dir, "shot_card.png")
                 pdf_path = os.path.join(out_dir, "shot_card.pdf")
+
                 fig.savefig(png_path, dpi=220, bbox_inches="tight")
                 with PdfPages(pdf_path) as pdf:
                     pdf.savefig(fig, bbox_inches="tight")
-                st.pyplot(fig)
 
+                st.pyplot(fig)
                 with open(png_path, "rb") as f:
                     st.download_button("⬇️ Download shot_card.png", f, file_name="shot_card.png")
                 with open(pdf_path, "rb") as f:
