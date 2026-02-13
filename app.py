@@ -47,7 +47,6 @@ def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
     if "outcome" in df.columns:
         return df
 
-    # Normalize map of lowercase->actual
     cols_lower = {c.lower().strip(): c for c in df.columns}
 
     # 1) Direct rename from common alternatives
@@ -62,18 +61,17 @@ def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
             return df
 
     # 2) Build from boolean flags if available
-    # e.g. is_goal / is_ontarget / is_offtarget / is_blocked
     def _has(col): return col in cols_lower
 
     if _has("is_goal") or _has("goal"):
         base = pd.Series([np.nan] * len(df))
         if _has("is_goal"):
             base = np.where(pd.to_numeric(df[cols_lower["is_goal"]], errors="coerce").fillna(0).astype(int) == 1, "goal", base)
-        if _has("goal") and "outcome" not in df.columns:
+        if _has("goal"):
             base = np.where(pd.to_numeric(df[cols_lower["goal"]], errors="coerce").fillna(0).astype(int) == 1, "goal", base)
+
         df["outcome"] = base
 
-        # fill others if present
         if _has("is_ontarget"):
             m = pd.to_numeric(df[cols_lower["is_ontarget"]], errors="coerce").fillna(0).astype(int) == 1
             df.loc[m & df["outcome"].isna(), "outcome"] = "1ontarget"
@@ -84,9 +82,8 @@ def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
             m = pd.to_numeric(df[cols_lower["is_blocked"]], errors="coerce").fillna(0).astype(int) == 1
             df.loc[m & df["outcome"].isna(), "outcome"] = "blocked"
 
-        if "outcome" in df.columns:
-            df["outcome"] = df["outcome"].fillna("unknown")
-            return df
+        df["outcome"] = df["outcome"].fillna("unknown")
+        return df
 
     # 3) Fallback: create outcome with 'unknown'
     df["outcome"] = "unknown"
@@ -95,7 +92,7 @@ def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
 
 def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Optional: standardize outcome strings so charts expect consistent labels:
+    Standardize outcome strings so charts expect consistent labels:
     goal / 1ontarget / 1offtarget / blocked / successful / unsuccessful / key pass / assist
     """
     out = df.copy()
@@ -104,17 +101,20 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
 
     s = out["outcome"].astype(str).str.strip().str.lower()
 
-    # common mappings
     mapping = {
+        # shots
         "on target": "1ontarget",
         "ontarget": "1ontarget",
         "1 on target": "1ontarget",
         "shot on target": "1ontarget",
         "sot": "1ontarget",
+        "saved": "1ontarget",
 
         "off target": "1offtarget",
         "offtarget": "1offtarget",
         "shot off target": "1offtarget",
+        "miss": "1offtarget",
+        "wide": "1offtarget",
 
         "goal": "goal",
         "scored": "goal",
@@ -122,15 +122,18 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
         "blocked": "blocked",
         "block": "blocked",
 
+        # passes
         "successful": "successful",
         "success": "successful",
         "complete": "successful",
         "completed": "successful",
+        "successfull": "successful",   # typo fix
 
         "unsuccessful": "unsuccessful",
         "unsuccess": "unsuccessful",
         "incomplete": "unsuccessful",
         "failed": "unsuccessful",
+        "unsuccessfull": "unsuccessful",  # typo fix
 
         "key pass": "key pass",
         "keypass": "key pass",
@@ -138,6 +141,34 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
 
         "assist": "assist",
         "a": "assist",
+    }
+
+    out["outcome"] = s.map(lambda v: mapping.get(v, v))
+    return out
+
+
+def normalize_pass_outcomes(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    If passes outcomes are sometimes labeled as accurate/inaccurate,
+    convert them to successful/unsuccessful (and fix common typos).
+    """
+    out = df.copy()
+    if "outcome" not in out.columns:
+        return out
+
+    s = out["outcome"].astype(str).str.strip().str.lower()
+
+    mapping = {
+        "accurate": "successful",
+        "inaccurate": "unsuccessful",
+        "accurate pass": "successful",
+        "inaccurate pass": "unsuccessful",
+
+        # extra typo variants
+        "successfull": "successful",
+        "unsuccessfull": "unsuccessful",
+        "successful pass": "successful",
+        "unsuccessful pass": "unsuccessful",
     }
 
     out["outcome"] = s.map(lambda v: mapping.get(v, v))
@@ -202,27 +233,11 @@ with st.expander("🎛️ Settings", expanded=True):
     bar_goal = st.color_picker("Bar: goal", "#00FF6A")
     bar_blocked = st.color_picker("Bar: blocked", "#AAAAAA")
 
-pass_colors = {
-    "successful": col_pass_success,
-    "unsuccessful": col_pass_unsuccess,
-    "key pass": col_pass_key,
-    "assist": col_pass_assist
-}
-shot_colors = {
-    "off target": col_shot_off,
-    "ontarget": col_shot_on,
-    "goal": col_shot_goal,
-    "blocked": col_shot_blocked
-}
+pass_colors = {"successful": col_pass_success, "unsuccessful": col_pass_unsuccess, "key pass": col_pass_key, "assist": col_pass_assist}
+shot_colors = {"off target": col_shot_off, "ontarget": col_shot_on, "goal": col_shot_goal, "blocked": col_shot_blocked}
 bar_colors = {
-    "successful": bar_success,
-    "unsuccessful": bar_unsuccess,
-    "key pass": bar_key,
-    "assist": bar_assist,
-    "ontarget": bar_ont,
-    "off target": bar_off,
-    "goal": bar_goal,
-    "blocked": bar_blocked
+    "successful": bar_success, "unsuccessful": bar_unsuccess, "key pass": bar_key, "assist": bar_assist,
+    "ontarget": bar_ont, "off target": bar_off, "goal": bar_goal, "blocked": bar_blocked
 }
 
 mode = st.radio("Choose output type", ["Match Charts", "Pizza Chart", "Shot Detail Card"])
@@ -245,11 +260,7 @@ def build_pizza_df(players_df: pd.DataFrame, player_col: str, player_name: str, 
     for m in metrics:
         val = pd.to_numeric(row.iloc[0][m], errors="coerce")
         pct = _percentile_rank(players_df[m], val)
-        out.append({
-            "metric": m,
-            "value": "" if pd.isna(val) else round(float(val), 2),
-            "percentile": 0 if pd.isna(pct) else round(float(pct), 1)
-        })
+        out.append({"metric": m, "value": "" if pd.isna(val) else round(float(val), 2), "percentile": 0 if pd.isna(pct) else round(float(pct), 1)})
     return pd.DataFrame(out)
 
 
@@ -266,7 +277,6 @@ if uploaded:
         if mode == "Pizza Chart":
             dfp = load_data(path)
             st.success(f"Loaded ✅ rows: {len(dfp)}")
-
             with st.expander("Preview data (first 25 rows)", expanded=False):
                 st.write("Columns:", list(dfp.columns))
                 st.dataframe(dfp.head(25), use_container_width=True)
@@ -323,7 +333,6 @@ if uploaded:
         # ---------- Match / Shot Card ----------
         df_raw = load_data(path)
 
-        # ✅ NEW: show columns and fix missing outcome
         with st.expander("Raw file preview (first 25 rows)", expanded=False):
             st.write("Columns:", list(df_raw.columns))
             st.dataframe(df_raw.head(25), use_container_width=True)
@@ -331,8 +340,10 @@ if uploaded:
         if "outcome" not in df_raw.columns:
             st.warning("Column `outcome` not found. Trying to derive it automatically (e.g., from `event`/`result`).")
 
+        # ✅ FIX: create outcome if missing + normalize values + normalize pass accurate/inaccurate
         df_raw = ensure_outcome_column(df_raw)
         df_raw = normalize_outcome_values(df_raw)
+        df_raw = normalize_pass_outcomes(df_raw)
 
         # Model load
         model_pipe = None
@@ -348,7 +359,6 @@ if uploaded:
                 st.warning("Model file not found. Falling back to Zone.")
                 model_pipe = None
 
-        # Prepare
         df2 = prepare_df_for_charts(
             df_raw,
             attack_direction=attack_dir,
