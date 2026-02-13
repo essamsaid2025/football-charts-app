@@ -26,6 +26,127 @@ st.caption(
     "Shot Card: shots need x,y (x2,y2 optional)"
 )
 
+# -----------------------------
+# Helpers
+# -----------------------------
+def _safe_float(v):
+    try:
+        return float(v)
+    except Exception:
+        return float("nan")
+
+
+def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensure df has 'outcome'. If missing, try to derive it from other common columns
+    like 'event', 'result', 'shot_result', etc. Never crash; if can't derive, create
+    an 'outcome' column filled with 'unknown'.
+    """
+    df = df_raw.copy()
+
+    if "outcome" in df.columns:
+        return df
+
+    # Normalize map of lowercase->actual
+    cols_lower = {c.lower().strip(): c for c in df.columns}
+
+    # 1) Direct rename from common alternatives
+    candidates = [
+        "event", "event_type", "type",
+        "result", "shot_result", "outcome_type",
+        "shot_outcome", "final_outcome",
+    ]
+    for c in candidates:
+        if c in cols_lower:
+            df["outcome"] = df[cols_lower[c]]
+            return df
+
+    # 2) Build from boolean flags if available
+    # e.g. is_goal / is_ontarget / is_offtarget / is_blocked
+    def _has(col): return col in cols_lower
+
+    if _has("is_goal") or _has("goal"):
+        base = pd.Series([np.nan] * len(df))
+        if _has("is_goal"):
+            base = np.where(pd.to_numeric(df[cols_lower["is_goal"]], errors="coerce").fillna(0).astype(int) == 1, "goal", base)
+        if _has("goal") and "outcome" not in df.columns:
+            base = np.where(pd.to_numeric(df[cols_lower["goal"]], errors="coerce").fillna(0).astype(int) == 1, "goal", base)
+        df["outcome"] = base
+
+        # fill others if present
+        if _has("is_ontarget"):
+            m = pd.to_numeric(df[cols_lower["is_ontarget"]], errors="coerce").fillna(0).astype(int) == 1
+            df.loc[m & df["outcome"].isna(), "outcome"] = "1ontarget"
+        if _has("is_offtarget"):
+            m = pd.to_numeric(df[cols_lower["is_offtarget"]], errors="coerce").fillna(0).astype(int) == 1
+            df.loc[m & df["outcome"].isna(), "outcome"] = "1offtarget"
+        if _has("is_blocked"):
+            m = pd.to_numeric(df[cols_lower["is_blocked"]], errors="coerce").fillna(0).astype(int) == 1
+            df.loc[m & df["outcome"].isna(), "outcome"] = "blocked"
+
+        if "outcome" in df.columns:
+            df["outcome"] = df["outcome"].fillna("unknown")
+            return df
+
+    # 3) Fallback: create outcome with 'unknown'
+    df["outcome"] = "unknown"
+    return df
+
+
+def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Optional: standardize outcome strings so charts expect consistent labels:
+    goal / 1ontarget / 1offtarget / blocked / successful / unsuccessful / key pass / assist
+    """
+    out = df.copy()
+    if "outcome" not in out.columns:
+        return out
+
+    s = out["outcome"].astype(str).str.strip().str.lower()
+
+    # common mappings
+    mapping = {
+        "on target": "1ontarget",
+        "ontarget": "1ontarget",
+        "1 on target": "1ontarget",
+        "shot on target": "1ontarget",
+        "sot": "1ontarget",
+
+        "off target": "1offtarget",
+        "offtarget": "1offtarget",
+        "shot off target": "1offtarget",
+
+        "goal": "goal",
+        "scored": "goal",
+
+        "blocked": "blocked",
+        "block": "blocked",
+
+        "successful": "successful",
+        "success": "successful",
+        "complete": "successful",
+        "completed": "successful",
+
+        "unsuccessful": "unsuccessful",
+        "unsuccess": "unsuccessful",
+        "incomplete": "unsuccessful",
+        "failed": "unsuccessful",
+
+        "key pass": "key pass",
+        "keypass": "key pass",
+        "kp": "key pass",
+
+        "assist": "assist",
+        "a": "assist",
+    }
+
+    out["outcome"] = s.map(lambda v: mapping.get(v, v))
+    return out
+
+
+# -----------------------------
+# Settings
+# -----------------------------
 with st.expander("🎛️ Settings", expanded=True):
     title_text = st.text_input("Title", value="Match Report")
 
@@ -81,10 +202,28 @@ with st.expander("🎛️ Settings", expanded=True):
     bar_goal = st.color_picker("Bar: goal", "#00FF6A")
     bar_blocked = st.color_picker("Bar: blocked", "#AAAAAA")
 
-pass_colors = {"successful": col_pass_success, "unsuccessful": col_pass_unsuccess, "key pass": col_pass_key, "assist": col_pass_assist}
-shot_colors = {"off target": col_shot_off, "ontarget": col_shot_on, "goal": col_shot_goal, "blocked": col_shot_blocked}
-bar_colors = {"successful": bar_success, "unsuccessful": bar_unsuccess, "key pass": bar_key, "assist": bar_assist,
-              "ontarget": bar_ont, "off target": bar_off, "goal": bar_goal, "blocked": bar_blocked}
+pass_colors = {
+    "successful": col_pass_success,
+    "unsuccessful": col_pass_unsuccess,
+    "key pass": col_pass_key,
+    "assist": col_pass_assist
+}
+shot_colors = {
+    "off target": col_shot_off,
+    "ontarget": col_shot_on,
+    "goal": col_shot_goal,
+    "blocked": col_shot_blocked
+}
+bar_colors = {
+    "successful": bar_success,
+    "unsuccessful": bar_unsuccess,
+    "key pass": bar_key,
+    "assist": bar_assist,
+    "ontarget": bar_ont,
+    "off target": bar_off,
+    "goal": bar_goal,
+    "blocked": bar_blocked
+}
 
 mode = st.radio("Choose output type", ["Match Charts", "Pizza Chart", "Shot Detail Card"])
 uploaded = st.file_uploader("Upload your file", type=["csv", "xlsx", "xls"])
@@ -96,6 +235,7 @@ def _percentile_rank(series: pd.Series, value: float) -> float:
         return np.nan
     return float((s < value).mean() * 100.0)
 
+
 def build_pizza_df(players_df: pd.DataFrame, player_col: str, player_name: str, metrics: list[str]) -> pd.DataFrame:
     row = players_df.loc[players_df[player_col] == player_name]
     if row.empty:
@@ -105,10 +245,17 @@ def build_pizza_df(players_df: pd.DataFrame, player_col: str, player_name: str, 
     for m in metrics:
         val = pd.to_numeric(row.iloc[0][m], errors="coerce")
         pct = _percentile_rank(players_df[m], val)
-        out.append({"metric": m, "value": "" if pd.isna(val) else round(float(val), 2), "percentile": 0 if pd.isna(pct) else round(float(pct), 1)})
+        out.append({
+            "metric": m,
+            "value": "" if pd.isna(val) else round(float(val), 2),
+            "percentile": 0 if pd.isna(pct) else round(float(pct), 1)
+        })
     return pd.DataFrame(out)
 
 
+# -----------------------------
+# Main
+# -----------------------------
 if uploaded:
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, uploaded.name)
@@ -119,7 +266,9 @@ if uploaded:
         if mode == "Pizza Chart":
             dfp = load_data(path)
             st.success(f"Loaded ✅ rows: {len(dfp)}")
+
             with st.expander("Preview data (first 25 rows)", expanded=False):
+                st.write("Columns:", list(dfp.columns))
                 st.dataframe(dfp.head(25), use_container_width=True)
 
             cols_lower = {c.lower(): c for c in dfp.columns}
@@ -165,15 +314,27 @@ if uploaded:
                     pdf.savefig(fig, bbox_inches="tight")
 
                 st.pyplot(fig)
-                with open(pdf_path, "rb") as f:
-                    st.download_button("⬇️ Download pizza.pdf", f, file_name="pizza.pdf")
-                with open(png_path, "rb") as f:
-                    st.download_button("⬇️ Download pizza.png", f, file_name="pizza.png")
+                with open(pdf_path, "rb") as f2:
+                    st.download_button("⬇️ Download pizza.pdf", f2, file_name="pizza.pdf")
+                with open(png_path, "rb") as f2:
+                    st.download_button("⬇️ Download pizza.png", f2, file_name="pizza.png")
             st.stop()
 
         # ---------- Match / Shot Card ----------
         df_raw = load_data(path)
 
+        # ✅ NEW: show columns and fix missing outcome
+        with st.expander("Raw file preview (first 25 rows)", expanded=False):
+            st.write("Columns:", list(df_raw.columns))
+            st.dataframe(df_raw.head(25), use_container_width=True)
+
+        if "outcome" not in df_raw.columns:
+            st.warning("Column `outcome` not found. Trying to derive it automatically (e.g., from `event`/`result`).")
+
+        df_raw = ensure_outcome_column(df_raw)
+        df_raw = normalize_outcome_values(df_raw)
+
+        # Model load
         model_pipe = None
         if xg_method == "model":
             if model_exists:
@@ -187,6 +348,7 @@ if uploaded:
                 st.warning("Model file not found. Falling back to Zone.")
                 model_pipe = None
 
+        # Prepare
         df2 = prepare_df_for_charts(
             df_raw,
             attack_direction=attack_dir,
@@ -202,19 +364,15 @@ if uploaded:
             st.info(f"xG source used: **{df2['xg_source'].iloc[0]}**")
 
         with st.expander("Preview prepared data (first 25 rows)"):
+            st.write("Prepared columns:", list(df2.columns))
             st.dataframe(df2.head(25), use_container_width=True)
 
+        # ---------- Shot Detail Card ----------
         if mode == "Shot Detail Card":
             shots_only = df2[df2["event_type"] == "shot"].copy().reset_index(drop=True)
             if shots_only.empty:
                 st.error("No shots found in this file.")
                 st.stop()
-
-            def _safe_float(v):
-                try:
-                    return float(v)
-                except Exception:
-                    return float("nan")
 
             shots_only["label"] = shots_only.apply(
                 lambda r: f'{r.name+1} | {str(r["outcome"]).upper()} | xG {_safe_float(r.get("xg")):.2f} | ({_safe_float(r["x"]):.1f},{_safe_float(r["y"]):.1f})',
@@ -245,12 +403,13 @@ if uploaded:
                     pdf.savefig(fig, bbox_inches="tight")
 
                 st.pyplot(fig)
-                with open(png_path, "rb") as f:
-                    st.download_button("⬇️ Download shot_card.png", f, file_name="shot_card.png")
-                with open(pdf_path, "rb") as f:
-                    st.download_button("⬇️ Download shot_card.pdf", f, file_name="shot_card.pdf")
+                with open(png_path, "rb") as f2:
+                    st.download_button("⬇️ Download shot_card.png", f2, file_name="shot_card.png")
+                with open(pdf_path, "rb") as f2:
+                    st.download_button("⬇️ Download shot_card.pdf", f2, file_name="shot_card.pdf")
             st.stop()
 
+        # ---------- Report ----------
         if st.button("Generate Report"):
             out_dir = os.path.join(tmp, "output")
             pdf_path, png_paths = build_report_from_prepared_df(
@@ -270,9 +429,9 @@ if uploaded:
                 st.image(p, use_container_width=True)
 
             st.subheader("Downloads")
-            with open(pdf_path, "rb") as f:
-                st.download_button("⬇️ Download report.pdf", f, file_name="report.pdf")
+            with open(pdf_path, "rb") as f2:
+                st.download_button("⬇️ Download report.pdf", f2, file_name="report.pdf")
             for p in png_paths:
                 name = os.path.basename(p)
-                with open(p, "rb") as f:
-                    st.download_button(f"⬇️ Download {name}", f, file_name=name)
+                with open(p, "rb") as f2:
+                    st.download_button(f"⬇️ Download {name}", f2, file_name=name)
