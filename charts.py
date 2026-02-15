@@ -1,5 +1,3 @@
-# charts.py (FULL UPDATED) — Header image + Subtitle inside PDF report
-# =========================================================
 import os
 import re
 import math
@@ -10,17 +8,11 @@ from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.gridspec as gridspec
 from mplsoccer import Pitch, PyPizza
 
-# ----------------------------
-# Constants
-# ----------------------------
 PASS_ORDER = ["unsuccessful", "successful", "key pass", "assist"]
 SHOT_ORDER = ["off target", "ontarget", "goal", "blocked"]
 SHOT_TYPES = set(SHOT_ORDER)
-REQUIRED = ["outcome", "x", "y"]  # x2,y2 optional
+REQUIRED = ["outcome", "x", "y"]
 
-# ----------------------------
-# Themes (used by all charts + shot card)
-# ----------------------------
 THEMES = {
     "The Athletic Dark": {
         "bg": "#0E1117",
@@ -54,22 +46,14 @@ THEMES = {
     },
 }
 
-# ----------------------------
-# Outcome Normalization
-# ----------------------------
 def _norm_outcome(s: str) -> str:
     if s is None or (isinstance(s, float) and pd.isna(s)):
         return ""
     s = str(s).strip().lower()
-
-    # remove leading digits like "1ontarget"
     s = re.sub(r"^\d+", "", s).strip()
-
     s = s.replace("_", " ").replace("-", " ")
     s = re.sub(r"\s+", " ", s)
-
     aliases = {
-        # shots
         "on target": "ontarget",
         "ontarget": "ontarget",
         "offtarget": "off target",
@@ -77,7 +61,6 @@ def _norm_outcome(s: str) -> str:
         "block": "blocked",
         "blocked shot": "blocked",
         "blk": "blocked",
-        # passes
         "keypass": "key pass",
         "key pass": "key pass",
         "assist": "assist",
@@ -90,9 +73,6 @@ def _norm_outcome(s: str) -> str:
     }
     return aliases.get(s, s)
 
-# ----------------------------
-# Load data
-# ----------------------------
 def load_data(path: str) -> pd.DataFrame:
     ext = os.path.splitext(path)[1].lower()
     if ext == ".csv":
@@ -103,26 +83,19 @@ def load_data(path: str) -> pd.DataFrame:
             except Exception:
                 pass
         return pd.read_csv(path, encoding="latin1", encoding_errors="replace")
-
     if ext in [".xlsx", ".xls"]:
         return pd.read_excel(path)
-
     raise ValueError("Unsupported file type. Use CSV or Excel.")
 
-# ----------------------------
-# Validate & Clean
-# ----------------------------
 def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [c.strip() for c in df.columns]
     cols_lower_map = {c.lower(): c for c in df.columns}
 
-    # normalize outcome col name
     if "outcome" not in cols_lower_map:
         raise ValueError("Missing column: outcome (required).")
     df.rename(columns={cols_lower_map["outcome"]: "outcome"}, inplace=True)
 
-    # normalize coords cols
     for want in ["x", "y", "x2", "y2"]:
         if want in cols_lower_map:
             df.rename(columns={cols_lower_map[want]: want}, inplace=True)
@@ -138,7 +111,6 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df["outcome"] = df["outcome"].apply(_norm_outcome)
     df = df.dropna(subset=["x", "y"]).copy()
 
-    # classify
     df["event_type"] = "pass"
     df.loc[df["outcome"].isin(SHOT_TYPES), "event_type"] = "shot"
 
@@ -152,37 +124,24 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
 
     return pd.concat([df_pass, df_shot], ignore_index=True)
 
-# ----------------------------
-# Pitch transforms
-# ----------------------------
-def apply_pitch_transforms(
-    df: pd.DataFrame,
-    attack_direction: str = "ltr",
-    flip_y: bool = False,
-    pitch_mode: str = "rect",
-    pitch_width: float = 64.0,
-) -> pd.DataFrame:
+def apply_pitch_transforms(df: pd.DataFrame, attack_direction="ltr", flip_y=False, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
     df = df.copy()
-
     if flip_y:
         for c in ["y", "y2"]:
             if c in df.columns:
                 df[c] = 100 - df[c]
-
     if attack_direction == "rtl":
         for c in ["x", "x2"]:
             if c in df.columns:
                 df[c] = 100 - df[c]
-
     if pitch_mode == "rect":
         scale = pitch_width / 100.0
         for c in ["y", "y2"]:
             if c in df.columns:
                 df[c] = df[c] * scale
-
     return df
 
-def make_pitch(pitch_mode: str = "rect", pitch_width: float = 64.0):
+def make_pitch(pitch_mode="rect", pitch_width=64.0):
     if pitch_mode == "square":
         return Pitch(pitch_type="custom", pitch_length=100, pitch_width=100, line_zorder=2)
     return Pitch(pitch_type="custom", pitch_length=100, pitch_width=pitch_width, line_zorder=2)
@@ -192,17 +151,12 @@ def _goal_mouth_bounds(pitch_mode="rect", pitch_width=64.0):
     goal_mouth = (pitch_width * 0.10765) if pitch_mode == "rect" else (100.0 * 0.10765)
     return gy - goal_mouth / 2.0, gy + goal_mouth / 2.0
 
-# ----------------------------
-# Distance/Angle helpers
-# ----------------------------
 def _shot_angle_radians(x: float, y: float, pitch_mode: str, pitch_width: float) -> float:
     goal_x = 100.0
     goal_y = (pitch_width / 2.0) if pitch_mode == "rect" else 50.0
-
     goal_mouth = (pitch_width * 0.10765) if pitch_mode == "rect" else (100.0 * 0.10765)
     left_post_y = goal_y - goal_mouth / 2.0
     right_post_y = goal_y + goal_mouth / 2.0
-
     a = math.atan2(right_post_y - y, goal_x - x)
     b = math.atan2(left_post_y - y, goal_x - x)
     angle = abs(a - b)
@@ -214,19 +168,14 @@ def _meters_distance_approx(x, y, pitch_mode="rect", pitch_width=64.0) -> float:
     length_m = 105.0
     width_m = 68.0 if pitch_mode == "rect" else 105.0
     y_max = pitch_width if pitch_mode == "rect" else 100.0
-
     xm = (x / 100.0) * length_m
     ym = (y / y_max) * width_m
     goal_xm = length_m
     goal_ym = width_m / 2.0
-
     dx = goal_xm - xm
     dy = goal_ym - ym
     return float(math.sqrt(dx * dx + dy * dy))
 
-# ----------------------------
-# Zone xG
-# ----------------------------
 def zone_based_xg(x, y, pitch_mode="rect", pitch_width=64.0):
     angle = _shot_angle_radians(float(x), float(y), pitch_mode, pitch_width)
     dist_m = _meters_distance_approx(float(x), float(y), pitch_mode, pitch_width)
@@ -262,7 +211,6 @@ def zone_based_xg(x, y, pitch_mode="rect", pitch_width=64.0):
 def estimate_xg_zone(df: pd.DataFrame, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
     df = df.copy()
     df["xg_zone"] = pd.NA
-
     mask = df["event_type"] == "shot"
     if mask.any():
         df.loc[mask, "xg_zone"] = [
@@ -271,9 +219,7 @@ def estimate_xg_zone(df: pd.DataFrame, pitch_mode="rect", pitch_width=64.0) -> p
         ]
     return df
 
-# ----------------------------
-# Model features for YOUR trained columns (one-hot ready)
-# ----------------------------
+# --- Model features section (as you had) ---
 MODEL_FEATURE_COLS = [
     "x", "y",
     "Assisted", "IndividualPlay", "RegularPlay",
@@ -289,7 +235,6 @@ MODEL_FEATURE_COLS = [
 
 def build_model_features(df_prepared: pd.DataFrame, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
     shots = df_prepared[df_prepared["event_type"] == "shot"].copy()
-
     shots["x"] = pd.to_numeric(shots.get("x"), errors="coerce").fillna(0.0)
     shots["y"] = pd.to_numeric(shots.get("y"), errors="coerce").fillna(0.0)
 
@@ -317,7 +262,6 @@ def build_model_features(df_prepared: pd.DataFrame, pitch_mode="rect", pitch_wid
         y_max = pitch_width if pitch_mode == "rect" else 100.0
         left_thr = y_max * 0.33
         right_thr = y_max * 0.67
-
         shots["Zone_Back"] = (shots["x"] < 50).astype(int)
         shots["Zone_Left"] = (shots["y"] < left_thr).astype(int)
         shots["Zone_Right"] = (shots["y"] > right_thr).astype(int)
@@ -346,7 +290,6 @@ def build_model_features(df_prepared: pd.DataFrame, pitch_mode="rect", pitch_wid
 def estimate_xg_model(df: pd.DataFrame, model_pipe=None, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
     df = df.copy()
     df["xg_model"] = pd.NA
-
     if model_pipe is None:
         return df
 
@@ -359,7 +302,6 @@ def estimate_xg_model(df: pd.DataFrame, model_pipe=None, pitch_mode="rect", pitc
 
         model = model_pipe
         feature_cols = None
-
         if isinstance(model_pipe, dict) and "model" in model_pipe:
             model = model_pipe["model"]
             feature_cols = model_pipe.get("feature_cols")
@@ -381,9 +323,6 @@ def estimate_xg_model(df: pd.DataFrame, model_pipe=None, pitch_mode="rect", pitc
     except Exception:
         return df
 
-# ----------------------------
-# Opta-ish shot end location
-# ----------------------------
 def fix_shot_end_location(df: pd.DataFrame, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
     df = df.copy()
     if "x2" not in df.columns:
@@ -431,16 +370,13 @@ def fix_shot_end_location(df: pd.DataFrame, pitch_mode="rect", pitch_width=64.0)
 
     return df
 
-# ----------------------------
-# Prepare DF (run once)
-# ----------------------------
 def prepare_df_for_charts(
     df_raw: pd.DataFrame,
     attack_direction="ltr",
     flip_y=False,
     pitch_mode="rect",
     pitch_width=64.0,
-    xg_method: str = "zone",   # "zone" or "model"
+    xg_method: str = "zone",
     model_pipe=None,
 ) -> pd.DataFrame:
     df = validate_and_clean(df_raw)
@@ -464,9 +400,6 @@ def prepare_df_for_charts(
 
     return df
 
-# ----------------------------
-# Theme helpers
-# ----------------------------
 def _apply_fig_theme(fig, ax, theme):
     fig.patch.set_facecolor(theme["bg"])
     ax.set_facecolor(theme["panel"])
@@ -476,68 +409,77 @@ def _draw_pitch(ax, pitch, theme):
     ax.set_facecolor(theme["pitch"])
 
 # ----------------------------
-# NEW: Header drawer (Title + Subtitle + Image)
+# Header drawer (FIXED: no cropping + align + colors + sizes)
 # ----------------------------
 def add_report_header(
     fig,
     title: str = "",
     subtitle: str = "",
-    header_image=None,           # PIL image OR numpy array OR None
-    img_side: str = "left",      # "left" or "right"
-    img_width_frac: float = 0.10,  # fraction of fig width
+    header_image=None,
+    img_side: str = "left",
+    img_width_frac: float = 0.10,
     theme_name: str = "The Athletic Dark",
+    title_align: str = "center",       # "left" | "center" | "right"
+    subtitle_align: str = "center",
+    title_fontsize: int = 16,
+    subtitle_fontsize: int = 11,
+    title_color: str | None = None,
+    subtitle_color: str | None = None,
 ):
-    """
-    Draw a consistent header on top of any matplotlib figure:
-    - Optional image (logo/player face)
-    - Title
-    - Subtitle
-    Safe if header_image is None.
-    """
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+
+    title_color = title_color or theme["text"]
+    subtitle_color = subtitle_color or theme["muted"]
 
     title = (title or "").strip()
     subtitle = (subtitle or "").strip()
 
-    # Reserve space at top
-    fig.subplots_adjust(top=0.86)
+    # Reserve header band
+    fig.subplots_adjust(top=0.84)
 
-    # Header texts (center aligned)
+    def _align_to_x_ha(align: str):
+        a = (align or "center").lower().strip()
+        if a == "left":
+            return 0.08, "left"
+        if a == "right":
+            return 0.92, "right"
+        return 0.50, "center"
+
+    tx, tha = _align_to_x_ha(title_align)
+    sx, sha = _align_to_x_ha(subtitle_align)
+
+    # Title + Subtitle
     if title:
-        fig.text(0.5, 0.965, title, ha="center", va="top",
-                 color=theme["text"], fontsize=16, weight="bold")
+        fig.text(tx, 0.965, title, ha=tha, va="top",
+                 color=title_color, fontsize=title_fontsize, weight="bold")
     if subtitle:
-        fig.text(0.5, 0.935, subtitle, ha="center", va="top",
-                 color=theme["muted"], fontsize=11)
+        fig.text(sx, 0.935, subtitle, ha=sha, va="top",
+                 color=subtitle_color, fontsize=subtitle_fontsize)
 
-    # Optional image
+    # Image
     if header_image is None:
         return
 
     try:
         img = header_image
-        if hasattr(img, "convert"):  # PIL.Image
+        if hasattr(img, "convert"):  # PIL
             img = img.convert("RGBA")
             img_arr = np.asarray(img)
         else:
             img_arr = np.asarray(img)
 
-        img_side = (img_side or "left").strip().lower()
-        img_w = float(max(0.05, min(0.18, img_width_frac)))
-        img_h = img_w  # square
-        y0 = 0.905
+        img_side = (img_side or "left").lower().strip()
+        w = float(max(0.05, min(0.20, img_width_frac)))
+        h = w
+        y0 = 0.895
 
-        if img_side == "right":
-            x0 = 0.98 - img_w
-        else:
-            x0 = 0.02
+        x0 = 0.02 if img_side != "right" else (0.98 - w)
 
-        ax_img = fig.add_axes([x0, y0, img_w, img_h])
+        ax_img = fig.add_axes([x0, y0, w, h], zorder=50)
         ax_img.imshow(img_arr)
         ax_img.axis("off")
         ax_img.set_facecolor("none")
     except Exception:
-        # If image fails, ignore silently (don't break report)
         return
 
 # ----------------------------
@@ -546,7 +488,6 @@ def add_report_header(
 def outcome_bar(df: pd.DataFrame, bar_colors: dict | None = None, theme_name="The Athletic Dark"):
     bar_colors = bar_colors or {}
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
-
     counts = df["outcome"].value_counts()
 
     fig, ax = plt.subplots(figsize=(8, 4))
@@ -639,16 +580,22 @@ def shot_map(df: pd.DataFrame, shot_colors: dict | None = None,
     return fig
 
 # ----------------------------
-# Report builder (expects prepared df) — UPDATED
+# Report builder — UPDATED with header styling controls
 # ----------------------------
 def build_report_from_prepared_df(
     df_prepared: pd.DataFrame,
     out_dir: str,
     title: str = "Match Report",
     subtitle: str = "",
-    header_image=None,                 # NEW
-    header_img_side: str = "left",      # NEW
-    header_img_width_frac: float = 0.10,# NEW
+    header_image=None,
+    header_img_side: str = "left",
+    header_img_width_frac: float = 0.10,
+    title_align: str = "center",
+    subtitle_align: str = "center",
+    title_fontsize: int = 16,
+    subtitle_fontsize: int = 11,
+    title_color: str | None = None,
+    subtitle_color: str | None = None,
     theme_name: str = "The Athletic Dark",
     pitch_mode="rect",
     pitch_width=64.0,
@@ -671,7 +618,6 @@ def build_report_from_prepared_df(
 
         pngs = []
         for name, fig in figs:
-            # add header on every page
             add_report_header(
                 fig,
                 title=title,
@@ -680,18 +626,24 @@ def build_report_from_prepared_df(
                 img_side=header_img_side,
                 img_width_frac=header_img_width_frac,
                 theme_name=theme_name,
+                title_align=title_align,
+                subtitle_align=subtitle_align,
+                title_fontsize=title_fontsize,
+                subtitle_fontsize=subtitle_fontsize,
+                title_color=title_color,
+                subtitle_color=subtitle_color,
             )
 
             png_path = os.path.join(out_dir, f"{name}.png")
-            fig.savefig(png_path, dpi=220, bbox_inches="tight")
-            pdf.savefig(fig, bbox_inches="tight")
+            fig.savefig(png_path, dpi=220, bbox_inches="tight", pad_inches=0.25)
+            pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
             plt.close(fig)
             pngs.append(png_path)
 
     return pdf_path, pngs
 
 # ----------------------------
-# Shot Detail Card (NO shot type)
+# Shot Detail Card (unchanged from your version)
 # ----------------------------
 def shot_detail_card(
     df_prepared: pd.DataFrame,
@@ -807,7 +759,6 @@ def pizza_chart(df_pizza: pd.DataFrame, title: str = "", subtitle: str = "",
                 slice_colors: list | None = None, show_values_legend: bool = True):
     dfp = df_pizza.copy()
     dfp.columns = [c.strip().lower() for c in dfp.columns]
-
     required = {"metric", "value", "percentile"}
     if not required.issubset(set(dfp.columns)):
         raise ValueError("Pizza input لازم يحتوي أعمدة: metric, value, percentile")
