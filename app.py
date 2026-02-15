@@ -1,11 +1,15 @@
+# app.py  (FULL UPDATED APP) — Header image + subtitle + existing pipeline
+# =========================================================
 import os
 import tempfile
 import joblib
+import io
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 
+from PIL import Image
 from matplotlib.backends.backend_pdf import PdfPages  # ✅ FIX
 
 from charts import (
@@ -19,12 +23,11 @@ from charts import (
 
 st.set_page_config(page_title="Football Charts Generator", layout="wide")
 
-st.title("⚽ Football Charts Generator (Upload CSV / Excel)")
-st.caption(
-    "Match Charts: required outcome,x,y (passes need x2,y2) | "
-    "Pizza: players table (per90) | "
-    "Shot Card: shots need x,y (x2,y2 optional)"
-)
+# -----------------------------
+# App title (simple)
+# -----------------------------
+st.markdown("## ⚽ Football Charts Generator")
+st.caption("Upload CSV / Excel → Match Report / Pizza / Shot Card")
 
 # -----------------------------
 # Helpers
@@ -66,9 +69,17 @@ def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
     if _has("is_goal") or _has("goal"):
         base = pd.Series([np.nan] * len(df))
         if _has("is_goal"):
-            base = np.where(pd.to_numeric(df[cols_lower["is_goal"]], errors="coerce").fillna(0).astype(int) == 1, "goal", base)
+            base = np.where(
+                pd.to_numeric(df[cols_lower["is_goal"]], errors="coerce").fillna(0).astype(int) == 1,
+                "goal",
+                base
+            )
         if _has("goal"):
-            base = np.where(pd.to_numeric(df[cols_lower["goal"]], errors="coerce").fillna(0).astype(int) == 1, "goal", base)
+            base = np.where(
+                pd.to_numeric(df[cols_lower["goal"]], errors="coerce").fillna(0).astype(int) == 1,
+                "goal",
+                base
+            )
 
         df["outcome"] = base
 
@@ -175,11 +186,46 @@ def normalize_pass_outcomes(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _percentile_rank(series: pd.Series, value: float) -> float:
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if len(s) == 0 or pd.isna(value):
+        return np.nan
+    return float((s < value).mean() * 100.0)
+
+
+def build_pizza_df(players_df: pd.DataFrame, player_col: str, player_name: str, metrics: list[str]) -> pd.DataFrame:
+    row = players_df.loc[players_df[player_col] == player_name]
+    if row.empty:
+        raise ValueError("Player not found in file.")
+
+    out = []
+    for m in metrics:
+        val = pd.to_numeric(row.iloc[0][m], errors="coerce")
+        pct = _percentile_rank(players_df[m], val)
+        out.append({
+            "metric": m,
+            "value": "" if pd.isna(val) else round(float(val), 2),
+            "percentile": 0 if pd.isna(pct) else round(float(pct), 1)
+        })
+    return pd.DataFrame(out)
+
+
 # -----------------------------
 # Settings
 # -----------------------------
 with st.expander("🎛️ Settings", expanded=True):
-    title_text = st.text_input("Title", value="Match Report")
+    st.markdown("### 🧩 Report Header")
+    report_title = st.text_input("Title", value="Match Report")
+    report_subtitle = st.text_input("Subtitle (you control it)", value="")
+
+    header_img = st.file_uploader(
+        "Upload header image (Club logo / Player face) - PNG/JPG",
+        type=["png", "jpg", "jpeg"]
+    )
+    header_img_side = st.selectbox("Image position", ["Left", "Right"], index=0)
+    header_img_width = st.slider("Image width", 40, 180, 90)
+
+    st.markdown("---")
 
     st.markdown("### Theme")
     theme_name = st.selectbox(
@@ -233,36 +279,66 @@ with st.expander("🎛️ Settings", expanded=True):
     bar_goal = st.color_picker("Bar: goal", "#00FF6A")
     bar_blocked = st.color_picker("Bar: blocked", "#AAAAAA")
 
-pass_colors = {"successful": col_pass_success, "unsuccessful": col_pass_unsuccess, "key pass": col_pass_key, "assist": col_pass_assist}
-shot_colors = {"off target": col_shot_off, "ontarget": col_shot_on, "goal": col_shot_goal, "blocked": col_shot_blocked}
+pass_colors = {
+    "successful": col_pass_success,
+    "unsuccessful": col_pass_unsuccess,
+    "key pass": col_pass_key,
+    "assist": col_pass_assist
+}
+shot_colors = {
+    "off target": col_shot_off,
+    "ontarget": col_shot_on,
+    "goal": col_shot_goal,
+    "blocked": col_shot_blocked
+}
 bar_colors = {
-    "successful": bar_success, "unsuccessful": bar_unsuccess, "key pass": bar_key, "assist": bar_assist,
-    "ontarget": bar_ont, "off target": bar_off, "goal": bar_goal, "blocked": bar_blocked
+    "successful": bar_success,
+    "unsuccessful": bar_unsuccess,
+    "key pass": bar_key,
+    "assist": bar_assist,
+    "ontarget": bar_ont,
+    "off target": bar_off,
+    "goal": bar_goal,
+    "blocked": bar_blocked
 }
 
+# -----------------------------
+# Header Preview (UI only)
+# -----------------------------
+img_obj = None
+if header_img is not None:
+    try:
+        img_obj = Image.open(header_img)
+    except Exception:
+        img_obj = None
+
+if img_obj is not None:
+    if header_img_side == "Left":
+        c1, c2 = st.columns([1, 8], vertical_alignment="center")
+        with c1:
+            st.image(img_obj, width=header_img_width)
+        with c2:
+            st.markdown(f"## {report_title}")
+            if report_subtitle.strip():
+                st.caption(report_subtitle)
+    else:
+        c1, c2 = st.columns([8, 1], vertical_alignment="center")
+        with c1:
+            st.markdown(f"## {report_title}")
+            if report_subtitle.strip():
+                st.caption(report_subtitle)
+        with c2:
+            st.image(img_obj, width=header_img_width)
+else:
+    st.markdown(f"## {report_title}")
+    if report_subtitle.strip():
+        st.caption(report_subtitle)
+
+# -----------------------------
+# Mode + Upload
+# -----------------------------
 mode = st.radio("Choose output type", ["Match Charts", "Pizza Chart", "Shot Detail Card"])
 uploaded = st.file_uploader("Upload your file", type=["csv", "xlsx", "xls"])
-
-
-def _percentile_rank(series: pd.Series, value: float) -> float:
-    s = pd.to_numeric(series, errors="coerce").dropna()
-    if len(s) == 0 or pd.isna(value):
-        return np.nan
-    return float((s < value).mean() * 100.0)
-
-
-def build_pizza_df(players_df: pd.DataFrame, player_col: str, player_name: str, metrics: list[str]) -> pd.DataFrame:
-    row = players_df.loc[players_df[player_col] == player_name]
-    if row.empty:
-        raise ValueError("Player not found in file.")
-
-    out = []
-    for m in metrics:
-        val = pd.to_numeric(row.iloc[0][m], errors="coerce")
-        pct = _percentile_rank(players_df[m], val)
-        out.append({"metric": m, "value": "" if pd.isna(val) else round(float(val), 2), "percentile": 0 if pd.isna(pct) else round(float(pct), 1)})
-    return pd.DataFrame(out)
-
 
 # -----------------------------
 # Main
@@ -422,10 +498,16 @@ if uploaded:
         # ---------- Report ----------
         if st.button("Generate Report"):
             out_dir = os.path.join(tmp, "output")
+
+            # Put subtitle inside title text for PDF (safe without changing charts.py)
+            pdf_title = report_title.strip()
+            if report_subtitle.strip():
+                pdf_title = f"{pdf_title}\n{report_subtitle.strip()}"
+
             pdf_path, png_paths = build_report_from_prepared_df(
                 df2,
                 out_dir=out_dir,
-                title=title_text,
+                title=pdf_title,
                 theme_name=theme_name,
                 pitch_mode=pitch_mode,
                 pitch_width=pitch_width,
