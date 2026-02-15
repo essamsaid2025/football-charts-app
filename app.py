@@ -1,9 +1,6 @@
-# app.py  (FULL UPDATED APP) — Header image + subtitle + existing pipeline
-# =========================================================
 import os
 import tempfile
 import joblib
-import io
 
 import streamlit as st
 import pandas as pd
@@ -23,9 +20,6 @@ from charts import (
 
 st.set_page_config(page_title="Football Charts Generator", layout="wide")
 
-# -----------------------------
-# App title (simple)
-# -----------------------------
 st.markdown("## ⚽ Football Charts Generator")
 st.caption("Upload CSV / Excel → Match Report / Pizza / Shot Card")
 
@@ -40,19 +34,12 @@ def _safe_float(v):
 
 
 def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
-    """
-    Ensure df has 'outcome'. If missing, try to derive it from other common columns
-    like 'event', 'result', 'shot_result', etc. Never crash; if can't derive, create
-    an 'outcome' column filled with 'unknown'.
-    """
     df = df_raw.copy()
-
     if "outcome" in df.columns:
         return df
 
     cols_lower = {c.lower().strip(): c for c in df.columns}
 
-    # 1) Direct rename from common alternatives
     candidates = [
         "event", "event_type", "type",
         "result", "shot_result", "outcome_type",
@@ -63,23 +50,15 @@ def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
             df["outcome"] = df[cols_lower[c]]
             return df
 
-    # 2) Build from boolean flags if available
     def _has(col): return col in cols_lower
 
     if _has("is_goal") or _has("goal"):
         base = pd.Series([np.nan] * len(df))
+
         if _has("is_goal"):
-            base = np.where(
-                pd.to_numeric(df[cols_lower["is_goal"]], errors="coerce").fillna(0).astype(int) == 1,
-                "goal",
-                base
-            )
+            base = np.where(pd.to_numeric(df[cols_lower["is_goal"]], errors="coerce").fillna(0).astype(int) == 1, "goal", base)
         if _has("goal"):
-            base = np.where(
-                pd.to_numeric(df[cols_lower["goal"]], errors="coerce").fillna(0).astype(int) == 1,
-                "goal",
-                base
-            )
+            base = np.where(pd.to_numeric(df[cols_lower["goal"]], errors="coerce").fillna(0).astype(int) == 1, "goal", base)
 
         df["outcome"] = base
 
@@ -96,16 +75,11 @@ def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
         df["outcome"] = df["outcome"].fillna("unknown")
         return df
 
-    # 3) Fallback: create outcome with 'unknown'
     df["outcome"] = "unknown"
     return df
 
 
 def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Standardize outcome strings so charts expect consistent labels:
-    goal / 1ontarget / 1offtarget / blocked / successful / unsuccessful / key pass / assist
-    """
     out = df.copy()
     if "outcome" not in out.columns:
         return out
@@ -138,13 +112,13 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
         "success": "successful",
         "complete": "successful",
         "completed": "successful",
-        "successfull": "successful",   # typo fix
+        "successfull": "successful",
 
         "unsuccessful": "unsuccessful",
         "unsuccess": "unsuccessful",
         "incomplete": "unsuccessful",
         "failed": "unsuccessful",
-        "unsuccessfull": "unsuccessful",  # typo fix
+        "unsuccessfull": "unsuccessful",
 
         "key pass": "key pass",
         "keypass": "key pass",
@@ -159,29 +133,21 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_pass_outcomes(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    If passes outcomes are sometimes labeled as accurate/inaccurate,
-    convert them to successful/unsuccessful (and fix common typos).
-    """
     out = df.copy()
     if "outcome" not in out.columns:
         return out
 
     s = out["outcome"].astype(str).str.strip().str.lower()
-
     mapping = {
         "accurate": "successful",
         "inaccurate": "unsuccessful",
         "accurate pass": "successful",
         "inaccurate pass": "unsuccessful",
-
-        # extra typo variants
         "successfull": "successful",
         "unsuccessfull": "unsuccessful",
         "successful pass": "successful",
         "unsuccessful pass": "unsuccessful",
     }
-
     out["outcome"] = s.map(lambda v: mapping.get(v, v))
     return out
 
@@ -202,11 +168,8 @@ def build_pizza_df(players_df: pd.DataFrame, player_col: str, player_name: str, 
     for m in metrics:
         val = pd.to_numeric(row.iloc[0][m], errors="coerce")
         pct = _percentile_rank(players_df[m], val)
-        out.append({
-            "metric": m,
-            "value": "" if pd.isna(val) else round(float(val), 2),
-            "percentile": 0 if pd.isna(pct) else round(float(pct), 1)
-        })
+        out.append({"metric": m, "value": "" if pd.isna(val) else round(float(val), 2),
+                    "percentile": 0 if pd.isna(pct) else round(float(pct), 1)})
     return pd.DataFrame(out)
 
 
@@ -215,15 +178,25 @@ def build_pizza_df(players_df: pd.DataFrame, player_col: str, player_name: str, 
 # -----------------------------
 with st.expander("🎛️ Settings", expanded=True):
     st.markdown("### 🧩 Report Header")
-    report_title = st.text_input("Title", value="Match Report")
-    report_subtitle = st.text_input("Subtitle (you control it)", value="")
 
-    header_img = st.file_uploader(
-        "Upload header image (Club logo / Player face) - PNG/JPG",
-        type=["png", "jpg", "jpeg"]
-    )
+    report_title = st.text_input("Title", value="Match Report")
+    report_subtitle = st.text_input("Subtitle", value="")
+
+    header_img = st.file_uploader("Upload header image (Club logo / Player face) - PNG/JPG", type=["png", "jpg", "jpeg"])
     header_img_side = st.selectbox("Image position", ["Left", "Right"], index=0)
-    header_img_width = st.slider("Image width", 40, 180, 90)
+
+    header_img_size = st.slider("Image size (as % of figure width)", 5, 18, 10)  # percent
+    header_img_width_frac = header_img_size / 100.0
+
+    st.markdown("### Title / Subtitle style")
+    title_align = st.selectbox("Title align", ["Center", "Left", "Right"], index=0)
+    subtitle_align = st.selectbox("Subtitle align", ["Center", "Left", "Right"], index=0)
+
+    title_fontsize = st.slider("Title font size", 12, 28, 16)
+    subtitle_fontsize = st.slider("Subtitle font size", 9, 20, 11)
+
+    title_color = st.color_picker("Title color", "#FFFFFF")
+    subtitle_color = st.color_picker("Subtitle color", "#A0A7B4")
 
     st.markdown("---")
 
@@ -248,13 +221,8 @@ with st.expander("🎛️ Settings", expanded=True):
     model_file = st.text_input("Model file path", value="xg_pipeline.joblib")
     model_exists = os.path.exists(model_file)
 
-    xg_method_ui = st.radio(
-        "xG method",
-        ["Zone", "Model"],
-        index=1 if model_exists else 0
-    )
+    xg_method_ui = st.radio("xG method", ["Zone", "Model"], index=1 if model_exists else 0)
     xg_method = "model" if xg_method_ui == "Model" else "zone"
-
     st.caption(f"Model exists: **{model_exists}**")
 
     st.markdown("### Pass colors")
@@ -279,27 +247,11 @@ with st.expander("🎛️ Settings", expanded=True):
     bar_goal = st.color_picker("Bar: goal", "#00FF6A")
     bar_blocked = st.color_picker("Bar: blocked", "#AAAAAA")
 
-pass_colors = {
-    "successful": col_pass_success,
-    "unsuccessful": col_pass_unsuccess,
-    "key pass": col_pass_key,
-    "assist": col_pass_assist
-}
-shot_colors = {
-    "off target": col_shot_off,
-    "ontarget": col_shot_on,
-    "goal": col_shot_goal,
-    "blocked": col_shot_blocked
-}
+pass_colors = {"successful": col_pass_success, "unsuccessful": col_pass_unsuccess, "key pass": col_pass_key, "assist": col_pass_assist}
+shot_colors = {"off target": col_shot_off, "ontarget": col_shot_on, "goal": col_shot_goal, "blocked": col_shot_blocked}
 bar_colors = {
-    "successful": bar_success,
-    "unsuccessful": bar_unsuccess,
-    "key pass": bar_key,
-    "assist": bar_assist,
-    "ontarget": bar_ont,
-    "off target": bar_off,
-    "goal": bar_goal,
-    "blocked": bar_blocked
+    "successful": bar_success, "unsuccessful": bar_unsuccess, "key pass": bar_key, "assist": bar_assist,
+    "ontarget": bar_ont, "off target": bar_off, "goal": bar_goal, "blocked": bar_blocked
 }
 
 # -----------------------------
@@ -308,15 +260,16 @@ bar_colors = {
 img_obj = None
 if header_img is not None:
     try:
-        img_obj = Image.open(header_img)
+        img_obj = Image.open(header_img).convert("RGBA")
     except Exception:
         img_obj = None
 
+# Nice preview row
 if img_obj is not None:
     if header_img_side == "Left":
         c1, c2 = st.columns([1, 8], vertical_alignment="center")
         with c1:
-            st.image(img_obj, width=header_img_width)
+            st.image(img_obj, width=120)
         with c2:
             st.markdown(f"## {report_title}")
             if report_subtitle.strip():
@@ -328,7 +281,7 @@ if img_obj is not None:
             if report_subtitle.strip():
                 st.caption(report_subtitle)
         with c2:
-            st.image(img_obj, width=header_img_width)
+            st.image(img_obj, width=120)
 else:
     st.markdown(f"## {report_title}")
     if report_subtitle.strip():
@@ -339,6 +292,7 @@ else:
 # -----------------------------
 mode = st.radio("Choose output type", ["Match Charts", "Pizza Chart", "Shot Detail Card"])
 uploaded = st.file_uploader("Upload your file", type=["csv", "xlsx", "xls"])
+
 
 # -----------------------------
 # Main
@@ -395,9 +349,9 @@ if uploaded:
                 png_path = os.path.join(out_dir, "pizza.png")
                 pdf_path = os.path.join(out_dir, "pizza.pdf")
 
-                fig.savefig(png_path, dpi=220, bbox_inches="tight")
+                fig.savefig(png_path, dpi=220, bbox_inches="tight", pad_inches=0.25)
                 with PdfPages(pdf_path) as pdf:
-                    pdf.savefig(fig, bbox_inches="tight")
+                    pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
 
                 st.pyplot(fig)
                 with open(pdf_path, "rb") as f2:
@@ -416,7 +370,6 @@ if uploaded:
         if "outcome" not in df_raw.columns:
             st.warning("Column `outcome` not found. Trying to derive it automatically (e.g., from `event`/`result`).")
 
-        # ✅ FIX: create outcome if missing + normalize values + normalize pass accurate/inaccurate
         df_raw = ensure_outcome_column(df_raw)
         df_raw = normalize_outcome_values(df_raw)
         df_raw = normalize_pass_outcomes(df_raw)
@@ -484,9 +437,9 @@ if uploaded:
                 png_path = os.path.join(out_dir, "shot_card.png")
                 pdf_path = os.path.join(out_dir, "shot_card.pdf")
 
-                fig.savefig(png_path, dpi=220, bbox_inches="tight")
+                fig.savefig(png_path, dpi=220, bbox_inches="tight", pad_inches=0.25)
                 with PdfPages(pdf_path) as pdf:
-                    pdf.savefig(fig, bbox_inches="tight")
+                    pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
 
                 st.pyplot(fig)
                 with open(png_path, "rb") as f2:
@@ -499,15 +452,20 @@ if uploaded:
         if st.button("Generate Report"):
             out_dir = os.path.join(tmp, "output")
 
-            # Put subtitle inside title text for PDF (safe without changing charts.py)
-            pdf_title = report_title.strip()
-            if report_subtitle.strip():
-                pdf_title = f"{pdf_title}\n{report_subtitle.strip()}"
-
             pdf_path, png_paths = build_report_from_prepared_df(
                 df2,
                 out_dir=out_dir,
-                title=pdf_title,
+                title=report_title,
+                subtitle=report_subtitle,
+                header_image=img_obj,
+                header_img_side=header_img_side.lower(),
+                header_img_width_frac=header_img_width_frac,
+                title_align=title_align.lower(),
+                subtitle_align=subtitle_align.lower(),
+                title_fontsize=title_fontsize,
+                subtitle_fontsize=subtitle_fontsize,
+                title_color=title_color,
+                subtitle_color=subtitle_color,
                 theme_name=theme_name,
                 pitch_mode=pitch_mode,
                 pitch_width=pitch_width,
