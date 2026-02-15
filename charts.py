@@ -1,3 +1,5 @@
+# charts.py (FULL UPDATED) — Header image + Subtitle inside PDF report
+# =========================================================
 import os
 import re
 import math
@@ -288,11 +290,9 @@ MODEL_FEATURE_COLS = [
 def build_model_features(df_prepared: pd.DataFrame, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
     shots = df_prepared[df_prepared["event_type"] == "shot"].copy()
 
-    # base
     shots["x"] = pd.to_numeric(shots.get("x"), errors="coerce").fillna(0.0)
     shots["y"] = pd.to_numeric(shots.get("y"), errors="coerce").fillna(0.0)
 
-    # shot_distance
     if "shot_distance" in shots.columns:
         shots["shot_distance"] = pd.to_numeric(shots["shot_distance"], errors="coerce").fillna(0.0)
     else:
@@ -301,7 +301,6 @@ def build_model_features(df_prepared: pd.DataFrame, pitch_mode="rect", pitch_wid
             axis=1
         )
 
-    # period -> one-hot (optional)
     if "period" in shots.columns:
         p = shots["period"].astype(str).str.lower()
         shots["period_FirstHalf"] = p.isin(["1", "firsthalf", "first half", "fh", "1st"]).astype(int)
@@ -310,7 +309,6 @@ def build_model_features(df_prepared: pd.DataFrame, pitch_mode="rect", pitch_wid
         shots["period_FirstHalf"] = 0
         shots["period_SecondHalf"] = 0
 
-    # zones (optional). If you already have Zone_* keep them; else infer from x/y.
     for z in ["Zone_Back", "Zone_Center", "Zone_Left", "Zone_Right"]:
         if z in shots.columns:
             shots[z] = pd.to_numeric(shots[z], errors="coerce").fillna(0).astype(int)
@@ -325,7 +323,6 @@ def build_model_features(df_prepared: pd.DataFrame, pitch_mode="rect", pitch_wid
         shots["Zone_Right"] = (shots["y"] > right_thr).astype(int)
         shots["Zone_Center"] = ((shots["y"] >= left_thr) & (shots["y"] <= right_thr)).astype(int)
 
-    # flags (if missing -> 0)
     flag_cols = [
         "Assisted", "IndividualPlay", "RegularPlay",
         "LeftFoot", "RightFoot",
@@ -340,7 +337,6 @@ def build_model_features(df_prepared: pd.DataFrame, pitch_mode="rect", pitch_wid
         else:
             shots[c] = 0
 
-    # ensure exact columns & order
     for c in MODEL_FEATURE_COLS:
         if c not in shots.columns:
             shots[c] = 0
@@ -364,7 +360,6 @@ def estimate_xg_model(df: pd.DataFrame, model_pipe=None, pitch_mode="rect", pitc
         model = model_pipe
         feature_cols = None
 
-        # support "bundle dict" (optional)
         if isinstance(model_pipe, dict) and "model" in model_pipe:
             model = model_pipe["model"]
             feature_cols = model_pipe.get("feature_cols")
@@ -384,7 +379,6 @@ def estimate_xg_model(df: pd.DataFrame, model_pipe=None, pitch_mode="rect", pitc
         df.loc[mask, "xg_model"] = np.round(preds, 3).tolist()
         return df
     except Exception:
-        # model failed -> keep NA and let fallback happen
         return df
 
 # ----------------------------
@@ -456,7 +450,6 @@ def prepare_df_for_charts(
     df = estimate_xg_zone(df, pitch_mode=pitch_mode, pitch_width=pitch_width)
     df = estimate_xg_model(df, model_pipe=model_pipe, pitch_mode=pitch_mode, pitch_width=pitch_width)
 
-    # choose final xg with fallback
     df["xg"] = pd.to_numeric(df["xg_zone"], errors="coerce")
     df["xg_source"] = "zone"
 
@@ -472,7 +465,7 @@ def prepare_df_for_charts(
     return df
 
 # ----------------------------
-# Chart helpers (theme)
+# Theme helpers
 # ----------------------------
 def _apply_fig_theme(fig, ax, theme):
     fig.patch.set_facecolor(theme["bg"])
@@ -483,9 +476,74 @@ def _draw_pitch(ax, pitch, theme):
     ax.set_facecolor(theme["pitch"])
 
 # ----------------------------
+# NEW: Header drawer (Title + Subtitle + Image)
+# ----------------------------
+def add_report_header(
+    fig,
+    title: str = "",
+    subtitle: str = "",
+    header_image=None,           # PIL image OR numpy array OR None
+    img_side: str = "left",      # "left" or "right"
+    img_width_frac: float = 0.10,  # fraction of fig width
+    theme_name: str = "The Athletic Dark",
+):
+    """
+    Draw a consistent header on top of any matplotlib figure:
+    - Optional image (logo/player face)
+    - Title
+    - Subtitle
+    Safe if header_image is None.
+    """
+    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+
+    title = (title or "").strip()
+    subtitle = (subtitle or "").strip()
+
+    # Reserve space at top
+    fig.subplots_adjust(top=0.86)
+
+    # Header texts (center aligned)
+    if title:
+        fig.text(0.5, 0.965, title, ha="center", va="top",
+                 color=theme["text"], fontsize=16, weight="bold")
+    if subtitle:
+        fig.text(0.5, 0.935, subtitle, ha="center", va="top",
+                 color=theme["muted"], fontsize=11)
+
+    # Optional image
+    if header_image is None:
+        return
+
+    try:
+        img = header_image
+        if hasattr(img, "convert"):  # PIL.Image
+            img = img.convert("RGBA")
+            img_arr = np.asarray(img)
+        else:
+            img_arr = np.asarray(img)
+
+        img_side = (img_side or "left").strip().lower()
+        img_w = float(max(0.05, min(0.18, img_width_frac)))
+        img_h = img_w  # square
+        y0 = 0.905
+
+        if img_side == "right":
+            x0 = 0.98 - img_w
+        else:
+            x0 = 0.02
+
+        ax_img = fig.add_axes([x0, y0, img_w, img_h])
+        ax_img.imshow(img_arr)
+        ax_img.axis("off")
+        ax_img.set_facecolor("none")
+    except Exception:
+        # If image fails, ignore silently (don't break report)
+        return
+
+# ----------------------------
 # Charts
 # ----------------------------
-def outcome_bar(df: pd.DataFrame, title: str = "", bar_colors: dict | None = None, theme_name="The Athletic Dark"):
+def outcome_bar(df: pd.DataFrame, bar_colors: dict | None = None, theme_name="The Athletic Dark"):
     bar_colors = bar_colors or {}
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
 
@@ -496,7 +554,7 @@ def outcome_bar(df: pd.DataFrame, title: str = "", bar_colors: dict | None = Non
 
     colors = [bar_colors.get(k, None) for k in counts.index.astype(str)]
     ax.bar(counts.index.astype(str), counts.values, color=colors)
-    ax.set_title((title + "\nOutcome Distribution").strip(), color=theme["text"])
+    ax.set_title("Outcome Distribution", color=theme["text"])
     ax.set_ylabel("Count", color=theme["muted"])
     ax.tick_params(axis="x", rotation=25, colors=theme["muted"])
     ax.tick_params(axis="y", colors=theme["muted"])
@@ -504,25 +562,24 @@ def outcome_bar(df: pd.DataFrame, title: str = "", bar_colors: dict | None = Non
         spine.set_color(theme["lines"])
     return fig
 
-def start_location_heatmap(df: pd.DataFrame, title: str = "", pitch_mode="rect", pitch_width=64.0, theme_name="The Athletic Dark"):
+def start_location_heatmap(df: pd.DataFrame, pitch_mode="rect", pitch_width=64.0, theme_name="The Athletic Dark"):
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
     pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width)
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
 
-    # KDE can fail if too few points; fallback to scatter
     try:
         pitch.kdeplot(df["x"], df["y"], ax=ax, fill=True, levels=50, alpha=0.7)
     except Exception:
         pitch.scatter(df["x"], df["y"], ax=ax, s=25, alpha=0.6)
 
-    ax.set_title((title + "\nStart Locations Heatmap").strip(), color=theme["text"])
+    ax.set_title("Start Locations Heatmap", color=theme["text"])
     ax.set_xlim(-2, 102)
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
     return fig
 
-def pass_map(df: pd.DataFrame, title: str = "", pass_colors: dict | None = None,
+def pass_map(df: pd.DataFrame, pass_colors: dict | None = None,
              pitch_mode="rect", pitch_width=64.0, theme_name="The Athletic Dark"):
     pass_colors = pass_colors or {}
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
@@ -545,12 +602,12 @@ def pass_map(df: pd.DataFrame, title: str = "", pass_colors: dict | None = None,
         pitch.arrows(dt["x"], dt["y"], dt["x2"], dt["y2"], ax=ax,
                      width=2, alpha=0.85, color=pass_colors.get(t, None))
 
-    ax.set_title((title + "\nPass Map").strip(), color=theme["text"])
+    ax.set_title("Pass Map", color=theme["text"])
     ax.set_xlim(-2, 102)
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
     return fig
 
-def shot_map(df: pd.DataFrame, title: str = "", shot_colors: dict | None = None,
+def shot_map(df: pd.DataFrame, shot_colors: dict | None = None,
              pitch_mode="rect", pitch_width=64.0, show_xg=False, theme_name="The Athletic Dark"):
     shot_colors = shot_colors or {}
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
@@ -576,18 +633,22 @@ def shot_map(df: pd.DataFrame, title: str = "", shot_colors: dict | None = None,
                     pass
 
     xg_src = str(df["xg_source"].iloc[0]) if ("xg_source" in df.columns and len(df)) else ""
-    ax.set_title((title + f"\nShot Map — xG: {xg_src}").strip(), color=theme["text"])
+    ax.set_title(f"Shot Map — xG: {xg_src}".strip(), color=theme["text"])
     ax.set_xlim(-2, 102)
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
     return fig
 
 # ----------------------------
-# Report builder (expects prepared df)
+# Report builder (expects prepared df) — UPDATED
 # ----------------------------
 def build_report_from_prepared_df(
     df_prepared: pd.DataFrame,
     out_dir: str,
     title: str = "Match Report",
+    subtitle: str = "",
+    header_image=None,                 # NEW
+    header_img_side: str = "left",      # NEW
+    header_img_width_frac: float = 0.10,# NEW
     theme_name: str = "The Athletic Dark",
     pitch_mode="rect",
     pitch_width=64.0,
@@ -602,14 +663,25 @@ def build_report_from_prepared_df(
 
     with PdfPages(pdf_path) as pdf:
         figs = [
-            ("outcome_bar", outcome_bar(df2, title=title, bar_colors=bar_colors, theme_name=theme_name)),
-            ("start_heatmap", start_location_heatmap(df2, title=title, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name)),
-            ("pass_map", pass_map(df2, title=title, pass_colors=pass_colors, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name)),
-            ("shot_map", shot_map(df2, title=title, shot_colors=shot_colors, pitch_mode=pitch_mode, pitch_width=pitch_width, show_xg=True, theme_name=theme_name)),
+            ("outcome_bar", outcome_bar(df2, bar_colors=bar_colors, theme_name=theme_name)),
+            ("start_heatmap", start_location_heatmap(df2, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name)),
+            ("pass_map", pass_map(df2, pass_colors=pass_colors, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name)),
+            ("shot_map", shot_map(df2, shot_colors=shot_colors, pitch_mode=pitch_mode, pitch_width=pitch_width, show_xg=True, theme_name=theme_name)),
         ]
 
         pngs = []
         for name, fig in figs:
+            # add header on every page
+            add_report_header(
+                fig,
+                title=title,
+                subtitle=subtitle,
+                header_image=header_image,
+                img_side=header_img_side,
+                img_width_frac=header_img_width_frac,
+                theme_name=theme_name,
+            )
+
             png_path = os.path.join(out_dir, f"{name}.png")
             fig.savefig(png_path, dpi=220, bbox_inches="tight")
             pdf.savefig(fig, bbox_inches="tight")
@@ -670,7 +742,6 @@ def shot_detail_card(
     ax_pitch = fig.add_subplot(gs[1, 0])
     ax_info = fig.add_subplot(gs[:, 1])
 
-    # mini goal
     ax_goal.set_facecolor(theme["panel"])
     ax_goal.set_xlim(0, 100)
     ax_goal.set_ylim(0, 30)
@@ -680,7 +751,6 @@ def shot_detail_card(
     ax_goal.plot([75, 75], [5, 22], lw=2, color=theme["goal"])
     ax_goal.plot([25, 75], [22, 22], lw=2, color=theme["goal"])
 
-    # pitch
     pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width)
     pitch.draw(ax=ax_pitch)
     ax_pitch.set_facecolor(theme["pitch"])
@@ -693,7 +763,6 @@ def shot_detail_card(
     ax_pitch.text(x + 1.2, y + 1.2, f"xG {xg_txt}",
                   color="white", fontsize=12, weight="bold", zorder=10)
 
-    # end line
     has_end = ("x2" in shots.columns and "y2" in shots.columns and pd.notna(r.get("x2")) and pd.notna(r.get("y2")))
     y_low, y_high = _goal_mouth_bounds(pitch_mode, pitch_width)
 
@@ -714,7 +783,6 @@ def shot_detail_card(
         gy = (pitch_width / 2.0) if pitch_mode == "rect" else 50.0
         ax_pitch.plot([x, 100], [y, gy], linestyle=":", linewidth=3, color="white", alpha=0.6, zorder=4)
 
-    # info panel
     ax_info.set_facecolor(theme["panel"])
     ax_info.axis("off")
 
