@@ -16,6 +16,8 @@ from charts import (
     pizza_chart,
     shot_detail_card,
     THEMES,
+    CHART_REQUIREMENTS,
+    prepare_generic_xy_df,      # ✅ NEW
 )
 
 st.set_page_config(page_title="Football Charts Generator", layout="wide")
@@ -173,6 +175,29 @@ def build_pizza_df(players_df: pd.DataFrame, player_col: str, player_name: str, 
     return pd.DataFrame(out)
 
 
+def _missing_cols(df: pd.DataFrame, required: list[str]) -> list[str]:
+    cols = set([c.strip() for c in df.columns])
+    return [c for c in required if c not in cols]
+
+
+def _requirements_box(chart_name: str):
+    req = CHART_REQUIREMENTS.get(chart_name, {})
+    required = req.get("required", [])
+    optional = req.get("optional", [])
+    notes = req.get("notes", "")
+
+    st.markdown(
+        f"""
+<div style="padding:10px;border:1px solid rgba(255,255,255,0.12);border-radius:10px;background:rgba(255,255,255,0.03);">
+<b>Required columns</b>: <code>{", ".join(required) if required else "—"}</code><br/>
+<b>Optional columns</b>: <code>{", ".join(optional) if optional else "—"}</code><br/>
+<span style="color:#A0A7B4">{notes}</span>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 # -----------------------------
 # Settings
 # -----------------------------
@@ -264,7 +289,6 @@ if header_img is not None:
     except Exception:
         img_obj = None
 
-# Nice preview row
 if img_obj is not None:
     if header_img_side == "Left":
         c1, c2 = st.columns([1, 8], vertical_alignment="center")
@@ -361,11 +385,13 @@ if uploaded:
             st.stop()
 
         # ---------- Match / Shot Card ----------
-        df_raw = load_data(path)
+        df_raw_original = load_data(path)
 
         with st.expander("Raw file preview (first 25 rows)", expanded=False):
-            st.write("Columns:", list(df_raw.columns))
-            st.dataframe(df_raw.head(25), use_container_width=True)
+            st.write("Columns:", list(df_raw_original.columns))
+            st.dataframe(df_raw_original.head(25), use_container_width=True)
+
+        df_raw = df_raw_original.copy()
 
         if "outcome" not in df_raw.columns:
             st.warning("Column `outcome` not found. Trying to derive it automatically (e.g., from `event`/`result`).")
@@ -405,6 +431,15 @@ if uploaded:
         with st.expander("Preview prepared data (first 25 rows)"):
             st.write("Prepared columns:", list(df2.columns))
             st.dataframe(df2.head(25), use_container_width=True)
+
+        # ✅ Prepare a generic XY dataframe for Ball Regains Map from ORIGINAL data
+        regains_df = prepare_generic_xy_df(
+            df_raw_original,
+            attack_direction=attack_dir,
+            flip_y=flip_y,
+            pitch_mode=pitch_mode,
+            pitch_width=pitch_width,
+        )
 
         # ---------- Shot Detail Card ----------
         if mode == "Shot Detail Card":
@@ -448,12 +483,37 @@ if uploaded:
                     st.download_button("⬇️ Download shot_card.pdf", f2, file_name="shot_card.pdf")
             st.stop()
 
+        # ---------- Match Charts ----------
+        st.markdown("### ✅ Select charts to include in the report")
+        available_charts = ["Outcome Bar", "Start Heatmap", "Pass Map", "Shot Map", "Ball Regains Map"]
+        selected_charts = st.multiselect(
+            "Charts",
+            available_charts,
+            default=["Outcome Bar", "Start Heatmap", "Pass Map", "Shot Map"],
+        )
+
+        st.markdown("### Required columns per chart")
+        for ch in selected_charts:
+            st.markdown(f"#### {ch}")
+            _requirements_box(ch)
+
+            # check missing columns on the right dataframe
+            if ch == "Ball Regains Map":
+                miss = _missing_cols(regains_df, CHART_REQUIREMENTS[ch]["required"])
+            else:
+                miss = _missing_cols(df2, CHART_REQUIREMENTS[ch]["required"])
+
+            if miss:
+                st.warning(f"Missing required columns for **{ch}**: {miss}")
+
         # ---------- Report ----------
         if st.button("Generate Report"):
             out_dir = os.path.join(tmp, "output")
 
             pdf_path, png_paths = build_report_from_prepared_df(
                 df2,
+                regains_df=regains_df,     # ✅ NEW
+                charts_to_render=selected_charts,  # ✅ NEW
                 out_dir=out_dir,
                 title=report_title,
                 subtitle=report_subtitle,
