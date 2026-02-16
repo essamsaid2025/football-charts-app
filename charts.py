@@ -517,9 +517,16 @@ def outcome_bar(df: pd.DataFrame, bar_colors: dict | None = None, theme_name="Th
 
     fig, ax = plt.subplots(figsize=(8, 4))
     _apply_fig_theme(fig, ax, theme)
+    labels = counts.index.astype(str).tolist()
 
-    colors = [bar_colors.get(k, None) for k in counts.index.astype(str)]
-    ax.bar(counts.index.astype(str), counts.values, color=colors)
+# fallback لون افتراضي لو الـ outcome مش موجود في bar_colors
+fallback = theme.get("muted", "#A0A7B4")
+colors = [bar_colors.get(k, fallback) for k in labels]
+
+ax.bar(labels, counts.values, color=colors)
+
+
+    
     ax.set_title("Outcome Distribution", color=theme["text"])
     ax.set_ylabel("Count", color=theme["muted"])
     ax.tick_params(axis="x", rotation=25, colors=theme["muted"])
