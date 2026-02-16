@@ -1,11 +1,14 @@
 import os
 import re
 import math
+from typing import Optional, Dict, List, Any
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.gridspec as gridspec
+
 from mplsoccer import Pitch, PyPizza
 
 PASS_ORDER = ["unsuccessful", "successful", "key pass", "assist"]
@@ -44,21 +47,10 @@ THEMES = {
         "goal": "#444444",
         "pitch_lines": "#FFFFFF",
     },
-
-    # ✅ ADDED THEME ONLY (no other changes)
-    "Box Entry": {
-        "bg": "#E6E6E6",         # grey background like the screenshot
-        "panel": "#0B0B0B",      # black panels
-        "pitch": "#0A0A0A",      # very dark pitch
-        "text": "#FFFFFF",
-        "muted": "#C9CDD3",
-        "lines": "#2A2A2A",
-        "goal": "#EDEDED",
-        "pitch_lines": "#EDEDED",
-    },
 }
 
-def _norm_outcome(s: str) -> str:
+
+def _norm_outcome(s: Any) -> str:
     if s is None or (isinstance(s, float) and pd.isna(s)):
         return ""
     s = str(s).strip().lower()
@@ -98,6 +90,7 @@ def _norm_outcome(s: str) -> str:
     }
     return aliases.get(s, s)
 
+
 def load_data(path: str) -> pd.DataFrame:
     ext = os.path.splitext(path)[1].lower()
     if ext == ".csv":
@@ -107,29 +100,32 @@ def load_data(path: str) -> pd.DataFrame:
                 return pd.read_csv(path, encoding=enc)
             except Exception:
                 pass
-        return pd.read_csv(path, encoding="latin1", encoding_errors="replace")
+        # بعض نسخ pandas القديمة ما فيها encoding_errors
+        try:
+            return pd.read_csv(path, encoding="latin1", encoding_errors="replace")
+        except TypeError:
+            return pd.read_csv(path, encoding="latin1")
     if ext in [".xlsx", ".xls"]:
         return pd.read_excel(path)
     raise ValueError("Unsupported file type. Use CSV or Excel.")
+
 
 def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [c.strip() for c in df.columns]
     cols_lower_map = {c.lower(): c for c in df.columns}
 
-    # outcome required
     if "outcome" not in cols_lower_map:
         raise ValueError("Missing column: outcome (required).")
     df.rename(columns={cols_lower_map["outcome"]: "outcome"}, inplace=True)
 
-    # x/y
     for want in ["x", "y", "x2", "y2"]:
         if want in cols_lower_map:
             df.rename(columns={cols_lower_map[want]: want}, inplace=True)
 
     missing = [c for c in REQUIRED if c not in df.columns]
     if missing:
-        raise ValueError(f"Missing columns: {missing}. Required: {REQUIRED}")
+        raise ValueError("Missing columns: %s. Required: %s" % (missing, REQUIRED))
 
     for c in ["x", "y", "x2", "y2"]:
         if c in df.columns:
@@ -138,16 +134,12 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df["outcome"] = df["outcome"].apply(_norm_outcome)
     df = df.dropna(subset=["x", "y"]).copy()
 
-    # event_type logic:
-    # - if event_type exists: use it (pass/shot/touch/...)
-    # - else infer: shots if outcome in SHOT_TYPES else pass (default)
     if "event_type" in df.columns:
         df["event_type"] = df["event_type"].astype(str).str.strip().str.lower()
     else:
         df["event_type"] = "pass"
         df.loc[df["outcome"].isin(SHOT_TYPES), "event_type"] = "shot"
 
-    # keep pass+shot outcomes clean (touch stays as touch events)
     df_pass = df[df["event_type"] == "pass"].copy()
     df_shot = df[df["event_type"] == "shot"].copy()
     df_touch = df[df["outcome"] == "touch"].copy()
@@ -157,41 +149,52 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     if not df_shot.empty:
         df_shot = df_shot[df_shot["outcome"].isin(SHOT_ORDER)]
 
-    # if touch exists, keep it; else keep all events already handled
     out = pd.concat([df_pass, df_shot, df_touch], ignore_index=True)
-
-    # if nothing matched (edge cases), fallback to original filtered x,y
     if out.empty:
         out = df.copy()
 
     return out
 
-def apply_pitch_transforms(df: pd.DataFrame, attack_direction="ltr", flip_y=False, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
+
+def apply_pitch_transforms(
+    df: pd.DataFrame,
+    attack_direction: str = "ltr",
+    flip_y: bool = False,
+    pitch_mode: str = "rect",
+    pitch_width: float = 64.0
+) -> pd.DataFrame:
     df = df.copy()
+
     if flip_y:
         for c in ["y", "y2"]:
             if c in df.columns:
                 df[c] = 100 - df[c]
+
     if attack_direction == "rtl":
         for c in ["x", "x2"]:
             if c in df.columns:
                 df[c] = 100 - df[c]
+
     if pitch_mode == "rect":
         scale = pitch_width / 100.0
         for c in ["y", "y2"]:
             if c in df.columns:
                 df[c] = df[c] * scale
+
     return df
 
-def make_pitch(pitch_mode="rect", pitch_width=64.0):
+
+def make_pitch(pitch_mode: str = "rect", pitch_width: float = 64.0) -> Pitch:
     if pitch_mode == "square":
         return Pitch(pitch_type="custom", pitch_length=100, pitch_width=100, line_zorder=2)
     return Pitch(pitch_type="custom", pitch_length=100, pitch_width=pitch_width, line_zorder=2)
 
-def _goal_mouth_bounds(pitch_mode="rect", pitch_width=64.0):
+
+def _goal_mouth_bounds(pitch_mode: str = "rect", pitch_width: float = 64.0):
     gy = (pitch_width / 2.0) if pitch_mode == "rect" else 50.0
     goal_mouth = (pitch_width * 0.10765) if pitch_mode == "rect" else (100.0 * 0.10765)
     return gy - goal_mouth / 2.0, gy + goal_mouth / 2.0
+
 
 def _shot_angle_radians(x: float, y: float, pitch_mode: str, pitch_width: float) -> float:
     goal_x = 100.0
@@ -199,6 +202,7 @@ def _shot_angle_radians(x: float, y: float, pitch_mode: str, pitch_width: float)
     goal_mouth = (pitch_width * 0.10765) if pitch_mode == "rect" else (100.0 * 0.10765)
     left_post_y = goal_y - goal_mouth / 2.0
     right_post_y = goal_y + goal_mouth / 2.0
+
     a = math.atan2(right_post_y - y, goal_x - x)
     b = math.atan2(left_post_y - y, goal_x - x)
     angle = abs(a - b)
@@ -206,19 +210,24 @@ def _shot_angle_radians(x: float, y: float, pitch_mode: str, pitch_width: float)
         angle = 2 * math.pi - angle
     return float(angle)
 
-def _meters_distance_approx(x, y, pitch_mode="rect", pitch_width=64.0) -> float:
+
+def _meters_distance_approx(x: float, y: float, pitch_mode: str = "rect", pitch_width: float = 64.0) -> float:
     length_m = 105.0
     width_m = 68.0 if pitch_mode == "rect" else 105.0
     y_max = pitch_width if pitch_mode == "rect" else 100.0
+
     xm = (x / 100.0) * length_m
     ym = (y / y_max) * width_m
+
     goal_xm = length_m
     goal_ym = width_m / 2.0
+
     dx = goal_xm - xm
     dy = goal_ym - ym
     return float(math.sqrt(dx * dx + dy * dy))
 
-def zone_based_xg(x, y, pitch_mode="rect", pitch_width=64.0):
+
+def zone_based_xg(x: float, y: float, pitch_mode: str = "rect", pitch_width: float = 64.0) -> float:
     angle = _shot_angle_radians(float(x), float(y), pitch_mode, pitch_width)
     dist_m = _meters_distance_approx(float(x), float(y), pitch_mode, pitch_width)
 
@@ -250,7 +259,8 @@ def zone_based_xg(x, y, pitch_mode="rect", pitch_width=64.0):
     xg = table.get((d_bin, a_bin), 0.02)
     return float(max(0.01, min(0.85, xg)))
 
-def estimate_xg_zone(df: pd.DataFrame, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
+
+def estimate_xg_zone(df: pd.DataFrame, pitch_mode: str = "rect", pitch_width: float = 64.0) -> pd.DataFrame:
     df = df.copy()
     df["xg_zone"] = pd.NA
     mask = df["event_type"] == "shot"
@@ -260,6 +270,7 @@ def estimate_xg_zone(df: pd.DataFrame, pitch_mode="rect", pitch_width=64.0) -> p
             for x, y in zip(df.loc[mask, "x"], df.loc[mask, "y"])
         ]
     return df
+
 
 MODEL_FEATURE_COLS = [
     "x", "y",
@@ -274,8 +285,10 @@ MODEL_FEATURE_COLS = [
     "Zone_Back", "Zone_Center", "Zone_Left", "Zone_Right",
 ]
 
-def build_model_features(df_prepared: pd.DataFrame, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
+
+def build_model_features(df_prepared: pd.DataFrame, pitch_mode: str = "rect", pitch_width: float = 64.0) -> pd.DataFrame:
     shots = df_prepared[df_prepared["event_type"] == "shot"].copy()
+
     shots["x"] = pd.to_numeric(shots.get("x"), errors="coerce").fillna(0.0)
     shots["y"] = pd.to_numeric(shots.get("y"), errors="coerce").fillna(0.0)
 
@@ -328,9 +341,16 @@ def build_model_features(df_prepared: pd.DataFrame, pitch_mode="rect", pitch_wid
 
     return shots[MODEL_FEATURE_COLS].copy()
 
-def estimate_xg_model(df: pd.DataFrame, model_pipe=None, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
+
+def estimate_xg_model(
+    df: pd.DataFrame,
+    model_pipe: Any = None,
+    pitch_mode: str = "rect",
+    pitch_width: float = 64.0
+) -> pd.DataFrame:
     df = df.copy()
     df["xg_model"] = pd.NA
+
     if model_pipe is None:
         return df
 
@@ -364,7 +384,8 @@ def estimate_xg_model(df: pd.DataFrame, model_pipe=None, pitch_mode="rect", pitc
     except Exception:
         return df
 
-def fix_shot_end_location(df: pd.DataFrame, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
+
+def fix_shot_end_location(df: pd.DataFrame, pitch_mode: str = "rect", pitch_width: float = 64.0) -> pd.DataFrame:
     df = df.copy()
     if "x2" not in df.columns:
         df["x2"] = pd.NA
@@ -411,14 +432,15 @@ def fix_shot_end_location(df: pd.DataFrame, pitch_mode="rect", pitch_width=64.0)
 
     return df
 
+
 def prepare_df_for_charts(
     df_raw: pd.DataFrame,
-    attack_direction="ltr",
-    flip_y=False,
-    pitch_mode="rect",
-    pitch_width=64.0,
+    attack_direction: str = "ltr",
+    flip_y: bool = False,
+    pitch_mode: str = "rect",
+    pitch_width: float = 64.0,
     xg_method: str = "zone",
-    model_pipe=None,
+    model_pipe: Any = None,
 ) -> pd.DataFrame:
     df = validate_and_clean(df_raw)
     df = apply_pitch_transforms(df, attack_direction, flip_y, pitch_mode, pitch_width)
@@ -441,17 +463,17 @@ def prepare_df_for_charts(
 
     return df
 
-def _apply_fig_theme(fig, ax, theme):
+
+def _apply_fig_theme(fig, ax, theme: dict):
     fig.patch.set_facecolor(theme["bg"])
     ax.set_facecolor(theme["panel"])
 
-def _draw_pitch(ax, pitch, theme):
+
+def _draw_pitch(ax, pitch: Pitch, theme: dict):
     pitch.draw(ax=ax)
     ax.set_facecolor(theme["pitch"])
 
-# ----------------------------
-# Header drawer
-# ----------------------------
+
 def add_report_header(
     fig,
     title: str = "",
@@ -464,11 +486,10 @@ def add_report_header(
     subtitle_align: str = "center",
     title_fontsize: int = 16,
     subtitle_fontsize: int = 11,
-    title_color: str | None = None,
-    subtitle_color: str | None = None,
+    title_color: Optional[str] = None,
+    subtitle_color: Optional[str] = None,
 ):
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
-
     title_color = title_color or theme["text"]
     subtitle_color = subtitle_color or theme["muted"]
 
@@ -519,14 +540,12 @@ def add_report_header(
     except Exception:
         return
 
-# ----------------------------
-# Charts
-# ----------------------------
-def outcome_bar(df: pd.DataFrame, bar_colors: dict | None = None, theme_name="The Athletic Dark"):
+
+def outcome_bar(df: pd.DataFrame, bar_colors: Optional[dict] = None, theme_name: str = "The Athletic Dark"):
     bar_colors = bar_colors or {}
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
-    counts = df["outcome"].value_counts()
 
+    counts = df["outcome"].value_counts()
     fig, ax = plt.subplots(figsize=(8, 4))
     _apply_fig_theme(fig, ax, theme)
 
@@ -543,7 +562,8 @@ def outcome_bar(df: pd.DataFrame, bar_colors: dict | None = None, theme_name="Th
         spine.set_color(theme["lines"])
     return fig
 
-def start_location_heatmap(df: pd.DataFrame, pitch_mode="rect", pitch_width=64.0, theme_name="The Athletic Dark"):
+
+def start_location_heatmap(df: pd.DataFrame, pitch_mode: str = "rect", pitch_width: float = 64.0, theme_name: str = "The Athletic Dark"):
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
     pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width)
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
@@ -560,22 +580,18 @@ def start_location_heatmap(df: pd.DataFrame, pitch_mode="rect", pitch_width=64.0
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
     return fig
 
+
 def touch_map(
     df: pd.DataFrame,
-    pitch_mode="rect",
-    pitch_width=64.0,
-    theme_name="The Athletic Dark",
-    dot_color="#34D5FF",
-    edge_color="#0B0F14",
-    dot_size=220,
-    alpha=0.95,
-    marker="o",
+    pitch_mode: str = "rect",
+    pitch_width: float = 64.0,
+    theme_name: str = "The Athletic Dark",
+    dot_color: str = "#34D5FF",
+    edge_color: str = "#0B0F14",
+    dot_size: int = 220,
+    alpha: float = 0.95,
+    marker: str = "o",
 ):
-    """
-    Logic (as requested):
-    - If outcome == 'touch' exists in data -> use only those rows
-    - Else -> treat ALL rows as touches (use all events)
-    """
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
     pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width)
 
@@ -613,13 +629,14 @@ def touch_map(
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
     return fig
 
+
 def pass_map(
     df: pd.DataFrame,
-    pass_colors: dict | None = None,
-    pass_markers: dict | None = None,
-    pitch_mode="rect",
-    pitch_width=64.0,
-    theme_name="The Athletic Dark"
+    pass_colors: Optional[dict] = None,
+    pass_markers: Optional[dict] = None,
+    pitch_mode: str = "rect",
+    pitch_width: float = 64.0,
+    theme_name: str = "The Athletic Dark"
 ):
     pass_colors = pass_colors or {}
     pass_markers = pass_markers or {}
@@ -641,14 +658,12 @@ def pass_map(
         if len(dt) == 0:
             continue
 
-        # arrows
         pitch.arrows(
             dt["x"], dt["y"], dt["x2"], dt["y2"],
             ax=ax, width=2, alpha=0.85,
             color=pass_colors.get(t, None)
         )
 
-        # start marker (shape)
         mk = pass_markers.get(t, "o")
         pitch.scatter(
             dt["x"], dt["y"],
@@ -667,14 +682,15 @@ def pass_map(
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
     return fig
 
+
 def shot_map(
     df: pd.DataFrame,
-    shot_colors: dict | None = None,
-    shot_markers: dict | None = None,
-    pitch_mode="rect",
-    pitch_width=64.0,
-    show_xg=False,
-    theme_name="The Athletic Dark"
+    shot_colors: Optional[dict] = None,
+    shot_markers: Optional[dict] = None,
+    pitch_mode: str = "rect",
+    pitch_width: float = 64.0,
+    show_xg: bool = False,
+    theme_name: str = "The Athletic Dark"
 ):
     shot_colors = shot_colors or {}
     shot_markers = shot_markers or {}
@@ -713,14 +729,12 @@ def shot_map(
                     pass
 
     xg_src = str(df["xg_source"].iloc[0]) if ("xg_source" in df.columns and len(df)) else ""
-    ax.set_title(f"Shot Map — xG: {xg_src}".strip(), color=theme["text"])
+    ax.set_title(("Shot Map — xG: %s" % xg_src).strip(), color=theme["text"])
     ax.set_xlim(-2, 102)
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
     return fig
 
-# ----------------------------
-# Report builder
-# ----------------------------
+
 def build_report_from_prepared_df(
     df_prepared: pd.DataFrame,
     out_dir: str,
@@ -733,22 +747,22 @@ def build_report_from_prepared_df(
     subtitle_align: str = "center",
     title_fontsize: int = 16,
     subtitle_fontsize: int = 11,
-    title_color: str | None = None,
-    subtitle_color: str | None = None,
+    title_color: Optional[str] = None,
+    subtitle_color: Optional[str] = None,
     theme_name: str = "The Athletic Dark",
-    pitch_mode="rect",
-    pitch_width=64.0,
-    pass_colors: dict | None = None,
-    pass_markers: dict | None = None,
-    shot_colors: dict | None = None,
-    shot_markers: dict | None = None,
-    bar_colors: dict | None = None,
-    charts_to_include: list[str] | None = None,
-    touch_dot_color="#34D5FF",
-    touch_dot_edge="#0B0F14",
-    touch_dot_size=220,
-    touch_alpha=0.95,
-    touch_marker="o",
+    pitch_mode: str = "rect",
+    pitch_width: float = 64.0,
+    pass_colors: Optional[dict] = None,
+    pass_markers: Optional[dict] = None,
+    shot_colors: Optional[dict] = None,
+    shot_markers: Optional[dict] = None,
+    bar_colors: Optional[dict] = None,
+    charts_to_include: Optional[List[str]] = None,
+    touch_dot_color: str = "#34D5FF",
+    touch_dot_edge: str = "#0B0F14",
+    touch_dot_size: int = 220,
+    touch_alpha: float = 0.95,
+    touch_marker: str = "o",
 ):
     os.makedirs(out_dir, exist_ok=True)
     pdf_path = os.path.join(out_dir, "report.pdf")
@@ -817,7 +831,7 @@ def build_report_from_prepared_df(
                 subtitle_color=subtitle_color,
             )
 
-            png_path = os.path.join(out_dir, f"{name}.png")
+            png_path = os.path.join(out_dir, "%s.png" % name)
             fig.savefig(png_path, dpi=220, bbox_inches="tight", pad_inches=0.25)
             pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
             plt.close(fig)
@@ -825,17 +839,15 @@ def build_report_from_prepared_df(
 
     return pdf_path, pngs
 
-# ----------------------------
-# Shot Detail Card (UPDATED: markers)
-# ----------------------------
+
 def shot_detail_card(
     df_prepared: pd.DataFrame,
     shot_index: int,
     title: str = "Shot Detail",
-    pitch_mode="rect",
-    pitch_width=64.0,
-    shot_colors: dict | None = None,
-    shot_markers: dict | None = None,
+    pitch_mode: str = "rect",
+    pitch_width: float = 64.0,
+    shot_colors: Optional[dict] = None,
+    shot_markers: Optional[dict] = None,
     theme_name: str = "The Athletic Dark",
 ):
     shot_colors = shot_colors or {
@@ -857,7 +869,7 @@ def shot_detail_card(
 
     xg_txt = "NA"
     try:
-        xg_txt = f"{float(r.get('xg')):.2f}"
+        xg_txt = "%.2f" % float(r.get("xg"))
     except Exception:
         pass
 
@@ -898,8 +910,7 @@ def shot_detail_card(
     x, y = float(r["x"]), float(r["y"])
     pitch.scatter([x], [y], ax=ax_pitch, s=520, marker=mk, color=c, edgecolors="white", linewidth=2, zorder=5, clip_on=False)
     pitch.scatter([x], [y], ax=ax_pitch, s=190, marker=mk, color="white", alpha=0.25, zorder=6, clip_on=False)
-    ax_pitch.text(x + 1.2, y + 1.2, f"xG {xg_txt}",
-                  color="white", fontsize=12, weight="bold", zorder=10)
+    ax_pitch.text(x + 1.2, y + 1.2, "xG %s" % xg_txt, color="white", fontsize=12, weight="bold", zorder=10)
 
     has_end = ("x2" in shots.columns and "y2" in shots.columns and pd.notna(r.get("x2")) and pd.notna(r.get("y2")))
     y_low, y_high = _goal_mouth_bounds(pitch_mode, pitch_width)
@@ -909,7 +920,7 @@ def shot_detail_card(
         ax_pitch.plot([x, x2], [y, y2], linestyle=":", linewidth=3, color="white", alpha=0.9, zorder=4)
         pitch.scatter([x2], [y2], ax=ax_pitch, s=140, marker="o", color="white", alpha=0.9, zorder=6, clip_on=False)
 
-        def map_to_mini_goal(y_val):
+        def map_to_mini_goal(y_val: float) -> float:
             y_val = float(y_val)
             y_clamped = max(y_low, min(y_high, y_val))
             t = (y_clamped - y_low) / (y_high - y_low + 1e-9)
@@ -925,9 +936,8 @@ def shot_detail_card(
     ax_info.axis("off")
 
     ax_info.text(0.02, 0.94, title, color=theme["text"], fontsize=18, weight="bold", transform=ax_info.transAxes)
-
     if xg_src:
-        ax_info.text(0.02, 0.89, f"xG source: {xg_src}", color=theme["muted"], fontsize=12, transform=ax_info.transAxes)
+        ax_info.text(0.02, 0.89, "xG source: %s" % xg_src, color=theme["muted"], fontsize=12, transform=ax_info.transAxes)
 
     ax_info.text(0.02, 0.80, "xG", color=theme["muted"], fontsize=14, transform=ax_info.transAxes)
     ax_info.text(0.02, 0.72, xg_txt, color=theme["text"], fontsize=26, weight="bold", transform=ax_info.transAxes)
@@ -938,11 +948,14 @@ def shot_detail_card(
 
     return fig, shots
 
-# ----------------------------
-# Pizza chart
-# ----------------------------
-def pizza_chart(df_pizza: pd.DataFrame, title: str = "", subtitle: str = "",
-                slice_colors: list | None = None, show_values_legend: bool = True):
+
+def pizza_chart(
+    df_pizza: pd.DataFrame,
+    title: str = "",
+    subtitle: str = "",
+    slice_colors: Optional[List[str]] = None,
+    show_values_legend: bool = True
+):
     dfp = df_pizza.copy()
     dfp.columns = [c.strip().lower() for c in dfp.columns]
     required = {"metric", "value", "percentile"}
@@ -990,7 +1003,7 @@ def pizza_chart(df_pizza: pd.DataFrame, title: str = "", subtitle: str = "",
     fig.text(0.5, 0.955, subtitle, ha="center", va="top", color="white", fontsize=12)
 
     if show_values_legend:
-        lines = [f"{m}: {v}   (pct {p:.1f})" for m, v, p in zip(params, value_text, values)]
+        lines = ["%s: %s   (pct %.1f)" % (m, v, p) for m, v, p in zip(params, value_text, values)]
         fig.text(0.02, 0.02, "\n".join(lines), ha="left", va="bottom",
                  color="white", fontsize=10, family="monospace")
 
