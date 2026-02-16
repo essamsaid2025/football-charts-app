@@ -46,6 +46,35 @@ THEMES = {
     },
 }
 
+# ✅ NEW: Chart requirements for UI
+CHART_REQUIREMENTS = {
+    "Outcome Bar": {
+        "required": ["outcome"],
+        "optional": [],
+        "notes": "Counts outcomes (passes + shots)."
+    },
+    "Start Heatmap": {
+        "required": ["x", "y"],
+        "optional": [],
+        "notes": "Heatmap of all event start locations."
+    },
+    "Pass Map": {
+        "required": ["event_type", "x", "y", "x2", "y2", "outcome"],
+        "optional": [],
+        "notes": "Requires pass end location (x2,y2). Filters event_type == pass."
+    },
+    "Shot Map": {
+        "required": ["event_type", "x", "y", "outcome"],
+        "optional": ["xg", "xg_source"],
+        "notes": "Filters event_type == shot."
+    },
+    "Ball Regains Map": {
+        "required": ["x", "y"],
+        "optional": ["regain_type", "type", "event", "action", "is_counterpress", "time_sec"],
+        "notes": "Needs regain events rows OR a regain type column. If no type column, it will try to infer from text."
+    },
+}
+
 def _norm_outcome(s: str) -> str:
     if s is None or (isinstance(s, float) and pd.isna(s)):
         return ""
@@ -219,7 +248,6 @@ def estimate_xg_zone(df: pd.DataFrame, pitch_mode="rect", pitch_width=64.0) -> p
         ]
     return df
 
-# --- Model features section (as you had) ---
 MODEL_FEATURE_COLS = [
     "x", "y",
     "Assisted", "IndividualPlay", "RegularPlay",
@@ -409,7 +437,32 @@ def _draw_pitch(ax, pitch, theme):
     ax.set_facecolor(theme["pitch"])
 
 # ----------------------------
-# Header drawer (FIXED: no cropping + align + colors + sizes)
+# ✅ NEW: generic XY prep for regains/any events
+# ----------------------------
+def prepare_generic_xy_df(df_raw: pd.DataFrame, attack_direction="ltr", flip_y=False, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
+    d = df_raw.copy()
+    d.columns = [c.strip() for c in d.columns]
+    cols_lower = {c.lower().strip(): c for c in d.columns}
+
+    # map common names to x,y
+    for cand in ["x", "pos_x", "location_x", "start_x", "X"]:
+        if cand.lower() in cols_lower and "x" not in d.columns:
+            d.rename(columns={cols_lower[cand.lower()]: "x"}, inplace=True)
+    for cand in ["y", "pos_y", "location_y", "start_y", "Y"]:
+        if cand.lower() in cols_lower and "y" not in d.columns:
+            d.rename(columns={cols_lower[cand.lower()]: "y"}, inplace=True)
+
+    if "x" in d.columns:
+        d["x"] = pd.to_numeric(d["x"], errors="coerce")
+    if "y" in d.columns:
+        d["y"] = pd.to_numeric(d["y"], errors="coerce")
+
+    d = d.dropna(subset=[c for c in ["x", "y"] if c in d.columns]).copy()
+    d = apply_pitch_transforms(d, attack_direction=attack_direction, flip_y=flip_y, pitch_mode=pitch_mode, pitch_width=pitch_width)
+    return d
+
+# ----------------------------
+# Header drawer
 # ----------------------------
 def add_report_header(
     fig,
@@ -419,7 +472,7 @@ def add_report_header(
     img_side: str = "left",
     img_width_frac: float = 0.10,
     theme_name: str = "The Athletic Dark",
-    title_align: str = "center",       # "left" | "center" | "right"
+    title_align: str = "center",
     subtitle_align: str = "center",
     title_fontsize: int = 16,
     subtitle_fontsize: int = 11,
@@ -434,7 +487,6 @@ def add_report_header(
     title = (title or "").strip()
     subtitle = (subtitle or "").strip()
 
-    # Reserve header band
     fig.subplots_adjust(top=0.84)
 
     def _align_to_x_ha(align: str):
@@ -448,7 +500,6 @@ def add_report_header(
     tx, tha = _align_to_x_ha(title_align)
     sx, sha = _align_to_x_ha(subtitle_align)
 
-    # Title + Subtitle
     if title:
         fig.text(tx, 0.965, title, ha=tha, va="top",
                  color=title_color, fontsize=title_fontsize, weight="bold")
@@ -456,13 +507,12 @@ def add_report_header(
         fig.text(sx, 0.935, subtitle, ha=sha, va="top",
                  color=subtitle_color, fontsize=subtitle_fontsize)
 
-    # Image
     if header_image is None:
         return
 
     try:
         img = header_image
-        if hasattr(img, "convert"):  # PIL
+        if hasattr(img, "convert"):
             img = img.convert("RGBA")
             img_arr = np.asarray(img)
         else:
@@ -472,7 +522,6 @@ def add_report_header(
         w = float(max(0.05, min(0.20, img_width_frac)))
         h = w
         y0 = 0.895
-
         x0 = 0.02 if img_side != "right" else (0.98 - w)
 
         ax_img = fig.add_axes([x0, y0, w, h], zorder=50)
@@ -579,8 +628,138 @@ def shot_map(df: pd.DataFrame, shot_colors: dict | None = None,
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
     return fig
 
+
 # ----------------------------
-# Report builder — UPDATED with header styling controls
+# ✅ NEW: Ball Regains Map (Zones + markers + counterpress)
+# ----------------------------
+def _infer_regain_type_from_row(row: pd.Series) -> str:
+    for c in ["regain_type", "type", "event", "action", "event_type", "name"]:
+        if c in row.index:
+            v = str(row.get(c, "")).strip().lower()
+            if not v or v == "nan":
+                continue
+            if "tackle" in v:
+                return "tackle"
+            if "intercept" in v:
+                return "interception"
+            if "recover" in v or "ball recovery" in v:
+                return "recovery"
+    return "other"
+
+def _get_counterpress_count(df: pd.DataFrame) -> int | None:
+    if "is_counterpress" in df.columns:
+        try:
+            return int(pd.to_numeric(df["is_counterpress"], errors="coerce").fillna(0).astype(int).sum())
+        except Exception:
+            return None
+    return None
+
+def ball_regains_map(
+    df: pd.DataFrame,
+    pitch_mode="rect",
+    pitch_width=64.0,
+    theme_name="The Athletic Dark",
+    bins_x: int = 6,
+    bins_y: int = 4,
+    title: str = "Ball Regains Map",
+):
+    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width)
+
+    d = df.copy()
+    if "x" not in d.columns or "y" not in d.columns:
+        raise ValueError("Ball Regains Map requires columns: x, y")
+
+    d["x"] = pd.to_numeric(d["x"], errors="coerce")
+    d["y"] = pd.to_numeric(d["y"], errors="coerce")
+    d = d.dropna(subset=["x", "y"]).copy()
+
+    # infer regain type if no explicit column
+    if "regain_type" not in d.columns:
+        d["regain_type"] = d.apply(_infer_regain_type_from_row, axis=1)
+    else:
+        d["regain_type"] = d["regain_type"].astype(str).str.lower().str.strip()
+
+    # bins
+    x_edges = np.linspace(0, 100, bins_x + 1)
+    y_max = pitch_width if pitch_mode == "rect" else 100.0
+    y_edges = np.linspace(0, y_max, bins_y + 1)
+
+    d["bx"] = np.clip(np.digitize(d["x"], x_edges) - 1, 0, bins_x - 1)
+    d["by"] = np.clip(np.digitize(d["y"], y_edges) - 1, 0, bins_y - 1)
+
+    grid = np.zeros((bins_y, bins_x), dtype=float)
+    for (by, bx), g in d.groupby(["by", "bx"]):
+        grid[int(by), int(bx)] = len(g)
+
+    vmax = max(1.0, float(grid.max()))
+    norm = (grid / vmax)
+
+    # color blend: low -> dark blue, high -> red-ish (like the sample)
+    low_col = np.array([10, 32, 56]) / 255.0   # deep navy
+    high_col = np.array([190, 30, 45]) / 255.0 # red
+    mid_col  = np.array([170, 170, 170]) / 255.0
+
+    fig, ax = plt.subplots(figsize=(7.2, 9.2))
+    fig.patch.set_facecolor(theme["bg"])
+    _draw_pitch(ax, pitch, theme)
+
+    # draw rectangles
+    for iy in range(bins_y):
+        for ix in range(bins_x):
+            t = norm[iy, ix]
+            # blend with a mid tone to mimic gray zones too
+            col = (1 - t) * low_col + t * high_col
+            col = 0.75 * col + 0.25 * mid_col
+            x0, x1 = x_edges[ix], x_edges[ix + 1]
+            y0, y1 = y_edges[iy], y_edges[iy + 1]
+            ax.add_patch(
+                plt.Rectangle((x0, y0), x1 - x0, y1 - y0,
+                              facecolor=col, alpha=0.75,
+                              edgecolor="white", linewidth=1.8, zorder=1)
+            )
+
+    # markers by type
+    markers = {
+        "tackle": ("D", "white"),
+        "interception": ("v", "white"),
+        "recovery": ("s", "white"),
+        "other": ("o", "white"),
+    }
+
+    for k, (mk, ec) in markers.items():
+        sub = d[d["regain_type"] == k]
+        if sub.empty:
+            continue
+        pitch.scatter(sub["x"], sub["y"], ax=ax, s=65, marker=mk,
+                      facecolors="none", edgecolors=ec, linewidth=2.2, zorder=5)
+
+    # legend text on right
+    tackle_n = int((d["regain_type"] == "tackle").sum())
+    inter_n = int((d["regain_type"] == "interception").sum())
+    recov_n = int((d["regain_type"] == "recovery").sum())
+    cp = _get_counterpress_count(d)
+
+    ax.text(1.02, 0.78, f"Tackle  ♦  {tackle_n}", transform=ax.transAxes,
+            color=theme["text"], fontsize=12, ha="left", va="center")
+    ax.text(1.02, 0.70, f"Interception  ▼  {inter_n}", transform=ax.transAxes,
+            color=theme["text"], fontsize=12, ha="left", va="center")
+    ax.text(1.02, 0.62, f"Recovery  ■  {recov_n}", transform=ax.transAxes,
+            color=theme["text"], fontsize=12, ha="left", va="center")
+
+    if cp is not None:
+        ax.text(1.02, 0.54, f"Counterpress: {cp}", transform=ax.transAxes,
+                color=theme["text"], fontsize=12, ha="left", va="center")
+
+    ax.set_title(title, color=theme["text"], fontsize=18, weight="bold", pad=16)
+    ax.set_xlim(-2, 102)
+    ax.set_ylim(-2, y_max + 2)
+
+    return fig
+
+
+# ----------------------------
+# Report builder — UPDATED (charts_to_render + regains_df)
 # ----------------------------
 def build_report_from_prepared_df(
     df_prepared: pd.DataFrame,
@@ -602,21 +781,36 @@ def build_report_from_prepared_df(
     pass_colors: dict | None = None,
     shot_colors: dict | None = None,
     bar_colors: dict | None = None,
+    charts_to_render: list[str] | None = None,
+    regains_df: pd.DataFrame | None = None,
 ):
     os.makedirs(out_dir, exist_ok=True)
     pdf_path = os.path.join(out_dir, "report.pdf")
 
     df2 = df_prepared.copy()
+    charts_to_render = charts_to_render or ["Outcome Bar", "Start Heatmap", "Pass Map", "Shot Map"]
 
+    figs = []
+    if "Outcome Bar" in charts_to_render:
+        figs.append(("outcome_bar", outcome_bar(df2, bar_colors=bar_colors, theme_name=theme_name)))
+
+    if "Start Heatmap" in charts_to_render:
+        figs.append(("start_heatmap", start_location_heatmap(df2, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name)))
+
+    if "Pass Map" in charts_to_render:
+        figs.append(("pass_map", pass_map(df2, pass_colors=pass_colors, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name)))
+
+    if "Shot Map" in charts_to_render:
+        figs.append(("shot_map", shot_map(df2, shot_colors=shot_colors, pitch_mode=pitch_mode, pitch_width=pitch_width, show_xg=True, theme_name=theme_name)))
+
+    if "Ball Regains Map" in charts_to_render and regains_df is not None and not regains_df.empty:
+        try:
+            figs.append(("ball_regains_map", ball_regains_map(regains_df, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name)))
+        except Exception:
+            pass
+
+    pngs = []
     with PdfPages(pdf_path) as pdf:
-        figs = [
-            ("outcome_bar", outcome_bar(df2, bar_colors=bar_colors, theme_name=theme_name)),
-            ("start_heatmap", start_location_heatmap(df2, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name)),
-            ("pass_map", pass_map(df2, pass_colors=pass_colors, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name)),
-            ("shot_map", shot_map(df2, shot_colors=shot_colors, pitch_mode=pitch_mode, pitch_width=pitch_width, show_xg=True, theme_name=theme_name)),
-        ]
-
-        pngs = []
         for name, fig in figs:
             add_report_header(
                 fig,
@@ -641,6 +835,7 @@ def build_report_from_prepared_df(
             pngs.append(png_path)
 
     return pdf_path, pngs
+
 
 # ----------------------------
 # Shot Detail Card (unchanged from your version)
@@ -751,6 +946,7 @@ def shot_detail_card(
     ax_info.text(0.02, 0.47, display_outcome, color=theme["text"], fontsize=26, weight="bold", transform=ax_info.transAxes)
 
     return fig, shots
+
 
 # ----------------------------
 # Pizza chart (unchanged)
