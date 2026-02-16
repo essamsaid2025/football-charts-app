@@ -517,16 +517,12 @@ def outcome_bar(df: pd.DataFrame, bar_colors: dict | None = None, theme_name="Th
 
     fig, ax = plt.subplots(figsize=(8, 4))
     _apply_fig_theme(fig, ax, theme)
+
     labels = counts.index.astype(str).tolist()
+    fallback = theme.get("muted", "#A0A7B4")
+    colors = [bar_colors.get(k, fallback) for k in labels]
 
-# fallback لون افتراضي لو الـ outcome مش موجود في bar_colors
-fallback = theme.get("muted", "#A0A7B4")
-colors = [bar_colors.get(k, fallback) for k in labels]
-
-ax.bar(labels, counts.values, color=colors)
-
-
-    
+    ax.bar(labels, counts.values, color=colors)
     ax.set_title("Outcome Distribution", color=theme["text"])
     ax.set_ylabel("Count", color=theme["muted"])
     ax.tick_params(axis="x", rotation=25, colors=theme["muted"])
@@ -534,6 +530,7 @@ ax.bar(labels, counts.values, color=colors)
     for spine in ax.spines.values():
         spine.set_color(theme["lines"])
     return fig
+
 
 def start_location_heatmap(df: pd.DataFrame, pitch_mode="rect", pitch_width=64.0, theme_name="The Athletic Dark"):
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
