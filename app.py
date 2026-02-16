@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 
 from PIL import Image
-from matplotlib.backends.backend_pdf import PdfPages  # ✅ FIX
+from matplotlib.backends.backend_pdf import PdfPages
 
 from charts import (
     load_data,
@@ -16,8 +16,6 @@ from charts import (
     pizza_chart,
     shot_detail_card,
     THEMES,
-    CHART_REQUIREMENTS,
-    prepare_generic_xy_df,      # ✅ NEW
 )
 
 st.set_page_config(page_title="Football Charts Generator", layout="wide")
@@ -41,7 +39,6 @@ def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
         return df
 
     cols_lower = {c.lower().strip(): c for c in df.columns}
-
     candidates = [
         "event", "event_type", "type",
         "result", "shot_result", "outcome_type",
@@ -51,31 +48,6 @@ def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
         if c in cols_lower:
             df["outcome"] = df[cols_lower[c]]
             return df
-
-    def _has(col): return col in cols_lower
-
-    if _has("is_goal") or _has("goal"):
-        base = pd.Series([np.nan] * len(df))
-
-        if _has("is_goal"):
-            base = np.where(pd.to_numeric(df[cols_lower["is_goal"]], errors="coerce").fillna(0).astype(int) == 1, "goal", base)
-        if _has("goal"):
-            base = np.where(pd.to_numeric(df[cols_lower["goal"]], errors="coerce").fillna(0).astype(int) == 1, "goal", base)
-
-        df["outcome"] = base
-
-        if _has("is_ontarget"):
-            m = pd.to_numeric(df[cols_lower["is_ontarget"]], errors="coerce").fillna(0).astype(int) == 1
-            df.loc[m & df["outcome"].isna(), "outcome"] = "1ontarget"
-        if _has("is_offtarget"):
-            m = pd.to_numeric(df[cols_lower["is_offtarget"]], errors="coerce").fillna(0).astype(int) == 1
-            df.loc[m & df["outcome"].isna(), "outcome"] = "1offtarget"
-        if _has("is_blocked"):
-            m = pd.to_numeric(df[cols_lower["is_blocked"]], errors="coerce").fillna(0).astype(int) == 1
-            df.loc[m & df["outcome"].isna(), "outcome"] = "blocked"
-
-        df["outcome"] = df["outcome"].fillna("unknown")
-        return df
 
     df["outcome"] = "unknown"
     return df
@@ -128,6 +100,13 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
 
         "assist": "assist",
         "a": "assist",
+
+        # touch
+        "touch": "touch",
+        "ball touch": "touch",
+        "receive": "touch",
+        "reception": "touch",
+        "received": "touch",
     }
 
     out["outcome"] = s.map(lambda v: mapping.get(v, v))
@@ -170,33 +149,24 @@ def build_pizza_df(players_df: pd.DataFrame, player_col: str, player_name: str, 
     for m in metrics:
         val = pd.to_numeric(row.iloc[0][m], errors="coerce")
         pct = _percentile_rank(players_df[m], val)
-        out.append({"metric": m, "value": "" if pd.isna(val) else round(float(val), 2),
-                    "percentile": 0 if pd.isna(pct) else round(float(pct), 1)})
+        out.append({
+            "metric": m,
+            "value": "" if pd.isna(val) else round(float(val), 2),
+            "percentile": 0 if pd.isna(pct) else round(float(pct), 1)
+        })
     return pd.DataFrame(out)
 
 
-def _missing_cols(df: pd.DataFrame, required: list[str]) -> list[str]:
-    cols = set([c.strip() for c in df.columns])
-    return [c for c in required if c not in cols]
-
-
-def _requirements_box(chart_name: str):
-    req = CHART_REQUIREMENTS.get(chart_name, {})
-    required = req.get("required", [])
-    optional = req.get("optional", [])
-    notes = req.get("notes", "")
-
-    st.markdown(
-        f"""
-<div style="padding:10px;border:1px solid rgba(255,255,255,0.12);border-radius:10px;background:rgba(255,255,255,0.03);">
-<b>Required columns</b>: <code>{", ".join(required) if required else "—"}</code><br/>
-<b>Optional columns</b>: <code>{", ".join(optional) if optional else "—"}</code><br/>
-<span style="color:#A0A7B4">{notes}</span>
-</div>
-        """,
-        unsafe_allow_html=True,
-    )
-
+# -----------------------------
+# Chart requirements (shown in UI)
+# -----------------------------
+CHART_REQUIREMENTS = {
+    "Outcome Bar": ["outcome"],
+    "Start Heatmap": ["x", "y"],
+    "Touch Map (Scatter)": ["x", "y", "(optional) outcome='touch'"],
+    "Pass Map": ["outcome", "x", "y", "x2", "y2"],
+    "Shot Map": ["outcome", "x", "y", "(optional) x2,y2", "(optional) xg"],
+}
 
 # -----------------------------
 # Settings
@@ -250,6 +220,17 @@ with st.expander("🎛️ Settings", expanded=True):
     xg_method = "model" if xg_method_ui == "Model" else "zone"
     st.caption(f"Model exists: **{model_exists}**")
 
+    st.markdown("### Report charts to include")
+    all_charts = ["Outcome Bar", "Start Heatmap", "Touch Map (Scatter)", "Pass Map", "Shot Map"]
+    selected_charts = st.multiselect("Choose charts", all_charts, default=all_charts)
+
+    if selected_charts:
+        with st.expander("📌 Required columns for selected charts", expanded=False):
+            for ch in selected_charts:
+                st.write(f"**{ch}** → " + ", ".join(CHART_REQUIREMENTS.get(ch, [])))
+
+    st.markdown("---")
+
     st.markdown("### Pass colors")
     col_pass_success = st.color_picker("Successful", "#00FF6A")
     col_pass_unsuccess = st.color_picker("Unsuccessful", "#FF4D4D")
@@ -272,12 +253,73 @@ with st.expander("🎛️ Settings", expanded=True):
     bar_goal = st.color_picker("Bar: goal", "#00FF6A")
     bar_blocked = st.color_picker("Bar: blocked", "#AAAAAA")
 
-pass_colors = {"successful": col_pass_success, "unsuccessful": col_pass_unsuccess, "key pass": col_pass_key, "assist": col_pass_assist}
-shot_colors = {"off target": col_shot_off, "ontarget": col_shot_on, "goal": col_shot_goal, "blocked": col_shot_blocked}
+    st.markdown("---")
+
+    # Marker options
+    st.markdown("### Event shapes (markers)")
+    marker_options = {
+        "Circle (o)": "o",
+        "Star (*)": "*",
+        "Triangle up (^)": "^",
+        "Triangle down (v)": "v",
+        "Square (s)": "s",
+        "Diamond (D)": "D",
+        "Plus (+)": "+",
+        "X (x)": "x",
+        "Pentagon (p)": "p",
+        "Hexagon (h)": "h",
+    }
+    marker_labels = list(marker_options.keys())
+
+    st.markdown("#### Shot markers")
+    mk_shot_off = st.selectbox("Marker: Off target", marker_labels, index=marker_labels.index("Triangle up (^)"))
+    mk_shot_on = st.selectbox("Marker: On target", marker_labels, index=marker_labels.index("Diamond (D)"))
+    mk_shot_goal = st.selectbox("Marker: Goal", marker_labels, index=marker_labels.index("Star (*)"))
+    mk_shot_blocked = st.selectbox("Marker: Blocked", marker_labels, index=marker_labels.index("Square (s)"))
+
+    st.markdown("#### Pass start markers")
+    mk_pass_success = st.selectbox("Marker: Successful pass", marker_labels, index=marker_labels.index("Circle (o)"))
+    mk_pass_unsuccess = st.selectbox("Marker: Unsuccessful pass", marker_labels, index=marker_labels.index("X (x)"))
+    mk_pass_key = st.selectbox("Marker: Key pass", marker_labels, index=marker_labels.index("Diamond (D)"))
+    mk_pass_assist = st.selectbox("Marker: Assist", marker_labels, index=marker_labels.index("Star (*)"))
+
+    st.markdown("#### Touch map marker")
+    touch_marker_label = st.selectbox("Marker: Touch", marker_labels, index=marker_labels.index("Circle (o)"))
+    touch_dot_color = st.color_picker("Touch dots color", "#34D5FF")
+    touch_dot_edge = st.color_picker("Touch edge color", "#0B0F14")
+    touch_dot_size = st.slider("Touch dot size", 60, 520, 220)
+    touch_alpha = st.slider("Touch alpha", 20, 100, 95) / 100.0
+
+pass_colors = {
+    "successful": col_pass_success,
+    "unsuccessful": col_pass_unsuccess,
+    "key pass": col_pass_key,
+    "assist": col_pass_assist
+}
+shot_colors = {
+    "off target": col_shot_off,
+    "ontarget": col_shot_on,
+    "goal": col_shot_goal,
+    "blocked": col_shot_blocked
+}
 bar_colors = {
     "successful": bar_success, "unsuccessful": bar_unsuccess, "key pass": bar_key, "assist": bar_assist,
     "ontarget": bar_ont, "off target": bar_off, "goal": bar_goal, "blocked": bar_blocked
 }
+
+shot_markers = {
+    "off target": marker_options[mk_shot_off],
+    "ontarget": marker_options[mk_shot_on],
+    "goal": marker_options[mk_shot_goal],
+    "blocked": marker_options[mk_shot_blocked],
+}
+pass_markers = {
+    "successful": marker_options[mk_pass_success],
+    "unsuccessful": marker_options[mk_pass_unsuccess],
+    "key pass": marker_options[mk_pass_key],
+    "assist": marker_options[mk_pass_assist],
+}
+touch_marker = marker_options[touch_marker_label]
 
 # -----------------------------
 # Header Preview (UI only)
@@ -316,7 +358,6 @@ else:
 # -----------------------------
 mode = st.radio("Choose output type", ["Match Charts", "Pizza Chart", "Shot Detail Card"])
 uploaded = st.file_uploader("Upload your file", type=["csv", "xlsx", "xls"])
-
 
 # -----------------------------
 # Main
@@ -385,17 +426,14 @@ if uploaded:
             st.stop()
 
         # ---------- Match / Shot Card ----------
-        df_raw_original = load_data(path)
+        df_raw = load_data(path)
 
         with st.expander("Raw file preview (first 25 rows)", expanded=False):
-            st.write("Columns:", list(df_raw_original.columns))
-            st.dataframe(df_raw_original.head(25), use_container_width=True)
-
-        df_raw = df_raw_original.copy()
+            st.write("Columns:", list(df_raw.columns))
+            st.dataframe(df_raw.head(25), use_container_width=True)
 
         if "outcome" not in df_raw.columns:
-            st.warning("Column `outcome` not found. Trying to derive it automatically (e.g., from `event`/`result`).")
-
+            st.warning("Column `outcome` not found. Trying to derive it automatically.")
         df_raw = ensure_outcome_column(df_raw)
         df_raw = normalize_outcome_values(df_raw)
         df_raw = normalize_pass_outcomes(df_raw)
@@ -432,15 +470,6 @@ if uploaded:
             st.write("Prepared columns:", list(df2.columns))
             st.dataframe(df2.head(25), use_container_width=True)
 
-        # ✅ Prepare a generic XY dataframe for Ball Regains Map from ORIGINAL data
-        regains_df = prepare_generic_xy_df(
-            df_raw_original,
-            attack_direction=attack_dir,
-            flip_y=flip_y,
-            pitch_mode=pitch_mode,
-            pitch_width=pitch_width,
-        )
-
         # ---------- Shot Detail Card ----------
         if mode == "Shot Detail Card":
             shots_only = df2[df2["event_type"] == "shot"].copy().reset_index(drop=True)
@@ -464,6 +493,7 @@ if uploaded:
                     pitch_mode=pitch_mode,
                     pitch_width=pitch_width,
                     shot_colors=shot_colors,
+                    shot_markers=shot_markers,   # ✅ shapes
                     theme_name=theme_name,
                 )
 
@@ -483,37 +513,12 @@ if uploaded:
                     st.download_button("⬇️ Download shot_card.pdf", f2, file_name="shot_card.pdf")
             st.stop()
 
-        # ---------- Match Charts ----------
-        st.markdown("### ✅ Select charts to include in the report")
-        available_charts = ["Outcome Bar", "Start Heatmap", "Pass Map", "Shot Map", "Ball Regains Map"]
-        selected_charts = st.multiselect(
-            "Charts",
-            available_charts,
-            default=["Outcome Bar", "Start Heatmap", "Pass Map", "Shot Map"],
-        )
-
-        st.markdown("### Required columns per chart")
-        for ch in selected_charts:
-            st.markdown(f"#### {ch}")
-            _requirements_box(ch)
-
-            # check missing columns on the right dataframe
-            if ch == "Ball Regains Map":
-                miss = _missing_cols(regains_df, CHART_REQUIREMENTS[ch]["required"])
-            else:
-                miss = _missing_cols(df2, CHART_REQUIREMENTS[ch]["required"])
-
-            if miss:
-                st.warning(f"Missing required columns for **{ch}**: {miss}")
-
         # ---------- Report ----------
         if st.button("Generate Report"):
             out_dir = os.path.join(tmp, "output")
 
             pdf_path, png_paths = build_report_from_prepared_df(
                 df2,
-                regains_df=regains_df,     # ✅ NEW
-                charts_to_render=selected_charts,  # ✅ NEW
                 out_dir=out_dir,
                 title=report_title,
                 subtitle=report_subtitle,
@@ -530,8 +535,16 @@ if uploaded:
                 pitch_mode=pitch_mode,
                 pitch_width=pitch_width,
                 pass_colors=pass_colors,
+                pass_markers=pass_markers,           # ✅ shapes for passes (start)
                 shot_colors=shot_colors,
+                shot_markers=shot_markers,           # ✅ shapes for shots
                 bar_colors=bar_colors,
+                charts_to_include=selected_charts,   # ✅ choose charts
+                touch_dot_color=touch_dot_color,     # ✅ touch map style
+                touch_dot_edge=touch_dot_edge,
+                touch_dot_size=touch_dot_size,
+                touch_alpha=touch_alpha,
+                touch_marker=touch_marker,
             )
 
             st.subheader("Preview")
