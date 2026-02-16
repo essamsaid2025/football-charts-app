@@ -44,6 +44,30 @@ THEMES = {
         "goal": "#444444",
         "pitch_lines": "#FFFFFF",
     },
+    THEMES["dark"] = {
+    # Header/page background (رمادي فاتح زي الصورة)
+    "bg": "#E6E6E6",
+
+    # Panels خلف الشارتات/الكروت (أسود)
+    "panel": "#0B0B0B",
+
+    # Pitch background (أسود/رمادي غامق)
+    "pitch": "#0A0A0A",
+
+    # Default texts inside charts
+    "text": "#FFFFFF",
+    "muted": "#C9CDD3",
+
+    # borders / separators
+    "lines": "#2A2A2A",
+
+    # mini-goal lines in shot card
+    "goal": "#EDEDED",
+
+    # pitch line color (مهم لـ mplsoccer)
+    "pitch_lines": "#EDEDED",
+}
+
 }
 
 def _norm_outcome(s: str) -> str:
