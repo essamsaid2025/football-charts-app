@@ -46,35 +46,6 @@ THEMES = {
     },
 }
 
-# ✅ NEW: Chart requirements for UI
-CHART_REQUIREMENTS = {
-    "Outcome Bar": {
-        "required": ["outcome"],
-        "optional": [],
-        "notes": "Counts outcomes (passes + shots)."
-    },
-    "Start Heatmap": {
-        "required": ["x", "y"],
-        "optional": [],
-        "notes": "Heatmap of all event start locations."
-    },
-    "Pass Map": {
-        "required": ["event_type", "x", "y", "x2", "y2", "outcome"],
-        "optional": [],
-        "notes": "Requires pass end location (x2,y2). Filters event_type == pass."
-    },
-    "Shot Map": {
-        "required": ["event_type", "x", "y", "outcome"],
-        "optional": ["xg", "xg_source"],
-        "notes": "Filters event_type == shot."
-    },
-    "Ball Regains Map": {
-        "required": ["x", "y"],
-        "optional": ["regain_type", "type", "event", "action", "is_counterpress", "time_sec"],
-        "notes": "Needs regain events rows OR a regain type column. If no type column, it will try to infer from text."
-    },
-}
-
 def _norm_outcome(s: str) -> str:
     if s is None or (isinstance(s, float) and pd.isna(s)):
         return ""
@@ -82,7 +53,9 @@ def _norm_outcome(s: str) -> str:
     s = re.sub(r"^\d+", "", s).strip()
     s = s.replace("_", " ").replace("-", " ")
     s = re.sub(r"\s+", " ", s)
+
     aliases = {
+        # shots
         "on target": "ontarget",
         "ontarget": "ontarget",
         "offtarget": "off target",
@@ -90,6 +63,8 @@ def _norm_outcome(s: str) -> str:
         "block": "blocked",
         "blocked shot": "blocked",
         "blk": "blocked",
+
+        # passes
         "keypass": "key pass",
         "key pass": "key pass",
         "assist": "assist",
@@ -99,6 +74,15 @@ def _norm_outcome(s: str) -> str:
         "unsuccessfull": "unsuccessful",
         "un successful": "unsuccessful",
         "un-successful": "unsuccessful",
+        "accurate": "successful",
+        "inaccurate": "unsuccessful",
+
+        # touch
+        "touch": "touch",
+        "ball touch": "touch",
+        "receive": "touch",
+        "reception": "touch",
+        "received": "touch",
     }
     return aliases.get(s, s)
 
@@ -121,10 +105,12 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [c.strip() for c in df.columns]
     cols_lower_map = {c.lower(): c for c in df.columns}
 
+    # outcome required
     if "outcome" not in cols_lower_map:
         raise ValueError("Missing column: outcome (required).")
     df.rename(columns={cols_lower_map["outcome"]: "outcome"}, inplace=True)
 
+    # x/y
     for want in ["x", "y", "x2", "y2"]:
         if want in cols_lower_map:
             df.rename(columns={cols_lower_map[want]: want}, inplace=True)
@@ -140,18 +126,33 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df["outcome"] = df["outcome"].apply(_norm_outcome)
     df = df.dropna(subset=["x", "y"]).copy()
 
-    df["event_type"] = "pass"
-    df.loc[df["outcome"].isin(SHOT_TYPES), "event_type"] = "shot"
+    # event_type logic:
+    # - if event_type exists: use it (pass/shot/touch/...)
+    # - else infer: shots if outcome in SHOT_TYPES else pass (default)
+    if "event_type" in df.columns:
+        df["event_type"] = df["event_type"].astype(str).str.strip().str.lower()
+    else:
+        df["event_type"] = "pass"
+        df.loc[df["outcome"].isin(SHOT_TYPES), "event_type"] = "shot"
 
+    # keep pass+shot outcomes clean (touch stays as touch events)
     df_pass = df[df["event_type"] == "pass"].copy()
     df_shot = df[df["event_type"] == "shot"].copy()
+    df_touch = df[df["outcome"] == "touch"].copy()
 
     if not df_pass.empty:
         df_pass = df_pass[df_pass["outcome"].isin(PASS_ORDER)]
     if not df_shot.empty:
         df_shot = df_shot[df_shot["outcome"].isin(SHOT_ORDER)]
 
-    return pd.concat([df_pass, df_shot], ignore_index=True)
+    # if touch exists, keep it; else keep all events already handled
+    out = pd.concat([df_pass, df_shot, df_touch], ignore_index=True)
+
+    # if nothing matched (edge cases), fallback to original filtered x,y
+    if out.empty:
+        out = df.copy()
+
+    return out
 
 def apply_pitch_transforms(df: pd.DataFrame, attack_direction="ltr", flip_y=False, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
     df = df.copy()
@@ -437,31 +438,6 @@ def _draw_pitch(ax, pitch, theme):
     ax.set_facecolor(theme["pitch"])
 
 # ----------------------------
-# ✅ NEW: generic XY prep for regains/any events
-# ----------------------------
-def prepare_generic_xy_df(df_raw: pd.DataFrame, attack_direction="ltr", flip_y=False, pitch_mode="rect", pitch_width=64.0) -> pd.DataFrame:
-    d = df_raw.copy()
-    d.columns = [c.strip() for c in d.columns]
-    cols_lower = {c.lower().strip(): c for c in d.columns}
-
-    # map common names to x,y
-    for cand in ["x", "pos_x", "location_x", "start_x", "X"]:
-        if cand.lower() in cols_lower and "x" not in d.columns:
-            d.rename(columns={cols_lower[cand.lower()]: "x"}, inplace=True)
-    for cand in ["y", "pos_y", "location_y", "start_y", "Y"]:
-        if cand.lower() in cols_lower and "y" not in d.columns:
-            d.rename(columns={cols_lower[cand.lower()]: "y"}, inplace=True)
-
-    if "x" in d.columns:
-        d["x"] = pd.to_numeric(d["x"], errors="coerce")
-    if "y" in d.columns:
-        d["y"] = pd.to_numeric(d["y"], errors="coerce")
-
-    d = d.dropna(subset=[c for c in ["x", "y"] if c in d.columns]).copy()
-    d = apply_pitch_transforms(d, attack_direction=attack_direction, flip_y=flip_y, pitch_mode=pitch_mode, pitch_width=pitch_width)
-    return d
-
-# ----------------------------
 # Header drawer
 # ----------------------------
 def add_report_header(
@@ -569,9 +545,69 @@ def start_location_heatmap(df: pd.DataFrame, pitch_mode="rect", pitch_width=64.0
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
     return fig
 
-def pass_map(df: pd.DataFrame, pass_colors: dict | None = None,
-             pitch_mode="rect", pitch_width=64.0, theme_name="The Athletic Dark"):
+def touch_map(
+    df: pd.DataFrame,
+    pitch_mode="rect",
+    pitch_width=64.0,
+    theme_name="The Athletic Dark",
+    dot_color="#34D5FF",
+    edge_color="#0B0F14",
+    dot_size=220,
+    alpha=0.95,
+    marker="o",
+):
+    """
+    Logic (as requested):
+    - If outcome == 'touch' exists in data -> use only those rows
+    - Else -> treat ALL rows as touches (use all events)
+    """
+    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width)
+
+    d = df.copy()
+    if "outcome" in d.columns:
+        s = d["outcome"].astype(str).str.strip().str.lower()
+        if (s == "touch").any():
+            d = d[s == "touch"].copy()
+
+    if "x" not in d.columns or "y" not in d.columns:
+        raise ValueError("Touch Map يحتاج أعمدة: x, y")
+
+    d["x"] = pd.to_numeric(d["x"], errors="coerce")
+    d["y"] = pd.to_numeric(d["y"], errors="coerce")
+    d = d.dropna(subset=["x", "y"]).copy()
+
+    fig, ax = plt.subplots(figsize=(12, 7.2))
+    fig.patch.set_facecolor(theme["bg"])
+    _draw_pitch(ax, pitch, theme)
+
+    pitch.scatter(
+        d["x"], d["y"],
+        ax=ax,
+        s=dot_size,
+        marker=marker,
+        color=dot_color,
+        edgecolors=edge_color,
+        linewidth=2,
+        alpha=alpha,
+        zorder=5
+    )
+
+    ax.set_title("Touch Map", color=theme["text"], fontsize=18, weight="bold")
+    ax.set_xlim(-2, 102)
+    ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
+    return fig
+
+def pass_map(
+    df: pd.DataFrame,
+    pass_colors: dict | None = None,
+    pass_markers: dict | None = None,
+    pitch_mode="rect",
+    pitch_width=64.0,
+    theme_name="The Athletic Dark"
+):
     pass_colors = pass_colors or {}
+    pass_markers = pass_markers or {}
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
 
     d = df[df["event_type"] == "pass"].copy()
@@ -589,17 +625,44 @@ def pass_map(df: pd.DataFrame, pass_colors: dict | None = None,
         dt = d[d["outcome"] == t]
         if len(dt) == 0:
             continue
-        pitch.arrows(dt["x"], dt["y"], dt["x2"], dt["y2"], ax=ax,
-                     width=2, alpha=0.85, color=pass_colors.get(t, None))
+
+        # arrows
+        pitch.arrows(
+            dt["x"], dt["y"], dt["x2"], dt["y2"],
+            ax=ax, width=2, alpha=0.85,
+            color=pass_colors.get(t, None)
+        )
+
+        # start marker (shape)
+        mk = pass_markers.get(t, "o")
+        pitch.scatter(
+            dt["x"], dt["y"],
+            ax=ax,
+            s=90,
+            marker=mk,
+            color=pass_colors.get(t, None),
+            edgecolors="white",
+            linewidth=1.2,
+            alpha=0.95,
+            zorder=6
+        )
 
     ax.set_title("Pass Map", color=theme["text"])
     ax.set_xlim(-2, 102)
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
     return fig
 
-def shot_map(df: pd.DataFrame, shot_colors: dict | None = None,
-             pitch_mode="rect", pitch_width=64.0, show_xg=False, theme_name="The Athletic Dark"):
+def shot_map(
+    df: pd.DataFrame,
+    shot_colors: dict | None = None,
+    shot_markers: dict | None = None,
+    pitch_mode="rect",
+    pitch_width=64.0,
+    show_xg=False,
+    theme_name="The Athletic Dark"
+):
     shot_colors = shot_colors or {}
+    shot_markers = shot_markers or {}
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
 
     s = df[df["event_type"] == "shot"].copy()
@@ -612,7 +675,19 @@ def shot_map(df: pd.DataFrame, shot_colors: dict | None = None,
         stt = s[s["outcome"] == t]
         if len(stt) == 0:
             continue
-        pitch.scatter(stt["x"], stt["y"], ax=ax, s=90, alpha=0.95, color=shot_colors.get(t, None))
+
+        mk = shot_markers.get(t, "o")
+        pitch.scatter(
+            stt["x"], stt["y"],
+            ax=ax,
+            s=160,
+            marker=mk,
+            color=shot_colors.get(t, None),
+            edgecolors="white",
+            linewidth=1.6,
+            alpha=0.95,
+            zorder=5
+        )
 
         if show_xg and "xg" in stt.columns:
             for _, r in stt.iterrows():
@@ -628,138 +703,8 @@ def shot_map(df: pd.DataFrame, shot_colors: dict | None = None,
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
     return fig
 
-
 # ----------------------------
-# ✅ NEW: Ball Regains Map (Zones + markers + counterpress)
-# ----------------------------
-def _infer_regain_type_from_row(row: pd.Series) -> str:
-    for c in ["regain_type", "type", "event", "action", "event_type", "name"]:
-        if c in row.index:
-            v = str(row.get(c, "")).strip().lower()
-            if not v or v == "nan":
-                continue
-            if "tackle" in v:
-                return "tackle"
-            if "intercept" in v:
-                return "interception"
-            if "recover" in v or "ball recovery" in v:
-                return "recovery"
-    return "other"
-
-def _get_counterpress_count(df: pd.DataFrame) -> int | None:
-    if "is_counterpress" in df.columns:
-        try:
-            return int(pd.to_numeric(df["is_counterpress"], errors="coerce").fillna(0).astype(int).sum())
-        except Exception:
-            return None
-    return None
-
-def ball_regains_map(
-    df: pd.DataFrame,
-    pitch_mode="rect",
-    pitch_width=64.0,
-    theme_name="The Athletic Dark",
-    bins_x: int = 6,
-    bins_y: int = 4,
-    title: str = "Ball Regains Map",
-):
-    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
-    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width)
-
-    d = df.copy()
-    if "x" not in d.columns or "y" not in d.columns:
-        raise ValueError("Ball Regains Map requires columns: x, y")
-
-    d["x"] = pd.to_numeric(d["x"], errors="coerce")
-    d["y"] = pd.to_numeric(d["y"], errors="coerce")
-    d = d.dropna(subset=["x", "y"]).copy()
-
-    # infer regain type if no explicit column
-    if "regain_type" not in d.columns:
-        d["regain_type"] = d.apply(_infer_regain_type_from_row, axis=1)
-    else:
-        d["regain_type"] = d["regain_type"].astype(str).str.lower().str.strip()
-
-    # bins
-    x_edges = np.linspace(0, 100, bins_x + 1)
-    y_max = pitch_width if pitch_mode == "rect" else 100.0
-    y_edges = np.linspace(0, y_max, bins_y + 1)
-
-    d["bx"] = np.clip(np.digitize(d["x"], x_edges) - 1, 0, bins_x - 1)
-    d["by"] = np.clip(np.digitize(d["y"], y_edges) - 1, 0, bins_y - 1)
-
-    grid = np.zeros((bins_y, bins_x), dtype=float)
-    for (by, bx), g in d.groupby(["by", "bx"]):
-        grid[int(by), int(bx)] = len(g)
-
-    vmax = max(1.0, float(grid.max()))
-    norm = (grid / vmax)
-
-    # color blend: low -> dark blue, high -> red-ish (like the sample)
-    low_col = np.array([10, 32, 56]) / 255.0   # deep navy
-    high_col = np.array([190, 30, 45]) / 255.0 # red
-    mid_col  = np.array([170, 170, 170]) / 255.0
-
-    fig, ax = plt.subplots(figsize=(7.2, 9.2))
-    fig.patch.set_facecolor(theme["bg"])
-    _draw_pitch(ax, pitch, theme)
-
-    # draw rectangles
-    for iy in range(bins_y):
-        for ix in range(bins_x):
-            t = norm[iy, ix]
-            # blend with a mid tone to mimic gray zones too
-            col = (1 - t) * low_col + t * high_col
-            col = 0.75 * col + 0.25 * mid_col
-            x0, x1 = x_edges[ix], x_edges[ix + 1]
-            y0, y1 = y_edges[iy], y_edges[iy + 1]
-            ax.add_patch(
-                plt.Rectangle((x0, y0), x1 - x0, y1 - y0,
-                              facecolor=col, alpha=0.75,
-                              edgecolor="white", linewidth=1.8, zorder=1)
-            )
-
-    # markers by type
-    markers = {
-        "tackle": ("D", "white"),
-        "interception": ("v", "white"),
-        "recovery": ("s", "white"),
-        "other": ("o", "white"),
-    }
-
-    for k, (mk, ec) in markers.items():
-        sub = d[d["regain_type"] == k]
-        if sub.empty:
-            continue
-        pitch.scatter(sub["x"], sub["y"], ax=ax, s=65, marker=mk,
-                      facecolors="none", edgecolors=ec, linewidth=2.2, zorder=5)
-
-    # legend text on right
-    tackle_n = int((d["regain_type"] == "tackle").sum())
-    inter_n = int((d["regain_type"] == "interception").sum())
-    recov_n = int((d["regain_type"] == "recovery").sum())
-    cp = _get_counterpress_count(d)
-
-    ax.text(1.02, 0.78, f"Tackle  ♦  {tackle_n}", transform=ax.transAxes,
-            color=theme["text"], fontsize=12, ha="left", va="center")
-    ax.text(1.02, 0.70, f"Interception  ▼  {inter_n}", transform=ax.transAxes,
-            color=theme["text"], fontsize=12, ha="left", va="center")
-    ax.text(1.02, 0.62, f"Recovery  ■  {recov_n}", transform=ax.transAxes,
-            color=theme["text"], fontsize=12, ha="left", va="center")
-
-    if cp is not None:
-        ax.text(1.02, 0.54, f"Counterpress: {cp}", transform=ax.transAxes,
-                color=theme["text"], fontsize=12, ha="left", va="center")
-
-    ax.set_title(title, color=theme["text"], fontsize=18, weight="bold", pad=16)
-    ax.set_xlim(-2, 102)
-    ax.set_ylim(-2, y_max + 2)
-
-    return fig
-
-
-# ----------------------------
-# Report builder — UPDATED (charts_to_render + regains_df)
+# Report builder
 # ----------------------------
 def build_report_from_prepared_df(
     df_prepared: pd.DataFrame,
@@ -779,35 +724,64 @@ def build_report_from_prepared_df(
     pitch_mode="rect",
     pitch_width=64.0,
     pass_colors: dict | None = None,
+    pass_markers: dict | None = None,
     shot_colors: dict | None = None,
+    shot_markers: dict | None = None,
     bar_colors: dict | None = None,
-    charts_to_render: list[str] | None = None,
-    regains_df: pd.DataFrame | None = None,
+    charts_to_include: list[str] | None = None,
+    touch_dot_color="#34D5FF",
+    touch_dot_edge="#0B0F14",
+    touch_dot_size=220,
+    touch_alpha=0.95,
+    touch_marker="o",
 ):
     os.makedirs(out_dir, exist_ok=True)
     pdf_path = os.path.join(out_dir, "report.pdf")
 
     df2 = df_prepared.copy()
-    charts_to_render = charts_to_render or ["Outcome Bar", "Start Heatmap", "Pass Map", "Shot Map"]
+    charts_to_include = charts_to_include or ["Outcome Bar", "Start Heatmap", "Touch Map (Scatter)", "Pass Map", "Shot Map"]
 
     figs = []
-    if "Outcome Bar" in charts_to_render:
+
+    if "Outcome Bar" in charts_to_include:
         figs.append(("outcome_bar", outcome_bar(df2, bar_colors=bar_colors, theme_name=theme_name)))
 
-    if "Start Heatmap" in charts_to_render:
+    if "Start Heatmap" in charts_to_include:
         figs.append(("start_heatmap", start_location_heatmap(df2, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name)))
 
-    if "Pass Map" in charts_to_render:
-        figs.append(("pass_map", pass_map(df2, pass_colors=pass_colors, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name)))
+    if "Touch Map (Scatter)" in charts_to_include:
+        figs.append(("touch_map", touch_map(
+            df2,
+            pitch_mode=pitch_mode,
+            pitch_width=pitch_width,
+            theme_name=theme_name,
+            dot_color=touch_dot_color,
+            edge_color=touch_dot_edge,
+            dot_size=touch_dot_size,
+            alpha=touch_alpha,
+            marker=touch_marker,
+        )))
 
-    if "Shot Map" in charts_to_render:
-        figs.append(("shot_map", shot_map(df2, shot_colors=shot_colors, pitch_mode=pitch_mode, pitch_width=pitch_width, show_xg=True, theme_name=theme_name)))
+    if "Pass Map" in charts_to_include:
+        figs.append(("pass_map", pass_map(
+            df2,
+            pass_colors=pass_colors,
+            pass_markers=pass_markers,
+            pitch_mode=pitch_mode,
+            pitch_width=pitch_width,
+            theme_name=theme_name
+        )))
 
-    if "Ball Regains Map" in charts_to_render and regains_df is not None and not regains_df.empty:
-        try:
-            figs.append(("ball_regains_map", ball_regains_map(regains_df, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name)))
-        except Exception:
-            pass
+    if "Shot Map" in charts_to_include:
+        figs.append(("shot_map", shot_map(
+            df2,
+            shot_colors=shot_colors,
+            shot_markers=shot_markers,
+            pitch_mode=pitch_mode,
+            pitch_width=pitch_width,
+            show_xg=True,
+            theme_name=theme_name
+        )))
 
     pngs = []
     with PdfPages(pdf_path) as pdf:
@@ -836,9 +810,8 @@ def build_report_from_prepared_df(
 
     return pdf_path, pngs
 
-
 # ----------------------------
-# Shot Detail Card (unchanged from your version)
+# Shot Detail Card (UPDATED: markers)
 # ----------------------------
 def shot_detail_card(
     df_prepared: pd.DataFrame,
@@ -847,6 +820,7 @@ def shot_detail_card(
     pitch_mode="rect",
     pitch_width=64.0,
     shot_colors: dict | None = None,
+    shot_markers: dict | None = None,
     theme_name: str = "The Athletic Dark",
 ):
     shot_colors = shot_colors or {
@@ -855,6 +829,7 @@ def shot_detail_card(
         "goal": "#00FF6A",
         "blocked": "#AAAAAA",
     }
+    shot_markers = shot_markers or {}
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
 
     shots = df_prepared[df_prepared["event_type"] == "shot"].copy().reset_index(drop=True)
@@ -876,6 +851,7 @@ def shot_detail_card(
     outcome = str(r.get("outcome", "")).lower()
     display_outcome = "On target" if outcome == "ontarget" else outcome.title()
     c = shot_colors.get(outcome, "#00C2FF")
+    mk = shot_markers.get(outcome, "o")
 
     fig = plt.figure(figsize=(12, 6), facecolor=theme["bg"])
     gs = gridspec.GridSpec(
@@ -905,8 +881,8 @@ def shot_detail_card(
     ax_pitch.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
 
     x, y = float(r["x"]), float(r["y"])
-    pitch.scatter([x], [y], ax=ax_pitch, s=520, color=c, edgecolors="white", linewidth=2, zorder=5, clip_on=False)
-    pitch.scatter([x], [y], ax=ax_pitch, s=170, color="white", alpha=0.30, zorder=6, clip_on=False)
+    pitch.scatter([x], [y], ax=ax_pitch, s=520, marker=mk, color=c, edgecolors="white", linewidth=2, zorder=5, clip_on=False)
+    pitch.scatter([x], [y], ax=ax_pitch, s=190, marker=mk, color="white", alpha=0.25, zorder=6, clip_on=False)
     ax_pitch.text(x + 1.2, y + 1.2, f"xG {xg_txt}",
                   color="white", fontsize=12, weight="bold", zorder=10)
 
@@ -916,7 +892,7 @@ def shot_detail_card(
     if has_end:
         x2, y2 = float(r["x2"]), float(r["y2"])
         ax_pitch.plot([x, x2], [y, y2], linestyle=":", linewidth=3, color="white", alpha=0.9, zorder=4)
-        pitch.scatter([x2], [y2], ax=ax_pitch, s=130, color="white", alpha=0.9, zorder=6, clip_on=False)
+        pitch.scatter([x2], [y2], ax=ax_pitch, s=140, marker="o", color="white", alpha=0.9, zorder=6, clip_on=False)
 
         def map_to_mini_goal(y_val):
             y_val = float(y_val)
@@ -925,7 +901,7 @@ def shot_detail_card(
             return 25 + t * 50
 
         gx = map_to_mini_goal(y2)
-        ax_goal.scatter([gx], [12], s=240, color=c, edgecolors="white", linewidth=2, zorder=5)
+        ax_goal.scatter([gx], [12], s=240, marker=mk, color=c, edgecolors="white", linewidth=2, zorder=5)
     else:
         gy = (pitch_width / 2.0) if pitch_mode == "rect" else 50.0
         ax_pitch.plot([x, 100], [y, gy], linestyle=":", linewidth=3, color="white", alpha=0.6, zorder=4)
@@ -947,9 +923,8 @@ def shot_detail_card(
 
     return fig, shots
 
-
 # ----------------------------
-# Pizza chart (unchanged)
+# Pizza chart
 # ----------------------------
 def pizza_chart(df_pizza: pd.DataFrame, title: str = "", subtitle: str = "",
                 slice_colors: list | None = None, show_values_legend: bool = True):
