@@ -74,6 +74,18 @@ THEMES = {
         "goal": "#444444",
         "pitch_lines": "#FFFFFF",
     },
+    "Black Stripe": {
+        "bg": "#000000",
+        "panel": "#000000",
+        "pitch": "#000000",
+        "pitch_stripe": "#0A0A0A",   # stripes dark
+        "text": "#FFFFFF",
+        "muted": "#B7B7B7",
+        "lines": "#2A2A2A",
+        "goal": "#FFFFFF",
+        "pitch_lines": "#FFFFFF",    # pitch lines
+    },
+
 }
 
 
@@ -256,16 +268,45 @@ def apply_pitch_transforms(
     return df
 
 
-def make_pitch(pitch_mode: str = "rect", pitch_width: float = 64.0) -> Pitch:
+def make_pitch(
+    pitch_mode: str = "rect",
+    pitch_width: float = 64.0,
+    theme: Optional[dict] = None,
+) -> Pitch:
+    """
+    If theme provided, pitch + lines will follow theme colors.
+    Supports optional stripes if theme has `pitch_stripe`.
+    """
+    theme = theme or {}
+    pitch_color = theme.get("pitch", "#1f5f3b")
+    line_color = theme.get("pitch_lines", "#E6E6E6")
+    stripe_color = theme.get("pitch_stripe", None)
+
+    stripe = True if stripe_color else False
+
     if pitch_mode == "square":
-        return Pitch(pitch_type="custom", pitch_length=100, pitch_width=100, line_zorder=2)
-    return Pitch(pitch_type="custom", pitch_length=100, pitch_width=pitch_width, line_zorder=2)
+        return Pitch(
+            pitch_type="custom",
+            pitch_length=100,
+            pitch_width=100,
+            line_zorder=2,
+            pitch_color=pitch_color,
+            line_color=line_color,
+            stripe=stripe,
+            stripe_color=stripe_color,
+        )
 
+    return Pitch(
+        pitch_type="custom",
+        pitch_length=100,
+        pitch_width=pitch_width,
+        line_zorder=2,
+        pitch_color=pitch_color,
+        line_color=line_color,
+        stripe=stripe,
+        stripe_color=stripe_color,
+    )
 
-def _goal_mouth_bounds(pitch_mode: str = "rect", pitch_width: float = 64.0):
-    gy = (pitch_width / 2.0) if pitch_mode == "rect" else 50.0
-    goal_mouth = (pitch_width * 0.10765) if pitch_mode == "rect" else (100.0 * 0.10765)
-    return gy - goal_mouth / 2.0, gy + goal_mouth / 2.0
 
 
 # ----------------------------
@@ -797,7 +838,7 @@ def outcome_bar(df: pd.DataFrame, bar_colors: Optional[dict] = None, theme_name:
 
 def start_location_heatmap(df: pd.DataFrame, pitch_mode: str = "rect", pitch_width: float = 64.0, theme_name: str = "The Athletic Dark"):
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
-    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width)
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
@@ -829,7 +870,7 @@ def touch_map(
     marker: str = "o",
 ):
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
-    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width)
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
 
     d = df.copy()
     if "outcome" in d.columns:
@@ -932,7 +973,7 @@ def pass_map(
     if d.empty:
         raise ValueError("No passes match selected filters (pass view / scope).")
 
-    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width)
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
@@ -997,7 +1038,7 @@ def shot_map(
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
 
     s = df[df["event_type"] == "shot"].copy()
-    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width)
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
@@ -1238,7 +1279,7 @@ def shot_detail_card(
     ax_goal.plot([75, 75], [5, 22], lw=2, color=theme["goal"])
     ax_goal.plot([25, 75], [22, 22], lw=2, color=theme["goal"])
 
-    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width)
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
     pitch.draw(ax=ax_pitch)
     ax_pitch.set_facecolor(theme["pitch"])
     ax_pitch.set_xlim(-2, 102)
