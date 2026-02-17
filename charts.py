@@ -507,6 +507,23 @@ def estimate_xg_model(
 # ----------------------------
 # Shot end location fix (Opta-ish)
 # ----------------------------
+def _goal_mouth_bounds(pitch_mode: str = "rect", pitch_width: float = 64.0) -> Tuple[float, float]:
+    """
+    Returns (y_low, y_high) for the goal mouth in the current coordinate system.
+
+    - If pitch_mode == "rect": y range is [0, pitch_width]
+    - If pitch_mode == "square": y range is [0, 100]
+
+    Goal width = 7.32m. In normalized terms:
+      goal_width_ratio = 7.32 / 68 = 0.107647...
+    """
+    y_max = pitch_width if pitch_mode == "rect" else 100.0
+    mid = y_max / 2.0
+    goal_mouth = y_max * (7.32 / 68.0)  # same ratio you already use (≈0.10765)
+    y_low = mid - goal_mouth / 2.0
+    y_high = mid + goal_mouth / 2.0
+    return float(y_low), float(y_high)
+
 def fix_shot_end_location(df: pd.DataFrame, pitch_mode: str = "rect", pitch_width: float = 64.0) -> pd.DataFrame:
     df = df.copy()
     if "x2" not in df.columns:
