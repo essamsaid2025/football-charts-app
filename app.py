@@ -17,6 +17,10 @@ from charts import (
     shot_detail_card,
     THEMES,
 )
+import charts
+st.write("charts file:", charts.__file__)
+st.write("THEMES keys:", list(THEMES.keys()))
+st.write("Black Stripe exists:", "Black Stripe" in THEMES)
 
 st.set_page_config(page_title="Football Charts Generator", layout="wide")
 
