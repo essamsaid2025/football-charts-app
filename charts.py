@@ -85,7 +85,6 @@ THEMES = {
         "goal": "#FFFFFF",
         "pitch_lines": "#FFFFFF",    # pitch lines
     },
-
 }
 
 
@@ -308,7 +307,6 @@ def make_pitch(
     )
 
 
-
 # ----------------------------
 # xG (Zone)
 # ----------------------------
@@ -508,18 +506,9 @@ def estimate_xg_model(
 # Shot end location fix (Opta-ish)
 # ----------------------------
 def _goal_mouth_bounds(pitch_mode: str = "rect", pitch_width: float = 64.0) -> Tuple[float, float]:
-    """
-    Returns (y_low, y_high) for the goal mouth in the current coordinate system.
-
-    - If pitch_mode == "rect": y range is [0, pitch_width]
-    - If pitch_mode == "square": y range is [0, 100]
-
-    Goal width = 7.32m. In normalized terms:
-      goal_width_ratio = 7.32 / 68 = 0.107647...
-    """
     y_max = pitch_width if pitch_mode == "rect" else 100.0
     mid = y_max / 2.0
-    goal_mouth = y_max * (7.32 / 68.0)  # same ratio you already use (≈0.10765)
+    goal_mouth = y_max * (7.32 / 68.0)
     y_low = mid - goal_mouth / 2.0
     y_high = mid + goal_mouth / 2.0
     return float(y_low), float(y_high)
@@ -573,7 +562,7 @@ def fix_shot_end_location(df: pd.DataFrame, pitch_mode: str = "rect", pitch_widt
 
 
 # ----------------------------
-# Pass tagging: into final third / box / line-breaking / packing proxy
+# Pass tagging
 # ----------------------------
 def _pass_success_mask(outcome_series: pd.Series) -> pd.Series:
     s = outcome_series.astype(str).str.lower()
@@ -596,10 +585,8 @@ def add_pass_tags(
     if p.empty:
         return df
 
-    # attempt definition: needs x2,y2 present AND valid outcome in PASS_ORDER
     need_end = ("x2" in p.columns and "y2" in p.columns)
     if not need_end:
-        # no end coords -> cannot compute tags
         df.loc[df["event_type"] == "pass", ["is_pass_attempt", "is_pass_successful", "is_pass_unsuccessful"]] = False
         df.loc[df["event_type"] == "pass", ["into_final_third", "into_penalty_box", "line_breaking", "progressive_pass"]] = False
         df.loc[df["event_type"] == "pass", "packing_proxy"] = 0
@@ -612,24 +599,17 @@ def add_pass_tags(
     success = attempt & _pass_success_mask(p["outcome"])
     unsuccess = attempt & (p["outcome"].astype(str).str.lower() == "unsuccessful")
 
-    # Final third threshold on x2 (0-100)
     final_third_thr = 66.6667
     into_final_third = attempt & (p["x2"] >= final_third_thr)
 
-    # Penalty box bounds (0-100 x, y scaled by pitch_mode)
     y_max = pitch_width if pitch_mode == "rect" else 100.0
-    # Approx box in 0-100 coords: length 16.5/105 ~ 0.157 -> start at ~84.3
-    box_x_min = 100.0 * (1.0 - (16.5 / 105.0))  # ~84.2857
-    # Box width 40.3/68 ~ 0.5926 => half width ~0.2963 of width
-    # Centerline is y_max/2, box spans +/- (40.3/68)/2
-    half_box = (40.3 / 68.0) * (y_max / 2.0)  # (y_max * 0.2963)
+    box_x_min = 100.0 * (1.0 - (16.5 / 105.0))
+    half_box = (40.3 / 68.0) * (y_max / 2.0)
     box_y_min = (y_max / 2.0) - half_box
     box_y_max = (y_max / 2.0) + half_box
 
     into_box = attempt & (p["x2"] >= box_x_min) & (p["y2"] >= box_y_min) & (p["y2"] <= box_y_max)
 
-    # Line-breaking proxy: count how many longitudinal bands crossed (by x)
-    # Bands: [0-33.3), [33.3-66.7), [66.7-83.0), [83.0-100]
     def band(xv: float) -> int:
         if pd.isna(xv):
             return -1
@@ -645,17 +625,9 @@ def add_pass_tags(
     x2_band = p["x2"].apply(band)
     packing_proxy = (x2_band - x1_band).clip(lower=0)
 
-    # line breaking yes/no (>=1)
     line_breaking = attempt & (packing_proxy >= 1)
 
-    # ----------------------------
-        # ----------------------------
     # Progressive pass (MANUAL ONLY)
-    # Uses ONLY column in file:
-    # progressive_pass / progressive / is_progressive
-    # YES -> True | NO/empty -> False
-    # No automatic calculation
-    # ----------------------------
     manual_col = None
     for cand in ["progressive_pass", "progressive", "is_progressive", "progressive pass", "Progressive Pass","progressive passes"]:
         if cand in p.columns:
@@ -666,6 +638,7 @@ def add_pass_tags(
         progressive = attempt & _yes_only(p[manual_col])
     else:
         progressive = attempt & False
+
     idx = p.index
     df.loc[idx, "is_pass_attempt"] = attempt.values
     df.loc[idx, "is_pass_successful"] = success.values
@@ -682,8 +655,7 @@ def add_pass_tags(
     df.loc[nonp, "packing_proxy"] = 0
 
     return df
-        
-    
+
 
 # ----------------------------
 # Prepare df for charts
@@ -716,9 +688,7 @@ def prepare_df_for_charts(
             df["xg"] = pd.to_numeric(df["xg_zone"], errors="coerce")
             df["xg_source"] = "zone (fallback)"
 
-    # add pass tags AFTER transforms (so thresholds work with flipped direction)
     df = add_pass_tags(df, pitch_mode=pitch_mode, pitch_width=pitch_width)
-
     return df
 
 
@@ -843,7 +813,6 @@ def outcome_bar(df: pd.DataFrame, bar_colors: Optional[dict] = None, theme_name:
     for spine in ax.spines.values():
         spine.set_color(theme["lines"])
 
-    # legend for bar = categories
     handles = [Patch(facecolor=bar_colors.get(k, fallback), label=k) for k in labels[:8]]
     _add_legend(ax, handles, theme, loc="upper center")
 
@@ -926,6 +895,55 @@ def touch_map(
     return fig
 
 
+# ----------------------------
+# ✅ NEW helpers to avoid pass_map crash
+# ----------------------------
+def _bool_mask(col, index: pd.Index) -> pd.Series:
+    """
+    Robust boolean mask:
+    - pd.NA / NaN -> False
+    - 'TRUE/true/1/yes/نعم' -> True
+    - bool -> keep
+    """
+    if isinstance(col, pd.Series):
+        s = col.reindex(index)
+        if pd.api.types.is_bool_dtype(s):
+            return s.fillna(False)
+        s = s.replace("", pd.NA).fillna(False)
+        try:
+            return s.astype(str).str.strip().str.lower().isin(["true", "1", "yes", "y", "نعم"])
+        except Exception:
+            return pd.Series(False, index=index, dtype=bool)
+    else:
+        return pd.Series(False, index=index, dtype=bool)
+
+
+def _empty_pass_map_figure(
+    pitch_mode: str,
+    pitch_width: float,
+    theme: dict,
+    title: str,
+    msg: str
+):
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
+    fig, ax = plt.subplots(figsize=(7.6, 4.8))
+    fig.patch.set_facecolor(theme["bg"])
+    _draw_pitch(ax, pitch, theme)
+
+    ax.set_title(title, color=theme["text"])
+    ax.text(
+        0.5, 0.5, msg,
+        transform=ax.transAxes,
+        ha="center", va="center",
+        fontsize=13,
+        color=theme.get("text", "white"),
+        wrap=True
+    )
+    ax.set_xlim(-2, 102)
+    ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
+    return fig
+
+
 def _filter_passes_for_map(
     d: pd.DataFrame,
     pass_view: str = "All passes",
@@ -936,27 +954,35 @@ def _filter_passes_for_map(
 
     # base attempt filter: must have end coords
     dd = dd.dropna(subset=["x2", "y2"]).copy()
+    if dd.empty:
+        return dd
 
     view = (pass_view or "All passes").lower().strip()
+    idx = dd.index
+
     if "final third" in view:
-        dd = dd[dd.get("into_final_third", False) == True].copy()
+        dd = dd[_bool_mask(dd.get("into_final_third", False), idx)].copy()
     elif "penalty box" in view or "penalty" in view or "box" in view:
-        dd = dd[dd.get("into_penalty_box", False) == True].copy()
+        dd = dd[_bool_mask(dd.get("into_penalty_box", False), idx)].copy()
     elif "line" in view or "breaking" in view:
-        dd = dd[dd.get("packing_proxy", 0).astype(int) >= int(min_packing)].copy()
+        dd = dd[pd.to_numeric(dd.get("packing_proxy", 0), errors="coerce").fillna(0).astype(int) >= int(min_packing)].copy()
     elif "progressive" in view:
-        dd = dd[dd.get("progressive_pass", False) == True].copy()
-    
+        dd = dd[_bool_mask(dd.get("progressive_pass", False), idx)].copy()
+
+    if dd.empty:
+        return dd
 
     scope = (result_scope or "Attempts (all)").lower().strip()
+    idx2 = dd.index
+
     if "successful" in scope:
-        dd = dd[dd.get("is_pass_successful", False) == True].copy()
+        dd = dd[_bool_mask(dd.get("is_pass_successful", False), idx2)].copy()
     elif "unsuccessful" in scope or "failed" in scope:
-        dd = dd[dd.get("is_pass_unsuccessful", False) == True].copy()
+        dd = dd[_bool_mask(dd.get("is_pass_unsuccessful", False), idx2)].copy()
     else:
         # Attempts (all): allow both, but still ensure it's a pass attempt
         if "is_pass_attempt" in dd.columns:
-            dd = dd[dd["is_pass_attempt"] == True].copy()
+            dd = dd[_bool_mask(dd["is_pass_attempt"], idx2)].copy()
 
     return dd
 
@@ -984,15 +1010,26 @@ def pass_map(
     d["y2"] = pd.to_numeric(d["y2"], errors="coerce")
 
     d = _filter_passes_for_map(d, pass_view=pass_view, result_scope=result_scope, min_packing=min_packing)
+
+    title = f"Pass Map — {pass_view} — {result_scope}"
+    if "line" in (pass_view or "").lower():
+        title += f" (min packing {int(min_packing)})"
+
+    # ✅ FIX: بدل ما نوقع التقرير، نرجع شكل فيه رسالة
     if d.empty:
-        raise ValueError("No passes match selected filters (pass view / scope).")
+        return _empty_pass_map_figure(
+            pitch_mode=pitch_mode,
+            pitch_width=pitch_width,
+            theme=theme,
+            title=title,
+            msg="No passes match the selected filters.\nTry changing Pass View / Scope or lowering min packing."
+        )
 
     pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
 
-    # draw by pass outcome types (for coloring/markers)
     for t in PASS_ORDER:
         dt = d[d["outcome"] == t]
         if len(dt) == 0:
@@ -1017,14 +1054,10 @@ def pass_map(
             zorder=6
         )
 
-    title = f"Pass Map — {pass_view} — {result_scope}"
-    if "line" in (pass_view or "").lower():
-        title += f" (min packing {int(min_packing)})"
     ax.set_title(title, color=theme["text"])
     ax.set_xlim(-2, 102)
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
 
-    # legend
     handles = []
     for t in PASS_ORDER:
         if t in pass_colors:
@@ -1132,7 +1165,7 @@ def build_report_from_prepared_df(
     touch_dot_size: int = 220,
     touch_alpha: float = 0.95,
     touch_marker: str = "o",
-    **kwargs,  # ✅ NEW: allow extra args without crashing
+    **kwargs,
 ):
     """
     kwargs supported (optional):
@@ -1140,8 +1173,6 @@ def build_report_from_prepared_df(
       - pass_result_scope: str
       - pass_min_packing: int
     """
-
-    # ✅ read pass-map filter args safely
     pass_view = kwargs.get("pass_view", "All passes")
     pass_result_scope = kwargs.get("pass_result_scope", "Attempts (all)")
     try:
@@ -1157,14 +1188,28 @@ def build_report_from_prepared_df(
 
     figs = []
 
+    def _safe_add(name: str, fn):
+        try:
+            fig = fn()
+            figs.append((name, fig))
+        except Exception as e:
+            # ✅ never crash report: add a simple fallback figure
+            theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+            fig, ax = plt.subplots(figsize=(7.6, 4.8))
+            _apply_fig_theme(fig, ax, theme)
+            ax.axis("off")
+            ax.text(0.5, 0.5, f"{name} failed:\n{e}", ha="center", va="center",
+                    transform=ax.transAxes, color=theme.get("text", "white"), wrap=True)
+            figs.append((name, fig))
+
     if "Outcome Bar" in charts_to_include:
-        figs.append(("outcome_bar", outcome_bar(df2, bar_colors=bar_colors, theme_name=theme_name)))
+        _safe_add("outcome_bar", lambda: outcome_bar(df2, bar_colors=bar_colors, theme_name=theme_name))
 
     if "Start Heatmap" in charts_to_include:
-        figs.append(("start_heatmap", start_location_heatmap(df2, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name)))
+        _safe_add("start_heatmap", lambda: start_location_heatmap(df2, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name))
 
     if "Touch Map (Scatter)" in charts_to_include:
-        figs.append(("touch_map", touch_map(
+        _safe_add("touch_map", lambda: touch_map(
             df2,
             pitch_mode=pitch_mode,
             pitch_width=pitch_width,
@@ -1174,24 +1219,23 @@ def build_report_from_prepared_df(
             dot_size=touch_dot_size,
             alpha=touch_alpha,
             marker=touch_marker,
-        )))
+        ))
 
     if "Pass Map" in charts_to_include:
-        figs.append(("pass_map", pass_map(
+        _safe_add("pass_map", lambda: pass_map(
             df2,
             pass_colors=pass_colors,
             pass_markers=pass_markers,
             pitch_mode=pitch_mode,
             pitch_width=pitch_width,
             theme_name=theme_name,
-            # ✅ NEW: pass map filters from app
             pass_view=pass_view,
             result_scope=pass_result_scope,
             min_packing=pass_min_packing,
-        )))
+        ))
 
     if "Shot Map" in charts_to_include:
-        figs.append(("shot_map", shot_map(
+        _safe_add("shot_map", lambda: shot_map(
             df2,
             shot_colors=shot_colors,
             shot_markers=shot_markers,
@@ -1199,7 +1243,7 @@ def build_report_from_prepared_df(
             pitch_width=pitch_width,
             show_xg=True,
             theme_name=theme_name
-        )))
+        ))
 
     pngs = []
     with PdfPages(pdf_path) as pdf:
@@ -1230,7 +1274,7 @@ def build_report_from_prepared_df(
 
 
 # ----------------------------
-# Shot detail card (unchanged from you except legends handled by UI)
+# Shot detail card
 # ----------------------------
 def shot_detail_card(
     df_prepared: pd.DataFrame,
@@ -1342,7 +1386,7 @@ def shot_detail_card(
 
 
 # ----------------------------
-# Pizza chart (unchanged)
+# Pizza chart
 # ----------------------------
 def pizza_chart(
     df_pizza: pd.DataFrame,
