@@ -649,96 +649,41 @@ def add_pass_tags(
     line_breaking = attempt & (packing_proxy >= 1)
 
     # ----------------------------
-    # Progressive pass
-    # Priority:
-    # 1) If file has a column (progressive_pass / progressive / is_progressive) -> use YES only
-    # 2) else fallback: forward gain >= 10 meters (x2 - x)
+        # ----------------------------
+    # Progressive pass (MANUAL ONLY)
+    # Uses ONLY column in file:
+    # progressive_pass / progressive / is_progressive
+    # YES -> True | NO/empty -> False
+    # No automatic calculation
     # ----------------------------
-   # ----------------------------
-# ----------------------------
-# Progressive pass (MANUAL ONLY)
-# Uses ONLY column in file:
-# progressive_pass / progressive / is_progressive
-# YES -> True
-# NO / empty -> False
-# No automatic calculation
-# ----------------------------
+    manual_col = None
+    for cand in ["progressive_pass", "progressive", "is_progressive"]:
+        if cand in p.columns:
+            manual_col = cand
+            break
 
-manual_col = None
-for cand in ["progressive_pass", "progressive", "is_progressive"]:
-    if cand in p.columns:
-        manual_col = cand
-        break
+    if manual_col is not None:
+        progressive = attempt & _yes_only(p[manual_col])
+    else:
+        progressive = attempt & False
+    idx = p.index
+    df.loc[idx, "is_pass_attempt"] = attempt.values
+    df.loc[idx, "is_pass_successful"] = success.values
+    df.loc[idx, "is_pass_unsuccessful"] = unsuccess.values
+    df.loc[idx, "into_final_third"] = into_final_third.values
+    df.loc[idx, "into_penalty_box"] = into_box.values
+    df.loc[idx, "packing_proxy"] = packing_proxy.astype(int).values
+    df.loc[idx, "line_breaking"] = line_breaking.values
+    df.loc[idx, "progressive_pass"] = progressive.values
 
-if manual_col is not None:
-    progressive = attempt & _yes_only(p[manual_col])
-else:
-    # لو مفيش عمود progressive في الملف: كله False
-    progressive = attempt & False
+    nonp = df["event_type"] != "pass"
+    df.loc[nonp, ["is_pass_attempt", "is_pass_successful", "is_pass_unsuccessful",
+                  "into_final_third", "into_penalty_box", "line_breaking"]] = False
+    df.loc[nonp, "packing_proxy"] = 0
 
-
-# ✅ write back to df (OUTSIDE if/else)
-idx = p.index
-df.loc[idx, "is_pass_attempt"] = attempt.values
-df.loc[idx, "is_pass_successful"] = success.values
-df.loc[idx, "is_pass_unsuccessful"] = unsuccess.values
-df.loc[idx, "into_final_third"] = into_final_third.values
-df.loc[idx, "into_penalty_box"] = into_box.values
-df.loc[idx, "packing_proxy"] = packing_proxy.astype(int).values
-df.loc[idx, "line_breaking"] = line_breaking.values
-df.loc[idx, "progressive_pass"] = progressive.values
-
-
-# Fill non-pass rows defaults
-nonp = df["event_type"] != "pass"
-df.loc[nonp, ["is_pass_attempt", "is_pass_successful", "is_pass_unsuccessful",
-              "into_final_third", "into_penalty_box", "line_breaking"]] = False
-df.loc[nonp, "packing_proxy"] = 0
-
-return df
-# ----------------------------
-# Progressive pass (MANUAL ONLY)
-# Uses ONLY column in file:
-# progressive_pass / progressive / is_progressive
-# YES -> True
-# NO / empty -> False
-# No automatic calculation
-# ----------------------------
-
-manual_col = None
-for cand in ["progressive_pass", "progressive", "is_progressive"]:
-    if cand in p.columns:
-        manual_col = cand
-        break
-
-if manual_col is not None:
-    progressive = attempt & _yes_only(p[manual_col])
-else:
-    # لو مفيش عمود progressive في الملف: كله False
-    progressive = attempt & False
-
-
-# ✅ write back to df (OUTSIDE if/else)
-idx = p.index
-df.loc[idx, "is_pass_attempt"] = attempt.values
-df.loc[idx, "is_pass_successful"] = success.values
-df.loc[idx, "is_pass_unsuccessful"] = unsuccess.values
-df.loc[idx, "into_final_third"] = into_final_third.values
-df.loc[idx, "into_penalty_box"] = into_box.values
-df.loc[idx, "packing_proxy"] = packing_proxy.astype(int).values
-df.loc[idx, "line_breaking"] = line_breaking.values
-df.loc[idx, "progressive_pass"] = progressive.values
-
-
-# Fill non-pass rows defaults
-nonp = df["event_type"] != "pass"
-df.loc[nonp, ["is_pass_attempt", "is_pass_successful", "is_pass_unsuccessful",
-              "into_final_third", "into_penalty_box", "line_breaking"]] = False
-df.loc[nonp, "packing_proxy"] = 0
-
-return df
-
-
+    return df
+        
+    
 
 # ----------------------------
 # Prepare df for charts
