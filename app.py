@@ -237,7 +237,7 @@ with st.expander("🎛️ Settings", expanded=True):
     st.markdown("### Pass Map Filters (NEW)")
     pass_view = st.selectbox(
         "Pass map view",
-        ["All passes", "Into Final Third", "Into Penalty Box", "Line-breaking (proxy)"],
+        ["All passes", "Into Final Third", "Into Penalty Box", "Line-breaking (proxy)", "Progressive Passes"],
         index=0
     )
     pass_scope = st.selectbox(
