@@ -13,33 +13,6 @@ from matplotlib.patches import Patch
 
 from mplsoccer import Pitch, PyPizza
 
-
-# ✅ Helper: YES only (NO/empty = False)
-def _yes_only(s: pd.Series) -> pd.Series:
-    """
-    YES -> True
-    NO / Empty / NaN -> False
-    Accepts: yes/no, y/n, true/false, 1/0, arabic نعم/لا
-    Anything else -> False (safe default)
-    """
-    if s is None:
-        return pd.Series(dtype=bool)
-
-    x = s.copy()
-    x = x.replace("", np.nan)
-    x = x.fillna(False)
-
-    # numeric: only 1 counts as yes
-    if pd.api.types.is_numeric_dtype(x):
-        return (pd.to_numeric(x, errors="coerce").fillna(0) == 1)
-
-    xs = x.astype(str).str.strip().str.lower()
-    true_vals = {"yes", "y", "true", "t", "1", "نعم"}
-
-    return xs.map(lambda v: True if v in true_vals else False).astype(bool)
-
-    from mplsoccer import Pitch, PyPizza
-
 # ✅ Helper: YES only (NO/empty = False)
 def _yes_only(s: pd.Series) -> pd.Series:
     """
@@ -556,7 +529,7 @@ def add_pass_tags(
 ) -> pd.DataFrame:
     df = df_prepared.copy()
 
-    for col in ["into_final_third", "into_penalty_box", "line_breaking", "packing_proxy",
+    for col in ["into_final_third", "into_penalty_box", "line_breaking", "packing_proxy", "progressive_pass",
                 "is_pass_attempt", "is_pass_successful", "is_pass_unsuccessful"]:
         if col not in df.columns:
             df[col] = pd.NA
@@ -570,7 +543,7 @@ def add_pass_tags(
     if not need_end:
         # no end coords -> cannot compute tags
         df.loc[df["event_type"] == "pass", ["is_pass_attempt", "is_pass_successful", "is_pass_unsuccessful"]] = False
-        df.loc[df["event_type"] == "pass", ["into_final_third", "into_penalty_box", "line_breaking"]] = False
+        df.loc[df["event_type"] == "pass", ["into_final_third", "into_penalty_box", "line_breaking", "progressive_pass"]] = False
         df.loc[df["event_type"] == "pass", "packing_proxy"] = 0
         return df
 
@@ -617,6 +590,25 @@ def add_pass_tags(
     # line breaking yes/no (>=1)
     line_breaking = attempt & (packing_proxy >= 1)
 
+    # ----------------------------
+    # Progressive pass
+    # Priority:
+    # 1) If file has a column (progressive_pass / progressive / is_progressive) -> use YES only
+    # 2) else fallback: forward gain >= 10 meters (x2 - x)
+    # ----------------------------
+    progressive = None
+    for cand in ["progressive_pass", "progressive", "is_progressive"]:
+        if cand in p.columns:
+            progressive = attempt & _yes_only(p[cand])
+            break
+
+    if progressive is None:
+        # fallback using forward distance in meters (x is 0-100)
+        x1m = (pd.to_numeric(p["x"], errors="coerce") / 100.0) * 105.0
+        x2m = (pd.to_numeric(p["x2"], errors="coerce") / 100.0) * 105.0
+        progressive = attempt & ((x2m - x1m).fillna(0.0) >= 10.0)
+
+    
     # write back to df
     idx = p.index
     df.loc[idx, "is_pass_attempt"] = attempt.values
@@ -626,7 +618,9 @@ def add_pass_tags(
     df.loc[idx, "into_penalty_box"] = into_box.values
     df.loc[idx, "packing_proxy"] = packing_proxy.astype(int).values
     df.loc[idx, "line_breaking"] = line_breaking.values
+    df.loc[idx, "progressive_pass"] = progressive.values
 
+    
     # Fill non-pass rows defaults
     nonp = df["event_type"] != "pass"
     df.loc[nonp, ["is_pass_attempt", "is_pass_successful", "is_pass_unsuccessful",
