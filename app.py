@@ -87,12 +87,20 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
         "complete": "successful",
         "completed": "successful",
         "successfull": "successful",
+        "accurate": "successful",
+        "true": "successful",
+        "yes": "successful",
+        "1": "successful",
 
         "unsuccessful": "unsuccessful",
         "unsuccess": "unsuccessful",
         "incomplete": "unsuccessful",
         "failed": "unsuccessful",
         "unsuccessfull": "unsuccessful",
+        "inaccurate": "unsuccessful",
+        "false": "unsuccessful",
+        "no": "unsuccessful",
+        "0": "unsuccessful",
 
         "key pass": "key pass",
         "keypass": "key pass",
@@ -109,26 +117,6 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
         "received": "touch",
     }
 
-    out["outcome"] = s.map(lambda v: mapping.get(v, v))
-    return out
-
-
-def normalize_pass_outcomes(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    if "outcome" not in out.columns:
-        return out
-
-    s = out["outcome"].astype(str).str.strip().str.lower()
-    mapping = {
-        "accurate": "successful",
-        "inaccurate": "unsuccessful",
-        "accurate pass": "successful",
-        "inaccurate pass": "unsuccessful",
-        "successfull": "successful",
-        "unsuccessfull": "unsuccessful",
-        "successful pass": "successful",
-        "unsuccessful pass": "unsuccessful",
-    }
     out["outcome"] = s.map(lambda v: mapping.get(v, v))
     return out
 
@@ -157,8 +145,24 @@ def build_pizza_df(players_df: pd.DataFrame, player_col: str, player_name: str, 
     return pd.DataFrame(out)
 
 
+def _lower_cols(df: pd.DataFrame) -> set[str]:
+    return set([c.strip().lower() for c in df.columns])
+
+
+def _missing_for_chart(df_cols_lower: set[str], required_cols: list[str]) -> list[str]:
+    miss = []
+    for c in required_cols:
+        c0 = c.strip().lower()
+        # ignore optional labels
+        if c0.startswith("(optional"):
+            continue
+        if c0 not in df_cols_lower:
+            miss.append(c)
+    return miss
+
+
 # -----------------------------
-# Chart requirements (shown in UI)
+# Requirements shown in UI + used for pre-check
 # -----------------------------
 CHART_REQUIREMENTS = {
     "Outcome Bar": ["outcome"],
@@ -225,9 +229,23 @@ with st.expander("🎛️ Settings", expanded=True):
     selected_charts = st.multiselect("Choose charts", all_charts, default=all_charts)
 
     if selected_charts:
-        with st.expander("📌 Required columns for selected charts", expanded=False):
+        with st.expander("📌 Required columns for selected charts (pre-check before generate)", expanded=False):
             for ch in selected_charts:
                 st.write(f"**{ch}** → " + ", ".join(CHART_REQUIREMENTS.get(ch, [])))
+
+    st.markdown("---")
+    st.markdown("### Pass Map Filters (NEW)")
+    pass_view = st.selectbox(
+        "Pass map view",
+        ["All passes", "Into Final Third", "Into Penalty Box", "Line-breaking (proxy)"],
+        index=0
+    )
+    pass_scope = st.selectbox(
+        "Pass result scope",
+        ["Attempts (all)", "Successful only", "Unsuccessful only"],
+        index=0
+    )
+    pass_min_packing = st.slider("Min packing (proxy) for Line-breaking", 1, 3, 1)
 
     st.markdown("---")
 
@@ -289,6 +307,7 @@ with st.expander("🎛️ Settings", expanded=True):
     touch_dot_edge = st.color_picker("Touch edge color", "#0B0F14")
     touch_dot_size = st.slider("Touch dot size", 60, 520, 220)
     touch_alpha = st.slider("Touch alpha", 20, 100, 95) / 100.0
+
 
 pass_colors = {
     "successful": col_pass_success,
@@ -436,7 +455,26 @@ if uploaded:
             st.warning("Column `outcome` not found. Trying to derive it automatically.")
         df_raw = ensure_outcome_column(df_raw)
         df_raw = normalize_outcome_values(df_raw)
-        df_raw = normalize_pass_outcomes(df_raw)
+
+        # -----------------------------
+        # PRE-CHECK: required columns for selected charts BEFORE generating
+        # -----------------------------
+        cols_lower = _lower_cols(df_raw)
+        missing_by_chart = {}
+        for ch in selected_charts:
+            req = CHART_REQUIREMENTS.get(ch, [])
+            miss = _missing_for_chart(cols_lower, req)
+            if miss:
+                missing_by_chart[ch] = miss
+
+        if missing_by_chart:
+            st.error("❌ Missing required columns for selected charts (fix file or unselect chart):")
+            for ch, miss in missing_by_chart.items():
+                st.write(f"**{ch}** missing → {', '.join(miss)}")
+        else:
+            st.success("✅ All required columns exist for selected charts.")
+
+        can_generate_report = (len(missing_by_chart) == 0)
 
         # Model load
         model_pipe = None
@@ -452,26 +490,33 @@ if uploaded:
                 st.warning("Model file not found. Falling back to Zone.")
                 model_pipe = None
 
-        df2 = prepare_df_for_charts(
-            df_raw,
-            attack_direction=attack_dir,
-            flip_y=flip_y,
-            pitch_mode=pitch_mode,
-            pitch_width=pitch_width,
-            xg_method=xg_method,
-            model_pipe=model_pipe,
-        )
+        # Only prepare df if we can generate OR if user in Shot Card mode (still needs x,y,outcome)
+        df2 = None
+        if can_generate_report or mode == "Shot Detail Card":
+            df2 = prepare_df_for_charts(
+                df_raw,
+                attack_direction=attack_dir,
+                flip_y=flip_y,
+                pitch_mode=pitch_mode,
+                pitch_width=pitch_width,
+                xg_method=xg_method,
+                model_pipe=model_pipe,
+            )
 
-        st.success(f"Prepared ✅ rows: {len(df2)}")
-        if "xg_source" in df2.columns and len(df2):
-            st.info(f"xG source used: **{df2['xg_source'].iloc[0]}**")
+            st.success(f"Prepared ✅ rows: {len(df2)}")
+            if "xg_source" in df2.columns and len(df2):
+                st.info(f"xG source used: **{df2['xg_source'].iloc[0]}**")
 
-        with st.expander("Preview prepared data (first 25 rows)"):
-            st.write("Prepared columns:", list(df2.columns))
-            st.dataframe(df2.head(25), use_container_width=True)
+            with st.expander("Preview prepared data (first 25 rows)"):
+                st.write("Prepared columns:", list(df2.columns))
+                st.dataframe(df2.head(25), use_container_width=True)
 
         # ---------- Shot Detail Card ----------
         if mode == "Shot Detail Card":
+            if df2 is None:
+                st.error("Cannot prepare data for Shot Detail Card. Check required columns: outcome,x,y")
+                st.stop()
+
             shots_only = df2[df2["event_type"] == "shot"].copy().reset_index(drop=True)
             if shots_only.empty:
                 st.error("No shots found in this file.")
@@ -514,7 +559,11 @@ if uploaded:
             st.stop()
 
         # ---------- Report ----------
-        if st.button("Generate Report"):
+        generate_clicked = st.button("Generate Report", disabled=not can_generate_report)
+        if not can_generate_report:
+            st.info("Generate Report is disabled until required columns exist for all selected charts.")
+
+        if generate_clicked:
             out_dir = os.path.join(tmp, "output")
 
             pdf_path, png_paths = build_report_from_prepared_df(
@@ -535,16 +584,21 @@ if uploaded:
                 pitch_mode=pitch_mode,
                 pitch_width=pitch_width,
                 pass_colors=pass_colors,
-                pass_markers=pass_markers,           # ✅ shapes for passes (start)
+                pass_markers=pass_markers,
                 shot_colors=shot_colors,
-                shot_markers=shot_markers,           # ✅ shapes for shots
+                shot_markers=shot_markers,
                 bar_colors=bar_colors,
-                charts_to_include=selected_charts,   # ✅ choose charts
-                touch_dot_color=touch_dot_color,     # ✅ touch map style
+                charts_to_include=selected_charts,
+                touch_dot_color=touch_dot_color,
                 touch_dot_edge=touch_dot_edge,
                 touch_dot_size=touch_dot_size,
                 touch_alpha=touch_alpha,
                 touch_marker=touch_marker,
+
+                # NEW: pass filters
+                pass_view=pass_view,
+                pass_result_scope=pass_scope,
+                pass_min_packing=pass_min_packing,
             )
 
             st.subheader("Preview")
