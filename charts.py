@@ -1,13 +1,15 @@
 import os
 import re
 import math
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Tuple
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.gridspec as gridspec
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 from mplsoccer import Pitch, PyPizza
 
@@ -50,36 +52,72 @@ THEMES = {
 }
 
 
+# ----------------------------
+# Outcome normalization (strong)
+# ----------------------------
 def _norm_outcome(s: Any) -> str:
     if s is None or (isinstance(s, float) and pd.isna(s)):
         return ""
     s = str(s).strip().lower()
+
+    # remove leading numbers like "1ontarget"
     s = re.sub(r"^\d+", "", s).strip()
+
+    # normalize separators/spaces
     s = s.replace("_", " ").replace("-", " ")
-    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+
+    # common suffix
+    if s.endswith(" pass"):
+        s = s.replace(" pass", "").strip()
 
     aliases = {
         # shots
         "on target": "ontarget",
+        "shot on target": "ontarget",
+        "sot": "ontarget",
+        "saved": "ontarget",
         "ontarget": "ontarget",
+
         "offtarget": "off target",
         "off target": "off target",
+        "shot off target": "off target",
+        "wide": "off target",
+        "miss": "off target",
+
+        "goal": "goal",
+        "scored": "goal",
+
         "block": "blocked",
+        "blocked": "blocked",
         "blocked shot": "blocked",
         "blk": "blocked",
 
         # passes
         "keypass": "key pass",
         "key pass": "key pass",
+        "kp": "key pass",
         "assist": "assist",
+
+        # success/fail variants
         "successful": "successful",
-        "unsuccessful": "unsuccessful",
-        "unsucssesful": "unsuccessful",
-        "unsuccessfull": "unsuccessful",
-        "un successful": "unsuccessful",
-        "un-successful": "unsuccessful",
+        "success": "successful",
+        "completed": "successful",
+        "complete": "successful",
         "accurate": "successful",
+        "true": "successful",
+        "yes": "successful",
+        "1": "successful",
+
+        "unsuccessful": "unsuccessful",
+        "unsuccess": "unsuccessful",
+        "failed": "unsuccessful",
+        "fail": "unsuccessful",
+        "incomplete": "unsuccessful",
         "inaccurate": "unsuccessful",
+        "false": "unsuccessful",
+        "no": "unsuccessful",
+        "0": "unsuccessful",
 
         # touch
         "touch": "touch",
@@ -91,6 +129,9 @@ def _norm_outcome(s: Any) -> str:
     return aliases.get(s, s)
 
 
+# ----------------------------
+# IO
+# ----------------------------
 def load_data(path: str) -> pd.DataFrame:
     ext = os.path.splitext(path)[1].lower()
     if ext == ".csv":
@@ -100,7 +141,6 @@ def load_data(path: str) -> pd.DataFrame:
                 return pd.read_csv(path, encoding=enc)
             except Exception:
                 pass
-        # بعض نسخ pandas القديمة ما فيها encoding_errors
         try:
             return pd.read_csv(path, encoding="latin1", encoding_errors="replace")
         except TypeError:
@@ -110,6 +150,9 @@ def load_data(path: str) -> pd.DataFrame:
     raise ValueError("Unsupported file type. Use CSV or Excel.")
 
 
+# ----------------------------
+# Validate & Clean
+# ----------------------------
 def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [c.strip() for c in df.columns]
@@ -145,6 +188,7 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df_touch = df[df["outcome"] == "touch"].copy()
 
     if not df_pass.empty:
+        # allow only pass outcomes; BUT keep unknown? We'll strictly keep PASS_ORDER.
         df_pass = df_pass[df_pass["outcome"].isin(PASS_ORDER)]
     if not df_shot.empty:
         df_shot = df_shot[df_shot["outcome"].isin(SHOT_ORDER)]
@@ -156,6 +200,9 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# ----------------------------
+# Pitch transforms
+# ----------------------------
 def apply_pitch_transforms(
     df: pd.DataFrame,
     attack_direction: str = "ltr",
@@ -196,6 +243,9 @@ def _goal_mouth_bounds(pitch_mode: str = "rect", pitch_width: float = 64.0):
     return gy - goal_mouth / 2.0, gy + goal_mouth / 2.0
 
 
+# ----------------------------
+# xG (Zone)
+# ----------------------------
 def _shot_angle_radians(x: float, y: float, pitch_mode: str, pitch_width: float) -> float:
     goal_x = 100.0
     goal_y = (pitch_width / 2.0) if pitch_mode == "rect" else 50.0
@@ -272,6 +322,9 @@ def estimate_xg_zone(df: pd.DataFrame, pitch_mode: str = "rect", pitch_width: fl
     return df
 
 
+# ----------------------------
+# xG Model (optional)
+# ----------------------------
 MODEL_FEATURE_COLS = [
     "x", "y",
     "Assisted", "IndividualPlay", "RegularPlay",
@@ -385,6 +438,9 @@ def estimate_xg_model(
         return df
 
 
+# ----------------------------
+# Shot end location fix (Opta-ish)
+# ----------------------------
 def fix_shot_end_location(df: pd.DataFrame, pitch_mode: str = "rect", pitch_width: float = 64.0) -> pd.DataFrame:
     df = df.copy()
     if "x2" not in df.columns:
@@ -433,6 +489,104 @@ def fix_shot_end_location(df: pd.DataFrame, pitch_mode: str = "rect", pitch_widt
     return df
 
 
+# ----------------------------
+# Pass tagging: into final third / box / line-breaking / packing proxy
+# ----------------------------
+def _pass_success_mask(outcome_series: pd.Series) -> pd.Series:
+    s = outcome_series.astype(str).str.lower()
+    return s.isin(["successful", "key pass", "assist"])
+
+
+def add_pass_tags(
+    df_prepared: pd.DataFrame,
+    pitch_mode: str = "rect",
+    pitch_width: float = 64.0
+) -> pd.DataFrame:
+    df = df_prepared.copy()
+
+    for col in ["into_final_third", "into_penalty_box", "line_breaking", "packing_proxy",
+                "is_pass_attempt", "is_pass_successful", "is_pass_unsuccessful"]:
+        if col not in df.columns:
+            df[col] = pd.NA
+
+    p = df[df["event_type"] == "pass"].copy()
+    if p.empty:
+        return df
+
+    # attempt definition: needs x2,y2 present AND valid outcome in PASS_ORDER
+    need_end = ("x2" in p.columns and "y2" in p.columns)
+    if not need_end:
+        # no end coords -> cannot compute tags
+        df.loc[df["event_type"] == "pass", ["is_pass_attempt", "is_pass_successful", "is_pass_unsuccessful"]] = False
+        df.loc[df["event_type"] == "pass", ["into_final_third", "into_penalty_box", "line_breaking"]] = False
+        df.loc[df["event_type"] == "pass", "packing_proxy"] = 0
+        return df
+
+    p["x2"] = pd.to_numeric(p["x2"], errors="coerce")
+    p["y2"] = pd.to_numeric(p["y2"], errors="coerce")
+
+    attempt = p["x2"].notna() & p["y2"].notna() & p["outcome"].isin(PASS_ORDER)
+    success = attempt & _pass_success_mask(p["outcome"])
+    unsuccess = attempt & (p["outcome"].astype(str).str.lower() == "unsuccessful")
+
+    # Final third threshold on x2 (0-100)
+    final_third_thr = 66.6667
+    into_final_third = attempt & (p["x2"] >= final_third_thr)
+
+    # Penalty box bounds (0-100 x, y scaled by pitch_mode)
+    y_max = pitch_width if pitch_mode == "rect" else 100.0
+    # Approx box in 0-100 coords: length 16.5/105 ~ 0.157 -> start at ~84.3
+    box_x_min = 100.0 * (1.0 - (16.5 / 105.0))  # ~84.2857
+    # Box width 40.3/68 ~ 0.5926 => half width ~0.2963 of width
+    # Centerline is y_max/2, box spans +/- (40.3/68)/2
+    half_box = (40.3 / 68.0) * (y_max / 2.0)  # (y_max * 0.2963)
+    box_y_min = (y_max / 2.0) - half_box
+    box_y_max = (y_max / 2.0) + half_box
+
+    into_box = attempt & (p["x2"] >= box_x_min) & (p["y2"] >= box_y_min) & (p["y2"] <= box_y_max)
+
+    # Line-breaking proxy: count how many longitudinal bands crossed (by x)
+    # Bands: [0-33.3), [33.3-66.7), [66.7-83.0), [83.0-100]
+    def band(xv: float) -> int:
+        if pd.isna(xv):
+            return -1
+        if xv < 33.3333:
+            return 0
+        if xv < 66.6667:
+            return 1
+        if xv < 83.0:
+            return 2
+        return 3
+
+    x1_band = p["x"].apply(band)
+    x2_band = p["x2"].apply(band)
+    packing_proxy = (x2_band - x1_band).clip(lower=0)
+
+    # line breaking yes/no (>=1)
+    line_breaking = attempt & (packing_proxy >= 1)
+
+    # write back to df
+    idx = p.index
+    df.loc[idx, "is_pass_attempt"] = attempt.values
+    df.loc[idx, "is_pass_successful"] = success.values
+    df.loc[idx, "is_pass_unsuccessful"] = unsuccess.values
+    df.loc[idx, "into_final_third"] = into_final_third.values
+    df.loc[idx, "into_penalty_box"] = into_box.values
+    df.loc[idx, "packing_proxy"] = packing_proxy.astype(int).values
+    df.loc[idx, "line_breaking"] = line_breaking.values
+
+    # Fill non-pass rows defaults
+    nonp = df["event_type"] != "pass"
+    df.loc[nonp, ["is_pass_attempt", "is_pass_successful", "is_pass_unsuccessful",
+                  "into_final_third", "into_penalty_box", "line_breaking"]] = False
+    df.loc[nonp, "packing_proxy"] = 0
+
+    return df
+
+
+# ----------------------------
+# Prepare df for charts
+# ----------------------------
 def prepare_df_for_charts(
     df_raw: pd.DataFrame,
     attack_direction: str = "ltr",
@@ -461,9 +615,15 @@ def prepare_df_for_charts(
             df["xg"] = pd.to_numeric(df["xg_zone"], errors="coerce")
             df["xg_source"] = "zone (fallback)"
 
+    # add pass tags AFTER transforms (so thresholds work with flipped direction)
+    df = add_pass_tags(df, pitch_mode=pitch_mode, pitch_width=pitch_width)
+
     return df
 
 
+# ----------------------------
+# Theming helpers
+# ----------------------------
 def _apply_fig_theme(fig, ax, theme: dict):
     fig.patch.set_facecolor(theme["bg"])
     ax.set_facecolor(theme["panel"])
@@ -474,6 +634,24 @@ def _draw_pitch(ax, pitch: Pitch, theme: dict):
     ax.set_facecolor(theme["pitch"])
 
 
+def _add_legend(ax, handles, theme: dict, loc: str = "lower center"):
+    if not handles:
+        return
+    leg = ax.legend(
+        handles=handles,
+        loc=loc,
+        bbox_to_anchor=(0.5, -0.02),
+        ncol=min(4, len(handles)),
+        frameon=False,
+        fontsize=9
+    )
+    for t in leg.get_texts():
+        t.set_color(theme.get("text", "white"))
+
+
+# ----------------------------
+# Header for PDF charts
+# ----------------------------
 def add_report_header(
     fig,
     title: str = "",
@@ -541,6 +719,9 @@ def add_report_header(
         return
 
 
+# ----------------------------
+# Charts
+# ----------------------------
 def outcome_bar(df: pd.DataFrame, bar_colors: Optional[dict] = None, theme_name: str = "The Athletic Dark"):
     bar_colors = bar_colors or {}
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
@@ -560,6 +741,11 @@ def outcome_bar(df: pd.DataFrame, bar_colors: Optional[dict] = None, theme_name:
     ax.tick_params(axis="y", colors=theme["muted"])
     for spine in ax.spines.values():
         spine.set_color(theme["lines"])
+
+    # legend for bar = categories
+    handles = [Patch(facecolor=bar_colors.get(k, fallback), label=k) for k in labels[:8]]
+    _add_legend(ax, handles, theme, loc="upper center")
+
     return fig
 
 
@@ -578,6 +764,10 @@ def start_location_heatmap(df: pd.DataFrame, pitch_mode: str = "rect", pitch_wid
     ax.set_title("Start Locations Heatmap", color=theme["text"])
     ax.set_xlim(-2, 102)
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
+
+    handles = [Patch(facecolor=theme.get("muted", "#A0A7B4"), label="Density / Events")]
+    _add_legend(ax, handles, theme, loc="upper center")
+
     return fig
 
 
@@ -627,7 +817,44 @@ def touch_map(
     ax.set_title("Touch Map", color=theme["text"], fontsize=18, weight="bold")
     ax.set_xlim(-2, 102)
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
+
+    handles = [Line2D([0], [0], marker=marker, color="none", markerfacecolor=dot_color,
+                      markeredgecolor=edge_color, markersize=10, label="Touches")]
+    _add_legend(ax, handles, theme, loc="upper center")
+
     return fig
+
+
+def _filter_passes_for_map(
+    d: pd.DataFrame,
+    pass_view: str = "All passes",
+    result_scope: str = "Attempts (all)",
+    min_packing: int = 1
+) -> pd.DataFrame:
+    dd = d.copy()
+
+    # base attempt filter: must have end coords
+    dd = dd.dropna(subset=["x2", "y2"]).copy()
+
+    view = (pass_view or "All passes").lower().strip()
+    if "final third" in view:
+        dd = dd[dd.get("into_final_third", False) == True].copy()
+    elif "penalty box" in view or "penalty" in view or "box" in view:
+        dd = dd[dd.get("into_penalty_box", False) == True].copy()
+    elif "line" in view or "breaking" in view:
+        dd = dd[dd.get("packing_proxy", 0).astype(int) >= int(min_packing)].copy()
+
+    scope = (result_scope or "Attempts (all)").lower().strip()
+    if "successful" in scope:
+        dd = dd[dd.get("is_pass_successful", False) == True].copy()
+    elif "unsuccessful" in scope or "failed" in scope:
+        dd = dd[dd.get("is_pass_unsuccessful", False) == True].copy()
+    else:
+        # Attempts (all): allow both, but still ensure it's a pass attempt
+        if "is_pass_attempt" in dd.columns:
+            dd = dd[dd["is_pass_attempt"] == True].copy()
+
+    return dd
 
 
 def pass_map(
@@ -636,7 +863,10 @@ def pass_map(
     pass_markers: Optional[dict] = None,
     pitch_mode: str = "rect",
     pitch_width: float = 64.0,
-    theme_name: str = "The Athletic Dark"
+    theme_name: str = "The Athletic Dark",
+    pass_view: str = "All passes",
+    result_scope: str = "Attempts (all)",
+    min_packing: int = 1,
 ):
     pass_colors = pass_colors or {}
     pass_markers = pass_markers or {}
@@ -644,15 +874,21 @@ def pass_map(
 
     d = df[df["event_type"] == "pass"].copy()
     if not {"x2", "y2"}.issubset(d.columns):
-        d["x2"] = pd.NA
-        d["y2"] = pd.NA
-    d = d.dropna(subset=["x2", "y2"])
+        raise ValueError("Pass Map يحتاج أعمدة: outcome,x,y,x2,y2")
+
+    d["x2"] = pd.to_numeric(d["x2"], errors="coerce")
+    d["y2"] = pd.to_numeric(d["y2"], errors="coerce")
+
+    d = _filter_passes_for_map(d, pass_view=pass_view, result_scope=result_scope, min_packing=min_packing)
+    if d.empty:
+        raise ValueError("No passes match selected filters (pass view / scope).")
 
     pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width)
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
 
+    # draw by pass outcome types (for coloring/markers)
     for t in PASS_ORDER:
         dt = d[d["outcome"] == t]
         if len(dt) == 0:
@@ -661,7 +897,7 @@ def pass_map(
         pitch.arrows(
             dt["x"], dt["y"], dt["x2"], dt["y2"],
             ax=ax, width=2, alpha=0.85,
-            color=pass_colors.get(t, None)
+            color=pass_colors.get(t, theme.get("muted", "#A0A7B4"))
         )
 
         mk = pass_markers.get(t, "o")
@@ -670,16 +906,31 @@ def pass_map(
             ax=ax,
             s=90,
             marker=mk,
-            color=pass_colors.get(t, None),
+            color=pass_colors.get(t, theme.get("muted", "#A0A7B4")),
             edgecolors="white",
             linewidth=1.2,
             alpha=0.95,
             zorder=6
         )
 
-    ax.set_title("Pass Map", color=theme["text"])
+    title = f"Pass Map — {pass_view} — {result_scope}"
+    if "line" in (pass_view or "").lower():
+        title += f" (min packing {int(min_packing)})"
+    ax.set_title(title, color=theme["text"])
     ax.set_xlim(-2, 102)
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
+
+    # legend
+    handles = []
+    for t in PASS_ORDER:
+        if t in pass_colors:
+            mk = pass_markers.get(t, "o")
+            handles.append(Line2D([0], [0], marker=mk, color="none",
+                                  markerfacecolor=pass_colors.get(t),
+                                  markeredgecolor="white",
+                                  markersize=8, label=t))
+    _add_legend(ax, handles, theme, loc="upper center")
+
     return fig
 
 
@@ -713,7 +964,7 @@ def shot_map(
             ax=ax,
             s=160,
             marker=mk,
-            color=shot_colors.get(t, None),
+            color=shot_colors.get(t, theme.get("muted", "#A0A7B4")),
             edgecolors="white",
             linewidth=1.6,
             alpha=0.95,
@@ -732,9 +983,23 @@ def shot_map(
     ax.set_title(("Shot Map — xG: %s" % xg_src).strip(), color=theme["text"])
     ax.set_xlim(-2, 102)
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
+
+    handles = []
+    for t in SHOT_ORDER:
+        if t in shot_colors:
+            mk = shot_markers.get(t, "o")
+            handles.append(Line2D([0], [0], marker=mk, color="none",
+                                  markerfacecolor=shot_colors.get(t),
+                                  markeredgecolor="white",
+                                  markersize=8, label=t))
+    _add_legend(ax, handles, theme, loc="upper center")
+
     return fig
 
 
+# ----------------------------
+# Report builder
+# ----------------------------
 def build_report_from_prepared_df(
     df_prepared: pd.DataFrame,
     out_dir: str,
@@ -763,6 +1028,10 @@ def build_report_from_prepared_df(
     touch_dot_size: int = 220,
     touch_alpha: float = 0.95,
     touch_marker: str = "o",
+    # NEW: pass map filters
+    pass_view: str = "All passes",
+    pass_result_scope: str = "Attempts (all)",
+    pass_min_packing: int = 1,
 ):
     os.makedirs(out_dir, exist_ok=True)
     pdf_path = os.path.join(out_dir, "report.pdf")
@@ -798,7 +1067,10 @@ def build_report_from_prepared_df(
             pass_markers=pass_markers,
             pitch_mode=pitch_mode,
             pitch_width=pitch_width,
-            theme_name=theme_name
+            theme_name=theme_name,
+            pass_view=pass_view,
+            result_scope=pass_result_scope,
+            min_packing=pass_min_packing,
         )))
 
     if "Shot Map" in charts_to_include:
@@ -840,6 +1112,9 @@ def build_report_from_prepared_df(
     return pdf_path, pngs
 
 
+# ----------------------------
+# Shot detail card (unchanged from you except legends handled by UI)
+# ----------------------------
 def shot_detail_card(
     df_prepared: pd.DataFrame,
     shot_index: int,
@@ -949,6 +1224,9 @@ def shot_detail_card(
     return fig, shots
 
 
+# ----------------------------
+# Pizza chart (unchanged)
+# ----------------------------
 def pizza_chart(
     df_pizza: pd.DataFrame,
     title: str = "",
