@@ -889,6 +889,9 @@ def _filter_passes_for_map(
         dd = dd[dd.get("into_penalty_box", False) == True].copy()
     elif "line" in view or "breaking" in view:
         dd = dd[dd.get("packing_proxy", 0).astype(int) >= int(min_packing)].copy()
+    elif "progressive" in view:
+        dd = dd[dd.get("progressive_pass", False) == True].copy()
+    
 
     scope = (result_scope or "Attempts (all)").lower().strip()
     if "successful" in scope:
