@@ -13,6 +13,58 @@ from matplotlib.patches import Patch
 
 from mplsoccer import Pitch, PyPizza
 
+
+# ✅ Helper: YES only (NO/empty = False)
+def _yes_only(s: pd.Series) -> pd.Series:
+    """
+    YES -> True
+    NO / Empty / NaN -> False
+    Accepts: yes/no, y/n, true/false, 1/0, arabic نعم/لا
+    Anything else -> False (safe default)
+    """
+    if s is None:
+        return pd.Series(dtype=bool)
+
+    x = s.copy()
+    x = x.replace("", np.nan)
+    x = x.fillna(False)
+
+    # numeric: only 1 counts as yes
+    if pd.api.types.is_numeric_dtype(x):
+        return (pd.to_numeric(x, errors="coerce").fillna(0) == 1)
+
+    xs = x.astype(str).str.strip().str.lower()
+    true_vals = {"yes", "y", "true", "t", "1", "نعم"}
+
+    return xs.map(lambda v: True if v in true_vals else False).astype(bool)
+
+    from mplsoccer import Pitch, PyPizza
+
+# ✅ Helper: YES only (NO/empty = False)
+def _yes_only(s: pd.Series) -> pd.Series:
+    """
+    YES -> True
+    NO / Empty / NaN -> False
+    Accepts: yes/no, y/n, true/false, 1/0, arabic نعم/لا
+    Anything else -> False (safe default)
+    """
+    if s is None:
+        return pd.Series(dtype=bool)
+
+    x = s.copy()
+    x = x.replace("", np.nan)
+    x = x.fillna(False)
+
+    # numeric: only 1 counts as yes
+    if pd.api.types.is_numeric_dtype(x):
+        return (pd.to_numeric(x, errors="coerce").fillna(0) == 1)
+
+    xs = x.astype(str).str.strip().str.lower()
+    true_vals = {"yes", "y", "true", "t", "1", "نعم"}
+
+    return xs.map(lambda v: True if v in true_vals else False).astype(bool)
+
+
 PASS_ORDER = ["unsuccessful", "successful", "key pass", "assist"]
 SHOT_ORDER = ["off target", "ontarget", "goal", "blocked"]
 SHOT_TYPES = set(SHOT_ORDER)
