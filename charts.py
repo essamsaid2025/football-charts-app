@@ -1028,11 +1028,23 @@ def build_report_from_prepared_df(
     touch_dot_size: int = 220,
     touch_alpha: float = 0.95,
     touch_marker: str = "o",
-    # NEW: pass map filters
-    pass_view: str = "All passes",
-    pass_result_scope: str = "Attempts (all)",
-    pass_min_packing: int = 1,
+    **kwargs,  # ✅ NEW: allow extra args without crashing
 ):
+    """
+    kwargs supported (optional):
+      - pass_view: str
+      - pass_result_scope: str
+      - pass_min_packing: int
+    """
+
+    # ✅ read pass-map filter args safely
+    pass_view = kwargs.get("pass_view", "All passes")
+    pass_result_scope = kwargs.get("pass_result_scope", "Attempts (all)")
+    try:
+        pass_min_packing = int(kwargs.get("pass_min_packing", 1))
+    except Exception:
+        pass_min_packing = 1
+
     os.makedirs(out_dir, exist_ok=True)
     pdf_path = os.path.join(out_dir, "report.pdf")
 
@@ -1068,6 +1080,7 @@ def build_report_from_prepared_df(
             pitch_mode=pitch_mode,
             pitch_width=pitch_width,
             theme_name=theme_name,
+            # ✅ NEW: pass map filters from app
             pass_view=pass_view,
             result_scope=pass_result_scope,
             min_packing=pass_min_packing,
