@@ -657,7 +657,7 @@ def add_pass_tags(
     # No automatic calculation
     # ----------------------------
     manual_col = None
-    for cand in ["progressive_pass", "progressive", "is_progressive"]:
+    for cand in ["progressive_pass", "progressive", "is_progressive", "progressive pass", "Progressive Pass","progressive passes"]:
         if cand in p.columns:
             manual_col = cand
             break
