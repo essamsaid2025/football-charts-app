@@ -17,11 +17,10 @@ from charts import (
     shot_detail_card,
     THEMES,
 )
-import charts
-st.write("charts file:", charts.__file__)
-st.write("THEMES keys:", list(THEMES.keys()))
-st.write("Black Stripe exists:", "Black Stripe" in THEMES)
 
+# =========================================================
+# MUST be first Streamlit call
+# =========================================================
 st.set_page_config(page_title="Football Charts Generator", layout="wide")
 
 st.markdown("## ⚽ Football Charts Generator")
@@ -157,7 +156,6 @@ def _missing_for_chart(df_cols_lower: set[str], required_cols: list[str]) -> lis
     miss = []
     for c in required_cols:
         c0 = c.strip().lower()
-        # ignore optional labels
         if c0.startswith("(optional"):
             continue
         if c0 not in df_cols_lower:
@@ -166,7 +164,7 @@ def _missing_for_chart(df_cols_lower: set[str], required_cols: list[str]) -> lis
 
 
 # -----------------------------
-# Requirements shown in UI + used for pre-check
+# Requirements shown in UI + pre-check
 # -----------------------------
 CHART_REQUIREMENTS = {
     "Outcome Bar": ["outcome"],
@@ -188,7 +186,7 @@ with st.expander("🎛️ Settings", expanded=True):
     header_img = st.file_uploader("Upload header image (Club logo / Player face) - PNG/JPG", type=["png", "jpg", "jpeg"])
     header_img_side = st.selectbox("Image position", ["Left", "Right"], index=0)
 
-    header_img_size = st.slider("Image size (as % of figure width)", 5, 18, 10)  # percent
+    header_img_size = st.slider("Image size (as % of figure width)", 5, 18, 10)
     header_img_width_frac = header_img_size / 100.0
 
     st.markdown("### Title / Subtitle style")
@@ -233,17 +231,27 @@ with st.expander("🎛️ Settings", expanded=True):
     selected_charts = st.multiselect("Choose charts", all_charts, default=all_charts)
 
     if selected_charts:
-        with st.expander("📌 Required columns for selected charts (pre-check before generate)", expanded=False):
+        with st.expander("📌 Required columns for selected charts (pre-check)", expanded=False):
             for ch in selected_charts:
                 st.write(f"**{ch}** → " + ", ".join(CHART_REQUIREMENTS.get(ch, [])))
 
     st.markdown("---")
     st.markdown("### Pass Map Filters (NEW)")
+
+    # ✅ IMPORTANT: strings must include these keywords for charts.py filter:
+    # "final third", "penalty box", "line", "progressive"
     pass_view = st.selectbox(
         "Pass map view",
-        ["All passes", "Into Final Third", "Into Penalty Box", "Line-breaking (proxy)", "Progressive Passes"],
+        [
+            "All passes",
+            "Into Final Third",
+            "Into Penalty Box",
+            "Line-breaking (proxy)",
+            "Progressive passes",
+        ],
         index=0
     )
+
     pass_scope = st.selectbox(
         "Pass result scope",
         ["Attempts (all)", "Successful only", "Unsuccessful only"],
@@ -251,8 +259,9 @@ with st.expander("🎛️ Settings", expanded=True):
     )
     pass_min_packing = st.slider("Min packing (proxy) for Line-breaking", 1, 3, 1)
 
-    st.markdown("---")
+    show_debug = st.checkbox("Show pass debug counts", value=True)
 
+    st.markdown("---")
     st.markdown("### Pass colors")
     col_pass_success = st.color_picker("Successful", "#00FF6A")
     col_pass_unsuccess = st.color_picker("Unsuccessful", "#FF4D4D")
@@ -276,8 +285,6 @@ with st.expander("🎛️ Settings", expanded=True):
     bar_blocked = st.color_picker("Bar: blocked", "#AAAAAA")
 
     st.markdown("---")
-
-    # Marker options
     st.markdown("### Event shapes (markers)")
     marker_options = {
         "Circle (o)": "o",
@@ -344,8 +351,9 @@ pass_markers = {
 }
 touch_marker = marker_options[touch_marker_label]
 
+
 # -----------------------------
-# Header Preview (UI only)
+# Header image load
 # -----------------------------
 img_obj = None
 if header_img is not None:
@@ -354,37 +362,16 @@ if header_img is not None:
     except Exception:
         img_obj = None
 
-if img_obj is not None:
-    if header_img_side == "Left":
-        c1, c2 = st.columns([1, 8], vertical_alignment="center")
-        with c1:
-            st.image(img_obj, width=120)
-        with c2:
-            st.markdown(f"## {report_title}")
-            if report_subtitle.strip():
-                st.caption(report_subtitle)
-    else:
-        c1, c2 = st.columns([8, 1], vertical_alignment="center")
-        with c1:
-            st.markdown(f"## {report_title}")
-            if report_subtitle.strip():
-                st.caption(report_subtitle)
-        with c2:
-            st.image(img_obj, width=120)
-else:
-    st.markdown(f"## {report_title}")
-    if report_subtitle.strip():
-        st.caption(report_subtitle)
-
 # -----------------------------
 # Mode + Upload
 # -----------------------------
 mode = st.radio("Choose output type", ["Match Charts", "Pizza Chart", "Shot Detail Card"])
 uploaded = st.file_uploader("Upload your file", type=["csv", "xlsx", "xls"])
 
-# -----------------------------
-# Main
-# -----------------------------
+
+# =========================================================
+# MAIN
+# =========================================================
 if uploaded:
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, uploaded.name)
@@ -460,9 +447,7 @@ if uploaded:
         df_raw = ensure_outcome_column(df_raw)
         df_raw = normalize_outcome_values(df_raw)
 
-        # -----------------------------
-        # PRE-CHECK: required columns for selected charts BEFORE generating
-        # -----------------------------
+        # PRE-CHECK required columns for selected charts
         cols_lower = _lower_cols(df_raw)
         missing_by_chart = {}
         for ch in selected_charts:
@@ -471,12 +456,12 @@ if uploaded:
             if miss:
                 missing_by_chart[ch] = miss
 
-        if missing_by_chart:
+        if missing_by_chart and mode == "Match Charts":
             st.error("❌ Missing required columns for selected charts (fix file or unselect chart):")
             for ch, miss in missing_by_chart.items():
                 st.write(f"**{ch}** missing → {', '.join(miss)}")
         else:
-            st.success("✅ All required columns exist for selected charts.")
+            st.success("✅ Required columns check passed (or not needed for this mode).")
 
         can_generate_report = (len(missing_by_chart) == 0)
 
@@ -494,33 +479,63 @@ if uploaded:
                 st.warning("Model file not found. Falling back to Zone.")
                 model_pipe = None
 
-        # Only prepare df if we can generate OR if user in Shot Card mode (still needs x,y,outcome)
-        df2 = None
-        if can_generate_report or mode == "Shot Detail Card":
-            df2 = prepare_df_for_charts(
-                df_raw,
-                attack_direction=attack_dir,
-                flip_y=flip_y,
-                pitch_mode=pitch_mode,
-                pitch_width=pitch_width,
-                xg_method=xg_method,
-                model_pipe=model_pipe,
-            )
+        df2 = prepare_df_for_charts(
+            df_raw,
+            attack_direction=attack_dir,
+            flip_y=flip_y,
+            pitch_mode=pitch_mode,
+            pitch_width=pitch_width,
+            xg_method=xg_method,
+            model_pipe=model_pipe,
+        )
 
-            st.success(f"Prepared ✅ rows: {len(df2)}")
-            if "xg_source" in df2.columns and len(df2):
-                st.info(f"xG source used: **{df2['xg_source'].iloc[0]}**")
+        st.success(f"Prepared ✅ rows: {len(df2)}")
+        if "xg_source" in df2.columns and len(df2):
+            st.info(f"xG source used: **{df2['xg_source'].iloc[0]}**")
 
-            with st.expander("Preview prepared data (first 25 rows)"):
-                st.write("Prepared columns:", list(df2.columns))
-                st.dataframe(df2.head(25), use_container_width=True)
+        # ✅ DEBUG: explain mismatch for passes
+        if show_debug:
+            p_all = df2[df2["event_type"] == "pass"].copy()
+            p_end = p_all.dropna(subset=["x2", "y2"]).copy()
+
+            # mimic charts filter logic safely
+            view = (pass_view or "All passes").lower().strip()
+            scope = (pass_scope or "Attempts (all)").lower().strip()
+
+            p_view = p_end.copy()
+            if "final third" in view:
+                p_view = p_view[p_view.get("into_final_third", False) == True]
+            elif "penalty box" in view or "box" in view:
+                p_view = p_view[p_view.get("into_penalty_box", False) == True]
+            elif "line" in view:
+                p_view = p_view[pd.to_numeric(p_view.get("packing_proxy", 0), errors="coerce").fillna(0).astype(int) >= int(pass_min_packing)]
+            elif "progressive" in view:
+                p_view = p_view[p_view.get("progressive_pass", False) == True]
+
+            p_scope = p_view.copy()
+            if "successful" in scope:
+                p_scope = p_scope[p_scope.get("is_pass_successful", False) == True]
+            elif "unsuccessful" in scope or "failed" in scope:
+                p_scope = p_scope[p_scope.get("is_pass_unsuccessful", False) == True]
+            else:
+                if "is_pass_attempt" in p_scope.columns:
+                    p_scope = p_scope[p_scope["is_pass_attempt"] == True]
+
+            st.write("### 🧪 Pass Debug Counts")
+            st.write({
+                "passes_total_prepared": int(len(p_all)),
+                "passes_with_end_xy2": int(len(p_end)),
+                "after_pass_view": int(len(p_view)),
+                "after_scope": int(len(p_scope)),
+                "progressive_true_total": int((p_all.get("progressive_pass", False) == True).sum()) if len(p_all) else 0,
+            })
+
+        with st.expander("Preview prepared data (first 25 rows)"):
+            st.write("Prepared columns:", list(df2.columns))
+            st.dataframe(df2.head(25), use_container_width=True)
 
         # ---------- Shot Detail Card ----------
         if mode == "Shot Detail Card":
-            if df2 is None:
-                st.error("Cannot prepare data for Shot Detail Card. Check required columns: outcome,x,y")
-                st.stop()
-
             shots_only = df2[df2["event_type"] == "shot"].copy().reset_index(drop=True)
             if shots_only.empty:
                 st.error("No shots found in this file.")
@@ -542,7 +557,7 @@ if uploaded:
                     pitch_mode=pitch_mode,
                     pitch_width=pitch_width,
                     shot_colors=shot_colors,
-                    shot_markers=shot_markers,   # ✅ shapes
+                    shot_markers=shot_markers,
                     theme_name=theme_name,
                 )
 
@@ -599,7 +614,7 @@ if uploaded:
                 touch_alpha=touch_alpha,
                 touch_marker=touch_marker,
 
-                # NEW: pass filters
+                # ✅ pass filters sent to charts.py
                 pass_view=pass_view,
                 pass_result_scope=pass_scope,
                 pass_min_packing=pass_min_packing,
