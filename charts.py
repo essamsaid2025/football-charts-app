@@ -555,27 +555,45 @@ def _pass_success_mask(outcome_series: pd.Series) -> pd.Series:
     s = outcome_series.astype(str).str.lower()
     return s.isin(["successful", "key pass", "assist"])
 
-
 def add_pass_tags(
     df_prepared: pd.DataFrame,
     pitch_mode: str = "rect",
     pitch_width: float = 64.0
 ) -> pd.DataFrame:
+    """
+    MANUAL ONLY for ALL pass tags:
+    - If column exists in file => YES=True / NO=False
+    - If column does NOT exist => False
+    - NO automatic calculation
+    """
+
     df = df_prepared.copy()
 
-    for col in ["into_final_third", "into_penalty_box", "line_breaking", "packing_proxy", "progressive_pass",
-                "is_pass_attempt", "is_pass_successful", "is_pass_unsuccessful"]:
+    for col in [
+        "into_final_third", "into_penalty_box", "line_breaking", "progressive_pass",
+        "packing_proxy",
+        "is_pass_attempt", "is_pass_successful", "is_pass_unsuccessful"
+    ]:
         if col not in df.columns:
             df[col] = pd.NA
 
     p = df[df["event_type"] == "pass"].copy()
     if p.empty:
+        df["is_pass_attempt"] = False
+        df["is_pass_successful"] = False
+        df["is_pass_unsuccessful"] = False
+        df["into_final_third"] = False
+        df["into_penalty_box"] = False
+        df["line_breaking"] = False
+        df["progressive_pass"] = False
+        df["packing_proxy"] = 0
         return df
 
-    need_end = ("x2" in p.columns and "y2" in p.columns)
-    if not need_end:
-        df.loc[df["event_type"] == "pass", ["is_pass_attempt", "is_pass_successful", "is_pass_unsuccessful"]] = False
-        df.loc[df["event_type"] == "pass", ["into_final_third", "into_penalty_box", "line_breaking", "progressive_pass"]] = False
+    if not {"x2", "y2"}.issubset(p.columns):
+        df.loc[df["event_type"] == "pass", [
+            "is_pass_attempt","is_pass_successful","is_pass_unsuccessful",
+            "into_final_third","into_penalty_box","line_breaking","progressive_pass"
+        ]] = False
         df.loc[df["event_type"] == "pass", "packing_proxy"] = 0
         return df
 
@@ -586,74 +604,47 @@ def add_pass_tags(
     success = attempt & _pass_success_mask(p["outcome"])
     unsuccess = attempt & (p["outcome"].astype(str).str.lower() == "unsuccessful")
 
-    final_third_thr = 66.6667
-    into_final_third = attempt & (p["x2"] >= final_third_thr)
+    def _find_col(cands):
+        for c in cands:
+            if c in p.columns:
+                return c
+        return None
 
-    y_max = pitch_width if pitch_mode == "rect" else 100.0
-    box_x_min = 100.0 * (1.0 - (16.5 / 105.0))
-    half_box = (40.3 / 68.0) * (y_max / 2.0)
-    box_y_min = (y_max / 2.0) - half_box
-    box_y_max = (y_max / 2.0) + half_box
+    ft_col = _find_col(["into_final_third","into final third","final third"])
+    box_col = _find_col(["into_penalty_box","into penalty box","penalty box"])
+    lb_col = _find_col(["line_breaking","line breaking"])
+    prog_col = _find_col(["progressive_pass","progressive pass","progressive"])
+    pack_col = _find_col(["packing","packing_proxy","packing value"])
 
-    into_box = attempt & (p["x2"] >= box_x_min) & (p["y2"] >= box_y_min) & (p["y2"] <= box_y_max)
+    into_final_third = attempt & (_yes_only(p[ft_col]) if ft_col else False)
+    into_penalty_box = attempt & (_yes_only(p[box_col]) if box_col else False)
+    line_breaking = attempt & (_yes_only(p[lb_col]) if lb_col else False)
+    progressive = attempt & (_yes_only(p[prog_col]) if prog_col else False)
 
-    def band(xv: float) -> int:
-        if pd.isna(xv):
-            return -1
-        if xv < 33.3333:
-            return 0
-        if xv < 66.6667:
-            return 1
-        if xv < 83.0:
-            return 2
-        return 3
-
-    x1_band = p["x"].apply(band)
-    x2_band = p["x2"].apply(band)
-    packing_proxy = (x2_band - x1_band).clip(lower=0)
-
-    line_breaking = attempt & (packing_proxy >= 1)
-
-    # ----------------------------
-    # ✅ FIX Progressive pass (MANUAL ONLY)
-    # Prefer real file columns like "progressive pass" over auto-created "progressive_pass" NA
-    # ----------------------------
-    manual_col = None
-    candidates = [
-        "progressive pass", "Progressive Pass", "progressive passes",
-        "is_progressive", "progressive",
-        "progressive_pass",  # keep last
-    ]
-    for cand in candidates:
-        if cand in p.columns:
-            colvals = p[cand]
-            # if empty/NA -> skip
-            if colvals.replace("", pd.NA).dropna().shape[0] == 0:
-                continue
-            manual_col = cand
-            break
-
-    if manual_col is not None:
-        progressive = attempt & _yes_only(p[manual_col])
+    if pack_col:
+        packing_proxy = pd.to_numeric(p[pack_col], errors="coerce").fillna(0).astype(int)
     else:
-        progressive = attempt & False
+        packing_proxy = pd.Series(0, index=p.index, dtype=int)
 
     idx = p.index
     df.loc[idx, "is_pass_attempt"] = attempt.values
     df.loc[idx, "is_pass_successful"] = success.values
     df.loc[idx, "is_pass_unsuccessful"] = unsuccess.values
     df.loc[idx, "into_final_third"] = into_final_third.values
-    df.loc[idx, "into_penalty_box"] = into_box.values
-    df.loc[idx, "packing_proxy"] = packing_proxy.astype(int).values
+    df.loc[idx, "into_penalty_box"] = into_penalty_box.values
     df.loc[idx, "line_breaking"] = line_breaking.values
     df.loc[idx, "progressive_pass"] = progressive.values
+    df.loc[idx, "packing_proxy"] = packing_proxy.values
 
     nonp = df["event_type"] != "pass"
-    df.loc[nonp, ["is_pass_attempt", "is_pass_successful", "is_pass_unsuccessful",
-                  "into_final_third", "into_penalty_box", "line_breaking"]] = False
+    df.loc[nonp, [
+        "is_pass_attempt","is_pass_successful","is_pass_unsuccessful",
+        "into_final_third","into_penalty_box","line_breaking","progressive_pass"
+    ]] = False
     df.loc[nonp, "packing_proxy"] = 0
 
     return df
+
 
 
 # ----------------------------
