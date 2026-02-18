@@ -1300,7 +1300,7 @@ def pizza_chart(
         straight_line_color="#0d0d0d",
         straight_line_lw=1.8,
         last_circle_lw=3,
-        last_circle_color="#0d0d0d",
+        last_circle_color="#000080",
     )
 
     try:
