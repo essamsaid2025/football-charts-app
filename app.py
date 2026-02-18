@@ -18,24 +18,16 @@ from charts import (
     THEMES,
 )
 
-# =========================================================
-# MUST be first Streamlit call
-# =========================================================
 st.set_page_config(page_title="Football Charts Generator", layout="wide")
 
 st.markdown("## ⚽ Football Charts Generator")
 st.caption("Upload CSV / Excel → Match Report / Pizza / Shot Card")
 
-
-# -----------------------------
-# Helpers
-# -----------------------------
 def _safe_float(v):
     try:
         return float(v)
     except Exception:
         return float("nan")
-
 
 def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = df_raw.copy()
@@ -56,28 +48,12 @@ def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
     df["outcome"] = "unknown"
     return df
 
-
 def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Light normalization in app (safe):
-    - cleans BOM/NBSP/Â artifacts BEFORE lower()
-    - maps common labels
-    Note: charts.py will still do the strong normalization.
-    """
     out = df.copy()
     if "outcome" not in out.columns:
         return out
 
-    s = (
-        out["outcome"]
-        .astype(str)
-        .str.replace("\ufeff", "", regex=False)   # BOM
-        .str.replace("\xa0", " ", regex=False)    # NBSP
-        .str.replace("Â", " ", regex=False)       # cp1252 artifact
-        .str.replace("â", " ", regex=False)       # if lower() happened elsewhere
-        .str.strip()
-        .str.lower()
-    )
+    s = out["outcome"].astype(str).str.strip().str.lower()
 
     mapping = {
         # shots
@@ -126,7 +102,6 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
         "kp": "key pass",
 
         "assist": "assist",
-        "â assist": "assist",   # extra safety
         "a": "assist",
 
         # touch
@@ -140,13 +115,11 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
     out["outcome"] = s.map(lambda v: mapping.get(v, v))
     return out
 
-
 def _percentile_rank(series: pd.Series, value: float) -> float:
     s = pd.to_numeric(series, errors="coerce").dropna()
     if len(s) == 0 or pd.isna(value):
         return np.nan
     return float((s < value).mean() * 100.0)
-
 
 def build_pizza_df(players_df: pd.DataFrame, player_col: str, player_name: str, metrics: list[str]) -> pd.DataFrame:
     row = players_df.loc[players_df[player_col] == player_name]
@@ -164,10 +137,8 @@ def build_pizza_df(players_df: pd.DataFrame, player_col: str, player_name: str, 
         })
     return pd.DataFrame(out)
 
-
 def _lower_cols(df: pd.DataFrame) -> set[str]:
     return set([c.strip().lower() for c in df.columns])
-
 
 def _missing_for_chart(df_cols_lower: set[str], required_cols: list[str]) -> list[str]:
     miss = []
@@ -179,25 +150,16 @@ def _missing_for_chart(df_cols_lower: set[str], required_cols: list[str]) -> lis
             miss.append(c)
     return miss
 
-
-# -----------------------------
-# Requirements shown in UI + pre-check
-# -----------------------------
 CHART_REQUIREMENTS = {
     "Outcome Bar": ["outcome"],
     "Start Heatmap": ["x", "y"],
     "Touch Map (Scatter)": ["x", "y", "(optional) outcome='touch'"],
-    # ✅ IMPORTANT: Pass Map should NOT require x2/y2 (we show markers if missing)
-    "Pass Map": ["outcome", "x", "y", "(optional) x2", "(optional) y2"],
+    "Pass Map": ["outcome", "x", "y", "x2", "y2"],
     "Shot Map": ["outcome", "x", "y", "(optional) x2,y2", "(optional) xg"],
 }
 
-# -----------------------------
-# Settings
-# -----------------------------
 with st.expander("🎛️ Settings", expanded=True):
     st.markdown("### 🧩 Report Header")
-
     report_title = st.text_input("Title", value="Match Report")
     report_subtitle = st.text_input("Subtitle", value="")
 
@@ -254,17 +216,15 @@ with st.expander("🎛️ Settings", expanded=True):
                 st.write(f"**{ch}** → " + ", ".join(CHART_REQUIREMENTS.get(ch, [])))
 
     st.markdown("---")
-    st.markdown("### Pass Map Filters (NEW)")
+    st.markdown("### Pass Map Filters")
 
-    # ✅ IMPORTANT: strings must include these keywords for charts.py filter:
-    # "final third", "penalty box", "line", "progressive"
     pass_view = st.selectbox(
         "Pass map view",
         [
             "All passes",
             "Into Final Third",
             "Into Penalty Box",
-            "Line-breaking (proxy)",
+            "Line-breaking",
             "Progressive passes",
         ],
         index=0
@@ -275,9 +235,8 @@ with st.expander("🎛️ Settings", expanded=True):
         ["Attempts (all)", "Successful only", "Unsuccessful only"],
         index=0
     )
-    pass_min_packing = st.slider("Min packing (proxy) for Line-breaking", 1, 3, 1)
 
-    show_debug = st.checkbox("Show pass debug counts", value=True)
+    pass_min_packing = st.slider("Min packing (only used if no line_breaking column)", 1, 3, 1)
 
     st.markdown("---")
     st.markdown("### Pass colors")
@@ -337,7 +296,6 @@ with st.expander("🎛️ Settings", expanded=True):
     touch_dot_size = st.slider("Touch dot size", 60, 520, 220)
     touch_alpha = st.slider("Touch alpha", 20, 100, 95) / 100.0
 
-
 pass_colors = {
     "successful": col_pass_success,
     "unsuccessful": col_pass_unsuccess,
@@ -369,10 +327,6 @@ pass_markers = {
 }
 touch_marker = marker_options[touch_marker_label]
 
-
-# -----------------------------
-# Header image load
-# -----------------------------
 img_obj = None
 if header_img is not None:
     try:
@@ -380,24 +334,15 @@ if header_img is not None:
     except Exception:
         img_obj = None
 
-
-# -----------------------------
-# Mode + Upload
-# -----------------------------
 mode = st.radio("Choose output type", ["Match Charts", "Pizza Chart", "Shot Detail Card"])
 uploaded = st.file_uploader("Upload your file", type=["csv", "xlsx", "xls"])
 
-
-# =========================================================
-# MAIN
-# =========================================================
 if uploaded:
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, uploaded.name)
         with open(path, "wb") as f:
             f.write(uploaded.getbuffer())
 
-        # ---------- Pizza ----------
         if mode == "Pizza Chart":
             dfp = load_data(path)
             st.success(f"Loaded ✅ rows: {len(dfp)}")
@@ -454,7 +399,6 @@ if uploaded:
                     st.download_button("⬇️ Download pizza.png", f2, file_name="pizza.png")
             st.stop()
 
-        # ---------- Match / Shot Card ----------
         df_raw = load_data(path)
 
         with st.expander("Raw file preview (first 25 rows)", expanded=False):
@@ -466,7 +410,6 @@ if uploaded:
         df_raw = ensure_outcome_column(df_raw)
         df_raw = normalize_outcome_values(df_raw)
 
-        # PRE-CHECK required columns for selected charts
         cols_lower = _lower_cols(df_raw)
         missing_by_chart = {}
         for ch in selected_charts:
@@ -484,7 +427,6 @@ if uploaded:
 
         can_generate_report = (len(missing_by_chart) == 0)
 
-        # Model load
         model_pipe = None
         if xg_method == "model":
             if model_exists:
@@ -512,47 +454,6 @@ if uploaded:
         if "xg_source" in df2.columns and len(df2):
             st.info(f"xG source used: **{df2['xg_source'].iloc[0]}**")
 
-        # ✅ DEBUG: counts should be based on ALL passes (NOT only those with x2/y2)
-        if show_debug:
-            p_all = df2[df2["event_type"] == "pass"].copy()
-
-            view = (pass_view or "All passes").lower().strip()
-            scope = (pass_scope or "Attempts (all)").lower().strip()
-
-            p_view = p_all.copy()
-            if "final third" in view:
-                p_view = p_view[p_view.get("into_final_third", False) == True]
-            elif "penalty box" in view or "box" in view:
-                p_view = p_view[p_view.get("into_penalty_box", False) == True]
-            elif "line" in view:
-                p_view = p_view[pd.to_numeric(p_view.get("packing_proxy", 0), errors="coerce").fillna(0).astype(int) >= int(pass_min_packing)]
-            elif "progressive" in view:
-                p_view = p_view[p_view.get("progressive_pass", False) == True]
-
-            p_scope = p_view.copy()
-            if "successful" in scope:
-                p_scope = p_scope[p_scope.get("is_pass_successful", False) == True]
-            elif "unsuccessful" in scope or "failed" in scope:
-                p_scope = p_scope[p_scope.get("is_pass_unsuccessful", False) == True]
-            else:
-                if "is_pass_attempt" in p_scope.columns:
-                    p_scope = p_scope[p_scope["is_pass_attempt"] == True]
-
-            st.write("### 🧪 Pass Debug Counts")
-            st.write({
-                "passes_total_prepared": int(len(p_all)),
-                "after_pass_view": int(len(p_view)),
-                "after_scope": int(len(p_scope)),
-                "into_box_true_total": int((p_all.get("into_penalty_box", False) == True).sum()) if len(p_all) else 0,
-                "into_final_third_true_total": int((p_all.get("into_final_third", False) == True).sum()) if len(p_all) else 0,
-                "progressive_true_total": int((p_all.get("progressive_pass", False) == True).sum()) if len(p_all) else 0,
-            })
-
-        with st.expander("Preview prepared data (first 25 rows)"):
-            st.write("Prepared columns:", list(df2.columns))
-            st.dataframe(df2.head(25), use_container_width=True)
-
-        # ---------- Shot Detail Card ----------
         if mode == "Shot Detail Card":
             shots_only = df2[df2["event_type"] == "shot"].copy().reset_index(drop=True)
             if shots_only.empty:
@@ -595,7 +496,6 @@ if uploaded:
                     st.download_button("⬇️ Download shot_card.pdf", f2, file_name="shot_card.pdf")
             st.stop()
 
-        # ---------- Report ----------
         generate_clicked = st.button("Generate Report", disabled=not can_generate_report)
         if not can_generate_report:
             st.info("Generate Report is disabled until required columns exist for all selected charts.")
@@ -632,7 +532,6 @@ if uploaded:
                 touch_alpha=touch_alpha,
                 touch_marker=touch_marker,
 
-                # ✅ pass filters sent to charts.py
                 pass_view=pass_view,
                 pass_result_scope=pass_scope,
                 pass_min_packing=pass_min_packing,
