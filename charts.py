@@ -1296,11 +1296,11 @@ def pizza_chart(
 
     pizza = PyPizza(
         params=params,
-        background_color="#111111",
-        straight_line_color="#000000",
-        straight_line_lw=1,
-        last_circle_lw=1,
-        last_circle_color="#000000",
+        background_color="#2b2b2b",
+        straight_line_color="#0d0d0d",
+        straight_line_lw=1.8,
+        last_circle_lw=3,
+        last_circle_color="#0d0d0d",
     )
 
     try:
@@ -1309,7 +1309,7 @@ def pizza_chart(
             figsize=(10, 10),
             blank_alpha=0.25,
             slice_colors=slice_colors,
-            kwargs_slices=dict(edgecolor="#000000", linewidth=1),
+            kwargs_slices=dict(edgecolor="#0d0d0d", linewidth=1.6),
             kwargs_params=dict(color="white", fontsize=12),
             kwargs_values=dict(color="white", fontsize=12),
         )
@@ -1319,7 +1319,7 @@ def pizza_chart(
             figsize=(10, 10),
             blank_alpha=0.25,
             value_bck_colors=["#1f77b4"] * len(values),
-            kwargs_slices=dict(edgecolor="#000000", linewidth=1),
+            kwargs_slices=dict(edgecolor="#0d0d0d", linewidth=1.6),
             kwargs_params=dict(color="white", fontsize=12),
             kwargs_values=dict(color="white", fontsize=12),
         )
