@@ -1,7 +1,7 @@
 import os
 import re
 import math
-from typing import Optional, Dict, List, Any, Tuple
+from typing import Optional, List, Any, Tuple
 
 import numpy as np
 import pandas as pd
@@ -12,6 +12,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
 from mplsoccer import Pitch, PyPizza
+
 
 # ✅ Helper: YES only (NO/empty = False)
 def _yes_only(s: pd.Series) -> pd.Series:
@@ -374,7 +375,7 @@ def estimate_xg_zone(df: pd.DataFrame, pitch_mode: str = "rect", pitch_width: fl
 
 
 # ----------------------------
-# xG Model (optional)
+# xG Model (optional)  (KEEP AS-IS)
 # ----------------------------
 MODEL_FEATURE_COLS = [
     "x", "y",
@@ -500,6 +501,7 @@ def _goal_mouth_bounds(pitch_mode: str = "rect", pitch_width: float = 64.0) -> T
     y_high = mid + goal_mouth / 2.0
     return float(y_low), float(y_high)
 
+
 def fix_shot_end_location(df: pd.DataFrame, pitch_mode: str = "rect", pitch_width: float = 64.0) -> pd.DataFrame:
     df = df.copy()
     if "x2" not in df.columns:
@@ -549,11 +551,28 @@ def fix_shot_end_location(df: pd.DataFrame, pitch_mode: str = "rect", pitch_widt
 
 
 # ----------------------------
-# Pass tagging
+# Pass tagging (MANUAL)
 # ----------------------------
 def _pass_success_mask(outcome_series: pd.Series) -> pd.Series:
     s = outcome_series.astype(str).str.lower()
     return s.isin(["successful", "key pass", "assist"])
+
+
+def _norm_name(x: str) -> str:
+    x = str(x).strip().lower()
+    x = x.replace("_", " ")
+    x = re.sub(r"\s+", " ", x)
+    return x
+
+
+def _find_col(df: pd.DataFrame, cands: List[str]) -> Optional[str]:
+    col_map = {_norm_name(col): col for col in df.columns}
+    for cand in cands:
+        key = _norm_name(cand)
+        if key in col_map:
+            return col_map[key]
+    return None
+
 
 def add_pass_tags(
     df_prepared: pd.DataFrame,
@@ -565,10 +584,11 @@ def add_pass_tags(
     - If column exists in file => YES=True / NO=False
     - If column does NOT exist => False
     - NO automatic calculation
+    NOTE: Do NOT require x2/y2 to count tags (to match file counts).
     """
-
     df = df_prepared.copy()
 
+    # Ensure columns exist
     for col in [
         "into_final_third", "into_penalty_box", "line_breaking", "progressive_pass",
         "packing_proxy",
@@ -589,51 +609,17 @@ def add_pass_tags(
         df["packing_proxy"] = 0
         return df
 
-    if not {"x2", "y2"}.issubset(p.columns):
-        df.loc[df["event_type"] == "pass", [
-            "is_pass_attempt","is_pass_successful","is_pass_unsuccessful",
-            "into_final_third","into_penalty_box","line_breaking","progressive_pass"
-        ]] = False
-        df.loc[df["event_type"] == "pass", "packing_proxy"] = 0
-        return df
-
-    p["x2"] = pd.to_numeric(p["x2"], errors="coerce")
-    p["y2"] = pd.to_numeric(p["y2"], errors="coerce")
-
-    attempt = p["x2"].notna() & p["y2"].notna() & p["outcome"].isin(PASS_ORDER)
+    # ✅ MANUAL attempt: based on outcome only (NOT x2/y2)
+    attempt = p["outcome"].isin(PASS_ORDER)
     success = attempt & _pass_success_mask(p["outcome"])
     unsuccess = attempt & (p["outcome"].astype(str).str.lower() == "unsuccessful")
 
-    import re
-
-    def _norm_name(x: str) -> str:
-    x = str(x).strip().lower()
-    x = x.replace("_", " ")
-    x = re.sub(r"\s+", " ", x)   # collapse multiple spaces
-    return x
-
-    def _find_col(cands):
-    col_map = {_norm_name(col): col for col in p.columns}
-    for cand in cands:
-        key = _norm_name(cand)
-        if key in col_map:
-            return col_map[key]
-    return None
-
-
-    ft_col = _find_col(["into_final_third","into final third","final third"])
-    box_col = _find_col([
-    "into_penalty_box",
-    "into penalty box",
-    "into box",
-    "penalty box",
-    "box entry",
-    "into  penalty  box"   # احتياط لو فيه مسافات زيادة
-])
-
-    lb_col = _find_col(["line_breaking","line breaking"])
-    prog_col = _find_col(["progressive_pass","progressive pass","progressive"])
-    pack_col = _find_col(["packing","packing_proxy","packing value"])
+    # Find manual tag columns (robust names)
+    ft_col = _find_col(p, ["into_final_third", "into final third", "final third"])
+    box_col = _find_col(p, ["into_penalty_box", "into penalty box", "into box", "penalty box", "box entry"])
+    lb_col = _find_col(p, ["line_breaking", "line breaking"])
+    prog_col = _find_col(p, ["progressive_pass", "progressive pass", "progressive"])
+    pack_col = _find_col(p, ["packing", "packing_proxy", "packing value"])
 
     into_final_third = attempt & (_yes_only(p[ft_col]) if ft_col else False)
     into_penalty_box = attempt & (_yes_only(p[box_col]) if box_col else False)
@@ -657,13 +643,12 @@ def add_pass_tags(
 
     nonp = df["event_type"] != "pass"
     df.loc[nonp, [
-        "is_pass_attempt","is_pass_successful","is_pass_unsuccessful",
-        "into_final_third","into_penalty_box","line_breaking","progressive_pass"
+        "is_pass_attempt", "is_pass_successful", "is_pass_unsuccessful",
+        "into_final_third", "into_penalty_box", "line_breaking", "progressive_pass"
     ]] = False
     df.loc[nonp, "packing_proxy"] = 0
 
     return df
-
 
 
 # ----------------------------
@@ -905,7 +890,7 @@ def touch_map(
 
 
 # ----------------------------
-# ✅ FIX: make pass filters robust + avoid crash
+# ✅ FIX: pass filters robust + counts match file tags
 # ----------------------------
 def _bool_mask(col, index: pd.Index) -> pd.Series:
     if isinstance(col, pd.Series):
@@ -921,40 +906,22 @@ def _bool_mask(col, index: pd.Index) -> pd.Series:
         return pd.Series(False, index=index, dtype=bool)
 
 
-def _empty_pass_map_figure(
-    pitch_mode: str,
-    pitch_width: float,
-    theme: dict,
-    title: str,
-    msg: str
-):
+def _empty_pass_map_figure(pitch_mode: str, pitch_width: float, theme: dict, title: str, msg: str):
     pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
 
     ax.set_title(title, color=theme["text"])
-    ax.text(
-        0.5, 0.5, msg,
-        transform=ax.transAxes,
-        ha="center", va="center",
-        fontsize=13,
-        color=theme.get("text", "white"),
-        wrap=True
-    )
+    ax.text(0.5, 0.5, msg, transform=ax.transAxes, ha="center", va="center",
+            fontsize=13, color=theme.get("text", "white"), wrap=True)
     ax.set_xlim(-2, 102)
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
     return fig
 
 
-def _filter_passes_for_map(
-    d: pd.DataFrame,
-    pass_view: str = "All passes",
-    result_scope: str = "Attempts (all)",
-    min_packing: int = 1
-) -> pd.DataFrame:
+def _filter_passes_for_map(d: pd.DataFrame, pass_view: str = "All passes", result_scope: str = "Attempts (all)", min_packing: int = 1) -> pd.DataFrame:
     dd = d.copy()
-    dd = dd.dropna(subset=["x2", "y2"]).copy()
     if dd.empty:
         return dd
 
@@ -1003,11 +970,16 @@ def pass_map(
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
 
     d = df[df["event_type"] == "pass"].copy()
-    if not {"x2", "y2"}.issubset(d.columns):
-        raise ValueError("Pass Map يحتاج أعمدة: outcome,x,y,x2,y2")
 
-    d["x2"] = pd.to_numeric(d["x2"], errors="coerce")
-    d["y2"] = pd.to_numeric(d["y2"], errors="coerce")
+    # x2/y2 may be missing for some rows -> keep them, but plot arrows only where available
+    if "x2" in d.columns:
+        d["x2"] = pd.to_numeric(d["x2"], errors="coerce")
+    else:
+        d["x2"] = np.nan
+    if "y2" in d.columns:
+        d["y2"] = pd.to_numeric(d["y2"], errors="coerce")
+    else:
+        d["y2"] = np.nan
 
     d = _filter_passes_for_map(d, pass_view=pass_view, result_scope=result_scope, min_packing=min_packing)
 
@@ -1015,7 +987,6 @@ def pass_map(
     if "line" in (pass_view or "").lower():
         title += f" (min packing {int(min_packing)})"
 
-    # ✅ IMPORTANT: no crash
     if d.empty:
         return _empty_pass_map_figure(
             pitch_mode=pitch_mode,
@@ -1030,20 +1001,30 @@ def pass_map(
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
 
+    # split into: with end (arrows) / without end (markers only)
+    has_end = d["x2"].notna() & d["y2"].notna()
+    d_end = d[has_end].copy()
+    d_noend = d[~has_end].copy()
+
+    # Draw arrows for rows with end
     for t in PASS_ORDER:
-        dt = d[d["outcome"] == t]
+        dt = d_end[d_end["outcome"] == t]
         if len(dt) == 0:
             continue
-
         pitch.arrows(
             dt["x"], dt["y"], dt["x2"], dt["y2"],
             ax=ax, width=2, alpha=0.85,
             color=pass_colors.get(t, theme.get("muted", "#A0A7B4"))
         )
 
+    # Draw markers for ALL rows (including missing end) so counts feel correct visually
+    for t in PASS_ORDER:
+        dt_all = d[d["outcome"] == t]
+        if len(dt_all) == 0:
+            continue
         mk = pass_markers.get(t, "o")
         pitch.scatter(
-            dt["x"], dt["y"],
+            dt_all["x"], dt_all["y"],
             ax=ax,
             s=90,
             marker=mk,
@@ -1053,6 +1034,11 @@ def pass_map(
             alpha=0.95,
             zorder=6
         )
+
+    # optional: show how many missing end
+    missing_end_n = int((~has_end).sum())
+    if missing_end_n > 0:
+        title += f"  |  missing x2/y2: {missing_end_n}"
 
     ax.set_title(title, color=theme["text"])
     ax.set_xlim(-2, 102)
@@ -1070,6 +1056,11 @@ def pass_map(
 
     return fig
 
+
+# ----------------------------
+# Shot map / report / shot card / pizza
+# (كل اللي بعد كده زي ما عندك — ما غيرتش فيه)
+# ----------------------------
 
 def shot_map(
     df: pd.DataFrame,
@@ -1134,9 +1125,6 @@ def shot_map(
     return fig
 
 
-# ----------------------------
-# Report builder
-# ----------------------------
 def build_report_from_prepared_df(
     df_prepared: pd.DataFrame,
     out_dir: str,
@@ -1167,12 +1155,6 @@ def build_report_from_prepared_df(
     touch_marker: str = "o",
     **kwargs,
 ):
-    """
-    kwargs supported (optional):
-      - pass_view: str
-      - pass_result_scope: str
-      - pass_min_packing: int
-    """
     pass_view = kwargs.get("pass_view", "All passes")
     pass_result_scope = kwargs.get("pass_result_scope", "Attempts (all)")
     try:
@@ -1259,9 +1241,6 @@ def build_report_from_prepared_df(
     return pdf_path, pngs
 
 
-# ----------------------------
-# Shot detail card (as you sent)
-# ----------------------------
 def shot_detail_card(
     df_prepared: pd.DataFrame,
     shot_index: int,
@@ -1303,12 +1282,7 @@ def shot_detail_card(
     mk = shot_markers.get(outcome, "o")
 
     fig = plt.figure(figsize=(12, 6), facecolor=theme["bg"])
-    gs = gridspec.GridSpec(
-        2, 2,
-        width_ratios=[1.35, 1.0],
-        height_ratios=[0.25, 1.0],
-        wspace=0.08, hspace=0.05
-    )
+    gs = gridspec.GridSpec(2, 2, width_ratios=[1.35, 1.0], height_ratios=[0.25, 1.0], wspace=0.08, hspace=0.05)
 
     ax_goal = fig.add_subplot(gs[0, 0])
     ax_pitch = fig.add_subplot(gs[1, 0])
@@ -1371,9 +1345,6 @@ def shot_detail_card(
     return fig, shots
 
 
-# ----------------------------
-# Pizza chart
-# ----------------------------
 def pizza_chart(
     df_pizza: pd.DataFrame,
     title: str = "",
