@@ -604,14 +604,33 @@ def add_pass_tags(
     success = attempt & _pass_success_mask(p["outcome"])
     unsuccess = attempt & (p["outcome"].astype(str).str.lower() == "unsuccessful")
 
-    def _find_col(cands):
-        for c in cands:
-            if c in p.columns:
-                return c
-        return None
+    import re
+
+def _norm_name(x: str) -> str:
+    x = str(x).strip().lower()
+    x = x.replace("_", " ")
+    x = re.sub(r"\s+", " ", x)   # collapse multiple spaces
+    return x
+
+def _find_col(cands):
+    col_map = {_norm_name(col): col for col in p.columns}
+    for cand in cands:
+        key = _norm_name(cand)
+        if key in col_map:
+            return col_map[key]
+    return None
+
 
     ft_col = _find_col(["into_final_third","into final third","final third"])
-    box_col = _find_col(["into_penalty_box","into penalty box","penalty box"])
+    box_col = _find_col([
+    "into_penalty_box",
+    "into penalty box",
+    "into box",
+    "penalty box",
+    "box entry",
+    "into  penalty  box"   # احتياط لو فيه مسافات زيادة
+])
+
     lb_col = _find_col(["line_breaking","line breaking"])
     prog_col = _find_col(["progressive_pass","progressive pass","progressive"])
     pack_col = _find_col(["packing","packing_proxy","packing value"])
