@@ -89,15 +89,24 @@ THEMES = {
 
 
 # ----------------------------
-# Outcome normalization (strong)
+# Outcome normalization (STRONG + ✅ fixes Â / NBSP)
 # ----------------------------
 def _norm_outcome(s: Any) -> str:
     if s is None or (isinstance(s, float) and pd.isna(s)):
         return ""
-    s = str(s).strip().lower()
+
+    # ✅ clean weird encoding artifacts
+    s = str(s)
+    s = s.replace("\ufeff", "")     # BOM
+    s = s.replace("\xa0", " ")      # NBSP
+    s = s.replace("Â", " ")         # common cp1252 artifact
+    s = s.strip().lower()
+
+    # remove leading digits like "1ontarget"
     s = re.sub(r"^\d+", "", s).strip()
     s = s.replace("_", " ").replace("-", " ")
     s = re.sub(r"\s+", " ", s).strip()
+
     if s.endswith(" pass"):
         s = s.replace(" pass", "").strip()
 
@@ -181,7 +190,7 @@ def load_data(path: str) -> pd.DataFrame:
 
 
 # ----------------------------
-# Validate & Clean
+# Validate & Clean (✅ fixed outcome artifacts)
 # ----------------------------
 def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -203,6 +212,16 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     for c in ["x", "y", "x2", "y2"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # ✅ clean outcome column before normalization (fix Â / NBSP)
+    df["outcome"] = (
+        df["outcome"]
+        .astype(str)
+        .str.replace("\ufeff", "", regex=False)
+        .str.replace("\xa0", " ", regex=False)
+        .str.replace("Â", " ", regex=False)
+        .str.strip()
+    )
 
     df["outcome"] = df["outcome"].apply(_norm_outcome)
     df = df.dropna(subset=["x", "y"]).copy()
@@ -561,6 +580,8 @@ def _pass_success_mask(outcome_series: pd.Series) -> pd.Series:
 def _norm_name(x: str) -> str:
     x = str(x).strip().lower()
     x = x.replace("_", " ")
+    x = x.replace("\xa0", " ")
+    x = x.replace("Â", " ")
     x = re.sub(r"\s+", " ", x)
     return x
 
@@ -616,6 +637,7 @@ def add_pass_tags(
 
     # Find manual tag columns (robust names)
     ft_col = _find_col(p, ["into_final_third", "into final third", "final third"])
+    # ✅ IMPORTANT: supports "into penalty box" (with spaces)
     box_col = _find_col(p, ["into_penalty_box", "into penalty box", "into box", "penalty box", "box entry"])
     lb_col = _find_col(p, ["line_breaking", "line breaking"])
     prog_col = _find_col(p, ["progressive_pass", "progressive pass", "progressive"])
@@ -890,19 +912,31 @@ def touch_map(
 
 
 # ----------------------------
-# ✅ FIX: pass filters robust + counts match file tags
+# ✅ FIX: pass filters robust + YES-only tag filtering
 # ----------------------------
-def _bool_mask(col, index: pd.Index) -> pd.Series:
+def _bool_mask(col: Any, index: pd.Index) -> pd.Series:
+    """
+    Robust boolean mask:
+    - Accept bool
+    - Accept yes/no strings (YES only = True)
+    - Anything else -> False
+    """
+    if col is None:
+        return pd.Series(False, index=index, dtype=bool)
+
     if isinstance(col, pd.Series):
         s = col.reindex(index)
-        if pd.api.types.is_bool_dtype(s):
-            return s.fillna(False)
-        s = s.replace("", pd.NA).fillna(False)
-        try:
-            return s.astype(str).str.strip().str.lower().isin(["true", "1", "yes", "y", "نعم"])
-        except Exception:
-            return pd.Series(False, index=index, dtype=bool)
     else:
+        return pd.Series(bool(col), index=index, dtype=bool)
+
+    if pd.api.types.is_bool_dtype(s):
+        return s.fillna(False)
+
+    s = s.replace("", pd.NA).fillna(False)
+    try:
+        xs = s.astype(str).str.strip().str.lower()
+        return xs.isin(["yes", "y", "true", "t", "1", "نعم"]).astype(bool)
+    except Exception:
         return pd.Series(False, index=index, dtype=bool)
 
 
@@ -920,36 +954,40 @@ def _empty_pass_map_figure(pitch_mode: str, pitch_width: float, theme: dict, tit
     return fig
 
 
-def _filter_passes_for_map(d: pd.DataFrame, pass_view: str = "All passes", result_scope: str = "Attempts (all)", min_packing: int = 1) -> pd.DataFrame:
+def _filter_passes_for_map(
+    d: pd.DataFrame,
+    pass_view: str = "All passes",
+    result_scope: str = "Attempts (all)",
+    min_packing: int = 1
+) -> pd.DataFrame:
     dd = d.copy()
     if dd.empty:
         return dd
 
     view = (pass_view or "All passes").lower().strip()
-    idx = dd.index
 
+    # ✅ filter by tag columns created in add_pass_tags (manual)
     if "final third" in view:
-        dd = dd[_bool_mask(dd.get("into_final_third", False), idx)].copy()
+        dd = dd[_bool_mask(dd.get("into_final_third"), dd.index)].copy()
     elif "penalty box" in view or "penalty" in view or "box" in view:
-        dd = dd[_bool_mask(dd.get("into_penalty_box", False), idx)].copy()
+        dd = dd[_bool_mask(dd.get("into_penalty_box"), dd.index)].copy()
     elif "line" in view or "breaking" in view:
-        dd = dd[pd.to_numeric(dd.get("packing_proxy", 0), errors="coerce").fillna(0).astype(int) >= int(min_packing)].copy()
+        pack = pd.to_numeric(dd.get("packing_proxy", 0), errors="coerce").fillna(0).astype(int)
+        dd = dd[pack >= int(min_packing)].copy()
     elif "progressive" in view:
-        dd = dd[_bool_mask(dd.get("progressive_pass", False), idx)].copy()
+        dd = dd[_bool_mask(dd.get("progressive_pass"), dd.index)].copy()
 
     if dd.empty:
         return dd
 
     scope = (result_scope or "Attempts (all)").lower().strip()
-    idx2 = dd.index
 
     if "successful" in scope:
-        dd = dd[_bool_mask(dd.get("is_pass_successful", False), idx2)].copy()
+        dd = dd[_bool_mask(dd.get("is_pass_successful"), dd.index)].copy()
     elif "unsuccessful" in scope or "failed" in scope:
-        dd = dd[_bool_mask(dd.get("is_pass_unsuccessful", False), idx2)].copy()
+        dd = dd[_bool_mask(dd.get("is_pass_unsuccessful"), dd.index)].copy()
     else:
-        if "is_pass_attempt" in dd.columns:
-            dd = dd[_bool_mask(dd["is_pass_attempt"], idx2)].copy()
+        dd = dd[_bool_mask(dd.get("is_pass_attempt"), dd.index)].copy()
 
     return dd
 
@@ -1004,7 +1042,6 @@ def pass_map(
     # split into: with end (arrows) / without end (markers only)
     has_end = d["x2"].notna() & d["y2"].notna()
     d_end = d[has_end].copy()
-    d_noend = d[~has_end].copy()
 
     # Draw arrows for rows with end
     for t in PASS_ORDER:
@@ -1046,21 +1083,16 @@ def pass_map(
 
     handles = []
     for t in PASS_ORDER:
-        if t in pass_colors:
+        if (d["outcome"] == t).any():
             mk = pass_markers.get(t, "o")
             handles.append(Line2D([0], [0], marker=mk, color="none",
-                                  markerfacecolor=pass_colors.get(t),
+                                  markerfacecolor=pass_colors.get(t, theme.get("muted", "#A0A7B4")),
                                   markeredgecolor="white",
                                   markersize=8, label=t))
     _add_legend(ax, handles, theme, loc="upper center")
 
     return fig
 
-
-# ----------------------------
-# Shot map / report / shot card / pizza
-# (كل اللي بعد كده زي ما عندك — ما غيرتش فيه)
-# ----------------------------
 
 def shot_map(
     df: pd.DataFrame,
@@ -1114,10 +1146,10 @@ def shot_map(
 
     handles = []
     for t in SHOT_ORDER:
-        if t in shot_colors:
+        if (s["outcome"] == t).any():
             mk = shot_markers.get(t, "o")
             handles.append(Line2D([0], [0], marker=mk, color="none",
-                                  markerfacecolor=shot_colors.get(t),
+                                  markerfacecolor=shot_colors.get(t, theme.get("muted", "#A0A7B4")),
                                   markeredgecolor="white",
                                   markersize=8, label=t))
     _add_legend(ax, handles, theme, loc="upper center")
@@ -1213,7 +1245,6 @@ def build_report_from_prepared_df(
             theme_name=theme_name
         )))
 
-    pngs = []
     with PdfPages(pdf_path) as pdf:
         for name, fig in figs:
             add_report_header(
@@ -1236,9 +1267,8 @@ def build_report_from_prepared_df(
             fig.savefig(png_path, dpi=220, bbox_inches="tight", pad_inches=0.25)
             pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
             plt.close(fig)
-            pngs.append(png_path)
 
-    return pdf_path, pngs
+    return pdf_path, []
 
 
 def shot_detail_card(
