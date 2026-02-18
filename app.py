@@ -26,6 +26,7 @@ st.set_page_config(page_title="Football Charts Generator", layout="wide")
 st.markdown("## ⚽ Football Charts Generator")
 st.caption("Upload CSV / Excel → Match Report / Pizza / Shot Card")
 
+
 # -----------------------------
 # Helpers
 # -----------------------------
@@ -57,11 +58,26 @@ def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Light normalization in app (safe):
+    - cleans BOM/NBSP/Â artifacts BEFORE lower()
+    - maps common labels
+    Note: charts.py will still do the strong normalization.
+    """
     out = df.copy()
     if "outcome" not in out.columns:
         return out
 
-    s = out["outcome"].astype(str).str.strip().str.lower()
+    s = (
+        out["outcome"]
+        .astype(str)
+        .str.replace("\ufeff", "", regex=False)   # BOM
+        .str.replace("\xa0", " ", regex=False)    # NBSP
+        .str.replace("Â", " ", regex=False)       # cp1252 artifact
+        .str.replace("â", " ", regex=False)       # if lower() happened elsewhere
+        .str.strip()
+        .str.lower()
+    )
 
     mapping = {
         # shots
@@ -110,6 +126,7 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
         "kp": "key pass",
 
         "assist": "assist",
+        "â assist": "assist",   # extra safety
         "a": "assist",
 
         # touch
@@ -170,7 +187,8 @@ CHART_REQUIREMENTS = {
     "Outcome Bar": ["outcome"],
     "Start Heatmap": ["x", "y"],
     "Touch Map (Scatter)": ["x", "y", "(optional) outcome='touch'"],
-    "Pass Map": ["outcome", "x", "y", "x2", "y2"],
+    # ✅ IMPORTANT: Pass Map should NOT require x2/y2 (we show markers if missing)
+    "Pass Map": ["outcome", "x", "y", "(optional) x2", "(optional) y2"],
     "Shot Map": ["outcome", "x", "y", "(optional) x2,y2", "(optional) xg"],
 }
 
@@ -362,6 +380,7 @@ if header_img is not None:
     except Exception:
         img_obj = None
 
+
 # -----------------------------
 # Mode + Upload
 # -----------------------------
@@ -493,16 +512,14 @@ if uploaded:
         if "xg_source" in df2.columns and len(df2):
             st.info(f"xG source used: **{df2['xg_source'].iloc[0]}**")
 
-        # ✅ DEBUG: explain mismatch for passes
+        # ✅ DEBUG: counts should be based on ALL passes (NOT only those with x2/y2)
         if show_debug:
             p_all = df2[df2["event_type"] == "pass"].copy()
-            p_end = p_all.dropna(subset=["x2", "y2"]).copy()
 
-            # mimic charts filter logic safely
             view = (pass_view or "All passes").lower().strip()
             scope = (pass_scope or "Attempts (all)").lower().strip()
 
-            p_view = p_end.copy()
+            p_view = p_all.copy()
             if "final third" in view:
                 p_view = p_view[p_view.get("into_final_third", False) == True]
             elif "penalty box" in view or "box" in view:
@@ -524,9 +541,10 @@ if uploaded:
             st.write("### 🧪 Pass Debug Counts")
             st.write({
                 "passes_total_prepared": int(len(p_all)),
-                "passes_with_end_xy2": int(len(p_end)),
                 "after_pass_view": int(len(p_view)),
                 "after_scope": int(len(p_scope)),
+                "into_box_true_total": int((p_all.get("into_penalty_box", False) == True).sum()) if len(p_all) else 0,
+                "into_final_third_true_total": int((p_all.get("into_final_third", False) == True).sum()) if len(p_all) else 0,
                 "progressive_true_total": int((p_all.get("progressive_pass", False) == True).sum()) if len(p_all) else 0,
             })
 
