@@ -606,13 +606,13 @@ def add_pass_tags(
 
     import re
 
-def _norm_name(x: str) -> str:
+    def _norm_name(x: str) -> str:
     x = str(x).strip().lower()
     x = x.replace("_", " ")
     x = re.sub(r"\s+", " ", x)   # collapse multiple spaces
     return x
 
-def _find_col(cands):
+    def _find_col(cands):
     col_map = {_norm_name(col): col for col in p.columns}
     for cand in cands:
         key = _norm_name(cand)
