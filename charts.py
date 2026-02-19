@@ -1346,11 +1346,9 @@ def pizza_chart(
             # ring border
             ring1 = plt.Circle((0.5, 0.5), 0.5, transform=ax_img.transAxes,
                                fill=False, edgecolor=ring, linewidth=6.0, alpha=1.0)
-            ring2 = plt.Circle((0.5, 0.5), 0.5, transform=ax_img.transAxes,
-                               fill=False, edgecolor="white", linewidth=2.0, alpha=0.9)
-            ax_img.add_patch(ring1)
-            ax_img.add_patch(ring2)
 
+            ax_img.add_patch(ring1)
+           
         except Exception:
             pass
 
