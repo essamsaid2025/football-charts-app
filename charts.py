@@ -1296,11 +1296,13 @@ def pizza_chart(
 
     pizza = PyPizza(
         params=params,
-        background_color="#2b2b2b",
+        background_color="#111111",
         straight_line_color="#0d0d0d",
         straight_line_lw=1.8,
-        last_circle_lw=3,
-        last_circle_color="#000080",
+        last_circle_color="white",
+        last_circle_lw=2,
+        other_circle_ls="--",
+        other_circle_lw=1
     )
 
     try:
@@ -1311,12 +1313,21 @@ def pizza_chart(
             slice_colors=slice_colors,
             kwargs_slices=dict(edgecolor="#0d0d0d", linewidth=1.6),
             kwargs_params=dict(color="white", fontsize=12),
-            kwargs_values=dict(color="white", fontsize=12),
+            kwargs_values=dict(
+                color="white",
+                fontsize=11,
+                bbox=dict(
+                    edgecolor="white",
+                    facecolor="black",
+                    boxstyle="round,pad=0.25",
+                    linewidth=1
+    )
+)
         )
     except TypeError:
         fig, ax = pizza.make_pizza(
             values,
-            figsize=(10, 10),
+            figsize=(8, 8),
             blank_alpha=0.25,
             value_bck_colors=["#1f77b4"] * len(values),
             kwargs_slices=dict(edgecolor="#0d0d0d", linewidth=1.6),
@@ -1326,7 +1337,9 @@ def pizza_chart(
 
     fig.text(0.5, 0.985, title, ha="center", va="top", color="white", fontsize=18)
     fig.text(0.5, 0.955, subtitle, ha="center", va="top", color="white", fontsize=12)
-
+    ax.set_ylim(-0.6, len(params) + 0.6)
+    for spine in ax.spines.values():
+    spine.set_visible(False)
     if show_values_legend:
         lines = ["%s: %s   (pct %.1f)" % (m, v, p) for m, v, p in zip(params, value_text, values)]
         fig.text(0.02, 0.02, "\n".join(lines), ha="left", va="bottom",
