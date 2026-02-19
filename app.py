@@ -185,7 +185,8 @@ with st.expander("🎛️ Settings", expanded=True):
 
     header_img = st.file_uploader(
         "Upload header image (Club logo / Player face) - PNG/JPG",
-        type=["png", "jpg", "jpeg"]
+        type=["png", "jpg", "jpeg"],
+        key="header_img_uploader",
     )
     header_img_side = st.selectbox("Image position", ["Left", "Right"], index=0)
 
@@ -320,8 +321,16 @@ with st.expander("🎛️ Settings", expanded=True):
     touch_alpha = st.slider("Touch alpha", 20, 100, 95) / 100.0
 
     st.markdown("---")
-    st.markdown("### Pizza center image")
-    pizza_center_scale = st.slider("Center image size (Pizza)", 12, 32, 22) / 100.0
+    st.markdown("### 🍕 Pizza center image")
+    pizza_center_img = st.file_uploader(
+        "Upload pizza center image (Club logo / Player face) - PNG/JPG",
+        type=["png", "jpg", "jpeg"],
+        key="pizza_center_uploader",
+    )
+
+    # ✅ scale as fraction 0.12-0.32 (matches charts.py clamp)
+    pizza_center_scale = st.slider("Center image size (Pizza)", 12, 32, 18) / 100.0
+    st.caption("Tip: لو الصورة كبيرة خلّيها 0.16–0.20")
 
 
 pass_colors = {
@@ -356,12 +365,21 @@ pass_markers = {
 touch_marker = marker_options[touch_marker_label]
 
 
-img_obj = None
+# header image object (report)
+header_img_obj = None
 if header_img is not None:
     try:
-        img_obj = Image.open(header_img).convert("RGBA")
+        header_img_obj = Image.open(header_img).convert("RGBA")
     except Exception:
-        img_obj = None
+        header_img_obj = None
+
+# pizza center image object (pizza)
+pizza_img_obj = None
+if pizza_center_img is not None:
+    try:
+        pizza_img_obj = Image.open(pizza_center_img).convert("RGBA")
+    except Exception:
+        pizza_img_obj = None
 
 
 # -----------------------------
@@ -432,16 +450,18 @@ if uploaded:
                 pizza_df = build_pizza_df(dfp_filtered, player_col, selected_player, selected_metrics)
                 slice_colors = [pct_color(p) for p in pizza_df["percentile"].tolist()]
 
-                # ✅ center_image from uploaded header image (club logo / player face)
+                # ✅ use pizza center image uploader first, fallback to header image if needed
+                center_img = pizza_img_obj if pizza_img_obj is not None else header_img_obj
+
                 fig = pizza_chart(
                     pizza_df,
                     title=pizza_title,
                     subtitle=pizza_subtitle,
                     slice_colors=slice_colors,
                     show_values_legend=False,
-                    center_image=img_obj,                 # ✅ الصورة في نص الشارت
-                    center_img_scale=pizza_center_scale,  # ✅ من السلايدر
-                    footer_text=""                        # ✅ بدون اسم/فوتر
+                    center_image=center_img,             # ✅ الصورة في نص الشارت
+                    center_img_scale=pizza_center_scale, # ✅ من السلايدر
+                    footer_text=""                       # ✅ بدون فوتر/اسم
                 )
 
                 out_dir = os.path.join(tmp, "output")
@@ -580,7 +600,7 @@ if uploaded:
                 out_dir=out_dir,
                 title=report_title,
                 subtitle=report_subtitle,
-                header_image=img_obj,
+                header_image=header_img_obj,
                 header_img_side=header_img_side.lower(),
                 header_img_width_frac=header_img_width_frac,
                 title_align=title_align.lower(),
