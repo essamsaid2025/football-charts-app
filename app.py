@@ -23,11 +23,16 @@ st.set_page_config(page_title="Football Charts Generator", layout="wide")
 st.markdown("## ⚽ Football Charts Generator")
 st.caption("Upload CSV / Excel → Match Report / Pizza / Shot Card")
 
+
+# -----------------------------
+# Helpers
+# -----------------------------
 def _safe_float(v):
     try:
         return float(v)
     except Exception:
         return float("nan")
+
 
 def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = df_raw.copy()
@@ -48,7 +53,13 @@ def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
     df["outcome"] = "unknown"
     return df
 
+
 def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    IMPORTANT:
+    - keep consistent with charts.py normalization
+    - DO NOT create '1ontarget' / '1offtarget'
+    """
     out = df.copy()
     if "outcome" not in out.columns:
         return out
@@ -57,18 +68,18 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
 
     mapping = {
         # shots
-        "on target": "1ontarget",
-        "ontarget": "1ontarget",
-        "1 on target": "1ontarget",
-        "shot on target": "1ontarget",
-        "sot": "1ontarget",
-        "saved": "1ontarget",
+        "on target": "ontarget",
+        "ontarget": "ontarget",
+        "1 on target": "ontarget",
+        "shot on target": "ontarget",
+        "sot": "ontarget",
+        "saved": "ontarget",
 
-        "off target": "1offtarget",
-        "offtarget": "1offtarget",
-        "shot off target": "1offtarget",
-        "miss": "1offtarget",
-        "wide": "1offtarget",
+        "off target": "off target",
+        "offtarget": "off target",
+        "shot off target": "off target",
+        "miss": "off target",
+        "wide": "off target",
 
         "goal": "goal",
         "scored": "goal",
@@ -115,11 +126,13 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
     out["outcome"] = s.map(lambda v: mapping.get(v, v))
     return out
 
+
 def _percentile_rank(series: pd.Series, value: float) -> float:
     s = pd.to_numeric(series, errors="coerce").dropna()
     if len(s) == 0 or pd.isna(value):
         return np.nan
     return float((s < value).mean() * 100.0)
+
 
 def build_pizza_df(players_df: pd.DataFrame, player_col: str, player_name: str, metrics: list[str]) -> pd.DataFrame:
     row = players_df.loc[players_df[player_col] == player_name]
@@ -137,8 +150,10 @@ def build_pizza_df(players_df: pd.DataFrame, player_col: str, player_name: str, 
         })
     return pd.DataFrame(out)
 
+
 def _lower_cols(df: pd.DataFrame) -> set[str]:
     return set([c.strip().lower() for c in df.columns])
+
 
 def _missing_for_chart(df_cols_lower: set[str], required_cols: list[str]) -> list[str]:
     miss = []
@@ -150,6 +165,7 @@ def _missing_for_chart(df_cols_lower: set[str], required_cols: list[str]) -> lis
             miss.append(c)
     return miss
 
+
 CHART_REQUIREMENTS = {
     "Outcome Bar": ["outcome"],
     "Start Heatmap": ["x", "y"],
@@ -158,6 +174,10 @@ CHART_REQUIREMENTS = {
     "Shot Map": ["outcome", "x", "y", "(optional) x2,y2", "(optional) xg"],
 }
 
+
+# -----------------------------
+# UI Settings
+# -----------------------------
 with st.expander("🎛️ Settings", expanded=True):
     st.markdown("### 🧩 Report Header")
     report_title = st.text_input("Title", value="Match Report")
@@ -296,6 +316,7 @@ with st.expander("🎛️ Settings", expanded=True):
     touch_dot_size = st.slider("Touch dot size", 60, 520, 220)
     touch_alpha = st.slider("Touch alpha", 20, 100, 95) / 100.0
 
+
 pass_colors = {
     "successful": col_pass_success,
     "unsuccessful": col_pass_unsuccess,
@@ -327,6 +348,7 @@ pass_markers = {
 }
 touch_marker = marker_options[touch_marker_label]
 
+
 img_obj = None
 if header_img is not None:
     try:
@@ -334,6 +356,10 @@ if header_img is not None:
     except Exception:
         img_obj = None
 
+
+# -----------------------------
+# Main
+# -----------------------------
 mode = st.radio("Choose output type", ["Match Charts", "Pizza Chart", "Shot Detail Card"])
 uploaded = st.file_uploader("Upload your file", type=["csv", "xlsx", "xls"])
 
@@ -343,9 +369,13 @@ if uploaded:
         with open(path, "wb") as f:
             f.write(uploaded.getbuffer())
 
+        # -----------------------------
+        # PIZZA MODE
+        # -----------------------------
         if mode == "Pizza Chart":
             dfp = load_data(path)
             st.success(f"Loaded ✅ rows: {len(dfp)}")
+
             with st.expander("Preview data (first 25 rows)", expanded=False):
                 st.write("Columns:", list(dfp.columns))
                 st.dataframe(dfp.head(25), use_container_width=True)
@@ -377,18 +407,38 @@ if uploaded:
             pizza_title = st.text_input("Pizza title", value=selected_player)
             pizza_subtitle = st.text_input("Pizza subtitle", value="Percentile vs peers (per90)")
 
+            def pct_color(p):
+                try:
+                    p = float(p)
+                except Exception:
+                    p = 0.0
+                if p >= 85:
+                    return "#1F77B4"  # Elite
+                elif p >= 70:
+                    return "#2ECC71"  # Good
+                elif p >= 50:
+                    return "#F39C12"  # Average
+                else:
+                    return "#E74C3C"  # Poor
+
             if st.button("Generate Pizza"):
                 pizza_df = build_pizza_df(dfp_filtered, player_col, selected_player, selected_metrics)
-                base_colors = ["#1f77b4", "#d62728", "#ff7f0e", "#2ca02c", "#9467bd", "#17becf"]
-                slice_colors = [base_colors[i % len(base_colors)] for i in range(len(pizza_df))]
-                fig = pizza_chart(pizza_df, title=pizza_title, subtitle=pizza_subtitle, slice_colors=slice_colors)
+                slice_colors = [pct_color(p) for p in pizza_df["percentile"].tolist()]
+
+                fig = pizza_chart(
+                    pizza_df,
+                    title=pizza_title,
+                    subtitle=pizza_subtitle,
+                    slice_colors=slice_colors,
+                    show_values_legend=False
+                )
 
                 out_dir = os.path.join(tmp, "output")
                 os.makedirs(out_dir, exist_ok=True)
                 png_path = os.path.join(out_dir, "pizza.png")
                 pdf_path = os.path.join(out_dir, "pizza.pdf")
 
-                fig.savefig(png_path, dpi=220, bbox_inches="tight", pad_inches=0.25)
+                fig.savefig(png_path, dpi=350, bbox_inches="tight", pad_inches=0.25)
                 with PdfPages(pdf_path) as pdf:
                     pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
 
@@ -397,8 +447,12 @@ if uploaded:
                     st.download_button("⬇️ Download pizza.pdf", f2, file_name="pizza.pdf")
                 with open(png_path, "rb") as f2:
                     st.download_button("⬇️ Download pizza.png", f2, file_name="pizza.png")
+
             st.stop()
 
+        # -----------------------------
+        # MATCH / SHOTS MODE
+        # -----------------------------
         df_raw = load_data(path)
 
         with st.expander("Raw file preview (first 25 rows)", expanded=False):
@@ -429,7 +483,7 @@ if uploaded:
 
         model_pipe = None
         if xg_method == "model":
-            if model_exists:
+            if os.path.exists(model_file):
                 try:
                     model_pipe = joblib.load(model_file)
                     st.success("Model loaded ✅")
@@ -454,6 +508,9 @@ if uploaded:
         if "xg_source" in df2.columns and len(df2):
             st.info(f"xG source used: **{df2['xg_source'].iloc[0]}**")
 
+        # -----------------------------
+        # SHOT DETAIL CARD
+        # -----------------------------
         if mode == "Shot Detail Card":
             shots_only = df2[df2["event_type"] == "shot"].copy().reset_index(drop=True)
             if shots_only.empty:
@@ -485,7 +542,7 @@ if uploaded:
                 png_path = os.path.join(out_dir, "shot_card.png")
                 pdf_path = os.path.join(out_dir, "shot_card.pdf")
 
-                fig.savefig(png_path, dpi=220, bbox_inches="tight", pad_inches=0.25)
+                fig.savefig(png_path, dpi=350, bbox_inches="tight", pad_inches=0.25)
                 with PdfPages(pdf_path) as pdf:
                     pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
 
@@ -494,8 +551,12 @@ if uploaded:
                     st.download_button("⬇️ Download shot_card.png", f2, file_name="shot_card.png")
                 with open(pdf_path, "rb") as f2:
                     st.download_button("⬇️ Download shot_card.pdf", f2, file_name="shot_card.pdf")
+
             st.stop()
 
+        # -----------------------------
+        # REPORT PDF
+        # -----------------------------
         generate_clicked = st.button("Generate Report", disabled=not can_generate_report)
         if not can_generate_report:
             st.info("Generate Report is disabled until required columns exist for all selected charts.")
@@ -531,7 +592,6 @@ if uploaded:
                 touch_dot_size=touch_dot_size,
                 touch_alpha=touch_alpha,
                 touch_marker=touch_marker,
-
                 pass_view=pass_view,
                 pass_result_scope=pass_scope,
                 pass_min_packing=pass_min_packing,
