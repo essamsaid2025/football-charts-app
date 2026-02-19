@@ -92,7 +92,6 @@ THEMES = {
 # ----------------------------
 def _clean_text_basic(s: str) -> str:
     s = str(s)
-    # remove NBSP and weird artifacts
     s = s.replace("\u00a0", " ").replace("Â", " ")
     s = s.strip().lower()
     s = s.replace("_", " ").replace("-", " ")
@@ -102,10 +101,10 @@ def _clean_text_basic(s: str) -> str:
 
 def _norm_outcome(s: Any) -> str:
     """
-    ✅ FIX based on diagnosis:
+    ✅ FIX:
     - do NOT turn 'key pass' into 'key'
     - tolerate '... pass' suffix for other outcomes
-    - keep robust mapping for outcome variants
+    - robust mapping
     """
     if s is None or (isinstance(s, float) and pd.isna(s)):
         return ""
@@ -114,11 +113,8 @@ def _norm_outcome(s: Any) -> str:
     # remove leading digits e.g. "1ontarget"
     s = re.sub(r"^\d+", "", s).strip()
 
-    # IMPORTANT: if it's exactly "key pass" (or close), keep it
-    # do suffix-removal only when it is NOT key pass
+    # remove " pass" suffix (except key pass)
     if s.endswith(" pass") and s != "key pass":
-        # e.g. "successful pass" -> "successful"
-        # but keep "key pass" as "key pass"
         s = s[:-5].strip()
 
     aliases = {
@@ -587,16 +583,10 @@ def _norm_name(x: str) -> str:
 
 
 def _find_col(df: pd.DataFrame, cands: List[str]) -> Optional[str]:
-    """
-    ✅ FIX: prevent collisions between:
-    - 'into penalty box' (from file)
-    - 'into_penalty_box' (standardized)
-    Both normalize to same key. Keep FIRST occurrence.
-    """
     col_map = {}
     for col in df.columns:
         key = _norm_name(col)
-        if key not in col_map:   # keep first
+        if key not in col_map:
             col_map[key] = col
 
     for cand in cands:
@@ -611,16 +601,6 @@ def add_pass_tags(
     pitch_mode: str = "rect",
     pitch_width: float = 64.0
 ) -> pd.DataFrame:
-    """
-    MANUAL ONLY for ALL pass tags:
-    - If column exists in file => YES=True / NO=False
-    - If column does NOT exist => False
-    - NO automatic calculation
-    NOTE: Do NOT require x2/y2 to count tags (to match file counts).
-
-    ✅ IMPORTANT:
-    Find source columns BEFORE creating standardized columns to avoid collisions.
-    """
     df = df_prepared.copy()
 
     p_src = df[df.get("event_type", "pass") == "pass"].copy()
@@ -1036,7 +1016,6 @@ def pass_map(
     has_end = d["x2"].notna() & d["y2"].notna()
     d_end = d[has_end].copy()
 
-    # arrows (only when end exists)
     for t in PASS_ORDER:
         dt = d_end[d_end["outcome"] == t]
         if len(dt) == 0:
@@ -1047,7 +1026,6 @@ def pass_map(
             color=pass_colors.get(t, theme.get("muted", "#A0A7B4"))
         )
 
-    # markers for all
     for t in PASS_ORDER:
         dt_all = d[d["outcome"] == t]
         if len(dt_all) == 0:
@@ -1262,7 +1240,7 @@ def build_report_from_prepared_df(
                 subtitle_color=subtitle_color,
             )
 
-            png_path = os.path.join(out_dir, "%s.png" % name)
+            png_path = os.path.join(out_dir, f"{name}.png")
             fig.savefig(png_path, dpi=220, bbox_inches="tight", pad_inches=0.25)
             pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
             plt.close(fig)
@@ -1272,15 +1250,18 @@ def build_report_from_prepared_df(
 
 
 # =========================================================
-# ✅ REQUIRED by app.py imports (fix ImportError)
+# ✅ Pizza Chart (PRO + FIXED INDENTATION)
 # =========================================================
 def pizza_chart(
     df_pizza: pd.DataFrame,
     title: str = "",
     subtitle: str = "",
     slice_colors: Optional[List[str]] = None,
-    show_values_legend: bool = True
+    show_values_legend: bool = False,
+    theme_name: str = "The Athletic Dark",
 ):
+    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+
     dfp = df_pizza.copy()
     dfp.columns = [c.strip().lower() for c in dfp.columns]
     required = {"metric", "value", "percentile"}
@@ -1288,66 +1269,94 @@ def pizza_chart(
         raise ValueError("Pizza input لازم يحتوي أعمدة: metric, value, percentile")
 
     params = dfp["metric"].astype(str).tolist()
-    values = pd.to_numeric(dfp["percentile"], errors="coerce").fillna(0).tolist()
+    values = pd.to_numeric(dfp["percentile"], errors="coerce").fillna(0).clip(0, 100).tolist()
     value_text = dfp["value"].astype(str).tolist()
 
+    # auto color by percentile if not provided
+    def pct_color(p):
+        try:
+            p = float(p)
+        except Exception:
+            p = 0.0
+        if p >= 85:
+            return "#1F77B4"  # Elite
+        elif p >= 70:
+            return "#2ECC71"  # Good
+        elif p >= 50:
+            return "#F39C12"  # Average
+        else:
+            return "#E74C3C"  # Poor
+
     if slice_colors is None or len(slice_colors) != len(values):
-        slice_colors = ["#1f77b4"] * len(values)
+        slice_colors = [pct_color(v) for v in values]
+
+    bg = theme.get("bg", "#0E1117")
+    panel = theme.get("panel", "#111827")
+    text = theme.get("text", "white")
+    muted = theme.get("muted", "#A0A7B4")
+    line = theme.get("lines", "#2A3240")
 
     pizza = PyPizza(
         params=params,
-        background_color="#111111",
-        straight_line_color="#0d0d0d",
-        straight_line_lw=1.8,
-        last_circle_color="white",
-        last_circle_lw=2,
+        background_color=bg,
+        straight_line_color=line,
+        straight_line_lw=1.6,
+        last_circle_color=text,
+        last_circle_lw=2.6,
         other_circle_ls="--",
-        other_circle_lw=1
+        other_circle_lw=1.1,
+        other_circle_color=line,
+        inner_circle_size=20,
     )
 
-    try:
-        fig, ax = pizza.make_pizza(
-            values,
-            figsize=(10, 10),
-            blank_alpha=0.25,
-            slice_colors=slice_colors,
-            kwargs_slices=dict(edgecolor="#0d0d0d", linewidth=1.6),
-            kwargs_params=dict(color="white", fontsize=12),
-            kwargs_values=dict(
-                color="white",
-                fontsize=11,
-                bbox=dict(
-                    edgecolor="white",
-                    facecolor="black",
-                    boxstyle="round,pad=0.25",
-                    linewidth=1
+    kwargs_values = dict(
+        color=text,
+        fontsize=11,
+        fontweight="bold",
+        bbox=dict(
+            boxstyle="round,pad=0.25",
+            facecolor=panel,
+            edgecolor=text,
+            linewidth=1.0,
+            alpha=0.95
+        )
     )
-)
-        )
-    except TypeError:
-        fig, ax = pizza.make_pizza(
-            values,
-            figsize=(8, 8),
-            blank_alpha=0.25,
-            value_bck_colors=["#1f77b4"] * len(values),
-            kwargs_slices=dict(edgecolor="#0d0d0d", linewidth=1.6),
-            kwargs_params=dict(color="white", fontsize=12),
-            kwargs_values=dict(color="white", fontsize=12),
-        )
+    kwargs_params = dict(color=text, fontsize=12, fontweight="bold")
 
-    fig.text(0.5, 0.985, title, ha="center", va="top", color="white", fontsize=18)
-    fig.text(0.5, 0.955, subtitle, ha="center", va="top", color="white", fontsize=12)
-    ax.set_ylim(-0.6, len(params) + 0.6)
+    fig, ax = pizza.make_pizza(
+        values,
+        figsize=(8.4, 8.4),
+        blank_alpha=0.22,
+        slice_colors=slice_colors,
+        kwargs_slices=dict(edgecolor=bg, linewidth=1.4),
+        kwargs_params=kwargs_params,
+        kwargs_values=kwargs_values,
+    )
+
+    fig.patch.set_facecolor(bg)
+    ax.set_facecolor(bg)
+
+    if title:
+        fig.text(0.5, 0.965, str(title), ha="center", va="top",
+                 color=text, fontsize=18, fontweight="bold")
+    if subtitle:
+        fig.text(0.5, 0.935, str(subtitle), ha="center", va="top",
+                 color=muted, fontsize=11)
+
     for spine in ax.spines.values():
-    spine.set_visible(False)
+        spine.set_visible(False)
+
     if show_values_legend:
-        lines = ["%s: %s   (pct %.1f)" % (m, v, p) for m, v, p in zip(params, value_text, values)]
+        lines = [f"{m}: {v}   (pct {p:.1f})" for m, v, p in zip(params, value_text, values)]
         fig.text(0.02, 0.02, "\n".join(lines), ha="left", va="bottom",
-                 color="white", fontsize=10, family="monospace")
+                 color=text, fontsize=10, family="monospace")
 
     return fig
 
 
+# ----------------------------
+# Shot Detail Card
+# ----------------------------
 def shot_detail_card(
     df_prepared: pd.DataFrame,
     shot_index: int,
@@ -1413,7 +1422,7 @@ def shot_detail_card(
     x, y = float(r["x"]), float(r["y"])
     pitch.scatter([x], [y], ax=ax_pitch, s=520, marker=mk, color=c, edgecolors="white", linewidth=2, zorder=5, clip_on=False)
     pitch.scatter([x], [y], ax=ax_pitch, s=190, marker=mk, color="white", alpha=0.25, zorder=6, clip_on=False)
-    ax_pitch.text(x + 1.2, y + 1.2, "xG %s" % xg_txt, color="white", fontsize=12, weight="bold", zorder=10)
+    ax_pitch.text(x + 1.2, y + 1.2, f"xG {xg_txt}", color="white", fontsize=12, weight="bold", zorder=10)
 
     has_end = ("x2" in shots.columns and "y2" in shots.columns and pd.notna(r.get("x2")) and pd.notna(r.get("y2")))
     y_low, y_high = _goal_mouth_bounds(pitch_mode, pitch_width)
@@ -1440,7 +1449,7 @@ def shot_detail_card(
 
     ax_info.text(0.02, 0.94, title, color=theme["text"], fontsize=18, weight="bold", transform=ax_info.transAxes)
     if xg_src:
-        ax_info.text(0.02, 0.89, "xG source: %s" % xg_src, color=theme["muted"], fontsize=12, transform=ax_info.transAxes)
+        ax_info.text(0.02, 0.89, f"xG source: {xg_src}", color=theme["muted"], fontsize=12, transform=ax_info.transAxes)
 
     ax_info.text(0.02, 0.80, "xG", color=theme["muted"], fontsize=14, transform=ax_info.transAxes)
     ax_info.text(0.02, 0.72, xg_txt, color=theme["text"], fontsize=26, weight="bold", transform=ax_info.transAxes)
