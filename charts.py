@@ -100,12 +100,6 @@ def _clean_text_basic(s: str) -> str:
 
 
 def _norm_outcome(s: Any) -> str:
-    """
-    ✅ FIX:
-    - do NOT turn 'key pass' into 'key'
-    - tolerate '... pass' suffix for other outcomes
-    - robust mapping
-    """
     if s is None or (isinstance(s, float) and pd.isna(s)):
         return ""
     s = _clean_text_basic(s)
@@ -113,7 +107,7 @@ def _norm_outcome(s: Any) -> str:
     # remove leading digits e.g. "1ontarget"
     s = re.sub(r"^\d+", "", s).strip()
 
-    # remove " pass" suffix (except key pass)
+    # keep "key pass" intact
     if s.endswith(" pass") and s != "key pass":
         s = s[:-5].strip()
 
@@ -823,7 +817,6 @@ def outcome_bar(df: pd.DataFrame, bar_colors: Optional[dict] = None, theme_name:
 
     handles = [Patch(facecolor=bar_colors.get(k, fallback), label=k) for k in labels[:8]]
     _add_legend(ax, handles, theme, loc="upper center")
-
     return fig
 
 
@@ -845,7 +838,6 @@ def start_location_heatmap(df: pd.DataFrame, pitch_mode: str = "rect", pitch_wid
 
     handles = [Patch(facecolor=theme.get("muted", "#A0A7B4"), label="Density / Events")]
     _add_legend(ax, handles, theme, loc="upper center")
-
     return fig
 
 
@@ -899,7 +891,6 @@ def touch_map(
     handles = [Line2D([0], [0], marker=marker, color="none", markerfacecolor=dot_color,
                       markeredgecolor=edge_color, markersize=10, label="Touches")]
     _add_legend(ax, handles, theme, loc="upper center")
-
     return fig
 
 
@@ -1060,13 +1051,9 @@ def pass_map(
                                   markeredgecolor="white",
                                   markersize=8, label=t))
     _add_legend(ax, handles, theme, loc="upper center")
-
     return fig
 
 
-# ----------------------------
-# Shot map
-# ----------------------------
 def shot_map(
     df: pd.DataFrame,
     shot_colors: Optional[dict] = None,
@@ -1126,7 +1113,6 @@ def shot_map(
                                   markeredgecolor="white",
                                   markersize=8, label=t))
     _add_legend(ax, handles, theme, loc="upper center")
-
     return fig
 
 
@@ -1240,7 +1226,7 @@ def build_report_from_prepared_df(
                 subtitle_color=subtitle_color,
             )
 
-            png_path = os.path.join(out_dir, f"{name}.png")
+            png_path = os.path.join(out_dir, "%s.png" % name)
             fig.savefig(png_path, dpi=220, bbox_inches="tight", pad_inches=0.25)
             pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
             plt.close(fig)
@@ -1250,18 +1236,18 @@ def build_report_from_prepared_df(
 
 
 # =========================================================
-# ✅ Pizza Chart (PRO + FIXED INDENTATION)
+# ✅ Pizza Chart (PRO) — center image + footer + Opta-ish look
 # =========================================================
 def pizza_chart(
     df_pizza: pd.DataFrame,
     title: str = "",
     subtitle: str = "",
     slice_colors: Optional[List[str]] = None,
-    show_values_legend: bool = False,
-    theme_name: str = "The Athletic Dark",
+    show_values_legend: bool = True,
+    center_image=None,
+    center_img_scale: float = 0.22,  # 0.18-0.28 مناسب
+    footer_text: str = "",           # مثال: "Data:fbref | By: Essam Mohamed"
 ):
-    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
-
     dfp = df_pizza.copy()
     dfp.columns = [c.strip().lower() for c in dfp.columns]
     required = {"metric", "value", "percentile"}
@@ -1269,87 +1255,117 @@ def pizza_chart(
         raise ValueError("Pizza input لازم يحتوي أعمدة: metric, value, percentile")
 
     params = dfp["metric"].astype(str).tolist()
-    values = pd.to_numeric(dfp["percentile"], errors="coerce").fillna(0).clip(0, 100).tolist()
+    values = pd.to_numeric(dfp["percentile"], errors="coerce").fillna(0).tolist()
     value_text = dfp["value"].astype(str).tolist()
 
-    # auto color by percentile if not provided
-    def pct_color(p):
-        try:
-            p = float(p)
-        except Exception:
-            p = 0.0
-        if p >= 85:
-            return "#1F77B4"  # Elite
-        elif p >= 70:
-            return "#2ECC71"  # Good
-        elif p >= 50:
-            return "#F39C12"  # Average
-        else:
-            return "#E74C3C"  # Poor
-
     if slice_colors is None or len(slice_colors) != len(values):
-        slice_colors = [pct_color(v) for v in values]
+        slice_colors = ["#1f77b4"] * len(values)
 
-    bg = theme.get("bg", "#0E1117")
-    panel = theme.get("panel", "#111827")
-    text = theme.get("text", "white")
-    muted = theme.get("muted", "#A0A7B4")
-    line = theme.get("lines", "#2A3240")
+    bg = "#2B2B2B"  # قريب من الصورة اللي بعتهالك
+    ring = "#0B0F14"
+    muted = "#E6E6E6"
 
     pizza = PyPizza(
         params=params,
         background_color=bg,
-        straight_line_color=line,
-        straight_line_lw=1.6,
-        last_circle_color=text,
-        last_circle_lw=2.6,
+        straight_line_color=ring,
+        straight_line_lw=2.0,
+        last_circle_color=muted,
+        last_circle_lw=2.3,
         other_circle_ls="--",
-        other_circle_lw=1.1,
-        other_circle_color=line,
-        inner_circle_size=20,
+        other_circle_lw=1.6,
+        other_circle_color="#3A3F46",
     )
 
-    kwargs_values = dict(
-        color=text,
-        fontsize=11,
-        fontweight="bold",
-        bbox=dict(
-            boxstyle="round,pad=0.25",
-            facecolor=panel,
-            edgecolor=text,
-            linewidth=1.0,
-            alpha=0.95
+    try:
+        fig, ax = pizza.make_pizza(
+            values,
+            figsize=(10, 10),
+            blank_alpha=0.22,
+            slice_colors=slice_colors,
+            kwargs_slices=dict(edgecolor=ring, linewidth=1.8),
+            kwargs_params=dict(color="white", fontsize=15, fontweight="bold"),
+            kwargs_values=dict(
+                color="white",
+                fontsize=13,
+                fontweight="bold",
+                bbox=dict(
+                    edgecolor=ring,
+                    facecolor="#1E2126",
+                    boxstyle="round,pad=0.25",
+                    linewidth=1.2,
+                ),
+            ),
         )
-    )
-    kwargs_params = dict(color=text, fontsize=12, fontweight="bold")
-
-    fig, ax = pizza.make_pizza(
-        values,
-        figsize=(8.4, 8.4),
-        blank_alpha=0.22,
-        slice_colors=slice_colors,
-        kwargs_slices=dict(edgecolor=bg, linewidth=1.4),
-        kwargs_params=kwargs_params,
-        kwargs_values=kwargs_values,
-    )
+    except TypeError:
+        fig, ax = pizza.make_pizza(
+            values,
+            figsize=(10, 10),
+            blank_alpha=0.22,
+            value_bck_colors=slice_colors,
+            kwargs_slices=dict(edgecolor=ring, linewidth=1.8),
+            kwargs_params=dict(color="white", fontsize=15, fontweight="bold"),
+            kwargs_values=dict(color="white", fontsize=13, fontweight="bold"),
+        )
 
     fig.patch.set_facecolor(bg)
-    ax.set_facecolor(bg)
 
-    if title:
-        fig.text(0.5, 0.965, str(title), ha="center", va="top",
-                 color=text, fontsize=18, fontweight="bold")
-    if subtitle:
-        fig.text(0.5, 0.935, str(subtitle), ha="center", va="top",
-                 color=muted, fontsize=11)
+    # titles
+    fig.text(0.5, 0.975, (title or "").strip(), ha="center", va="top",
+             color="white", fontsize=24, fontweight="bold", family="serif")
+    fig.text(0.5, 0.945, (subtitle or "").strip(), ha="center", va="top",
+             color="#D0D4DA", fontsize=16, family="serif")
 
-    for spine in ax.spines.values():
-        spine.set_visible(False)
+    # footer
+    if footer_text:
+        fig.text(0.98, 0.03, footer_text, ha="right", va="bottom",
+                 color="white", fontsize=12)
 
+    # ✅ center image
+    if center_image is not None:
+        try:
+            img = center_image
+            if hasattr(img, "convert"):
+                img = img.convert("RGBA")
+            img_arr = np.asarray(img)
+
+            s = float(center_img_scale)
+            s = max(0.12, min(0.32, s))
+
+            ax_img = fig.add_axes([0.5 - s / 2.0, 0.5 - s / 2.0, s, s], zorder=50)
+            ax_img.imshow(img_arr)
+            ax_img.axis("off")
+            ax_img.set_facecolor("none")
+
+            # circular crop
+            circ = plt.Circle((0.5, 0.5), 0.5, transform=ax_img.transAxes,
+                              facecolor="none", edgecolor="none")
+            ax_img.add_patch(circ)
+            ax_img.set_clip_path(circ)
+
+            # ring border
+            ring1 = plt.Circle((0.5, 0.5), 0.5, transform=ax_img.transAxes,
+                               fill=False, edgecolor=ring, linewidth=6.0, alpha=1.0)
+            ring2 = plt.Circle((0.5, 0.5), 0.5, transform=ax_img.transAxes,
+                               fill=False, edgecolor="white", linewidth=2.0, alpha=0.9)
+            ax_img.add_patch(ring1)
+            ax_img.add_patch(ring2)
+
+        except Exception:
+            pass
+
+    # optional legend block
     if show_values_legend:
         lines = [f"{m}: {v}   (pct {p:.1f})" for m, v, p in zip(params, value_text, values)]
-        fig.text(0.02, 0.02, "\n".join(lines), ha="left", va="bottom",
-                 color=text, fontsize=10, family="monospace")
+        fig.text(
+            0.02, 0.02, "\n".join(lines),
+            ha="left", va="bottom",
+            color="white", fontsize=10, family="monospace"
+        )
+
+    # cleanup spines
+    for spine in ax.spines.values():
+        spine.set_visible(False)
 
     return fig
 
@@ -1422,7 +1438,7 @@ def shot_detail_card(
     x, y = float(r["x"]), float(r["y"])
     pitch.scatter([x], [y], ax=ax_pitch, s=520, marker=mk, color=c, edgecolors="white", linewidth=2, zorder=5, clip_on=False)
     pitch.scatter([x], [y], ax=ax_pitch, s=190, marker=mk, color="white", alpha=0.25, zorder=6, clip_on=False)
-    ax_pitch.text(x + 1.2, y + 1.2, f"xG {xg_txt}", color="white", fontsize=12, weight="bold", zorder=10)
+    ax_pitch.text(x + 1.2, y + 1.2, "xG %s" % xg_txt, color="white", fontsize=12, weight="bold", zorder=10)
 
     has_end = ("x2" in shots.columns and "y2" in shots.columns and pd.notna(r.get("x2")) and pd.notna(r.get("y2")))
     y_low, y_high = _goal_mouth_bounds(pitch_mode, pitch_width)
@@ -1449,7 +1465,7 @@ def shot_detail_card(
 
     ax_info.text(0.02, 0.94, title, color=theme["text"], fontsize=18, weight="bold", transform=ax_info.transAxes)
     if xg_src:
-        ax_info.text(0.02, 0.89, f"xG source: {xg_src}", color=theme["muted"], fontsize=12, transform=ax_info.transAxes)
+        ax_info.text(0.02, 0.89, "xG source: %s" % xg_src, color=theme["muted"], fontsize=12, transform=ax_info.transAxes)
 
     ax_info.text(0.02, 0.80, "xG", color=theme["muted"], fontsize=14, transform=ax_info.transAxes)
     ax_info.text(0.02, 0.72, xg_txt, color=theme["text"], fontsize=26, weight="bold", transform=ax_info.transAxes)
