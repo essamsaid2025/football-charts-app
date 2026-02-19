@@ -380,19 +380,20 @@ if uploaded:
 
             if st.button("Generate Pizza"):
                 pizza_df = build_pizza_df(dfp_filtered, player_col, selected_player, selected_metrics)
+
                 def pct_color(p):
                     try:
                         p = float(p)
                     except Exception:
                         p = 0.0
                     if p >= 85:
-                        return "#1F77B4"  # Elite
+                        return "#1F77B4"
                     elif p >= 70:
-                        return "#2ECC71"  # Good
+                        return "#2ECC71"
                     elif p >= 50:
-                        return "#F39C12"  # Average
+                        return "#F39C12"
                     else:
-                        return "#E74C3C"  # Poor
+                        return "#E74C3C"
 
                 slice_colors = [pct_color(p) for p in pizza_df["percentile"].tolist()]
 
@@ -403,7 +404,7 @@ if uploaded:
                     slice_colors=slice_colors,
                     show_values_legend=False
                 )
-                
+             
 
                 out_dir = os.path.join(tmp, "output")
                 os.makedirs(out_dir, exist_ok=True)
