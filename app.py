@@ -24,10 +24,10 @@ st.markdown("## ⚽ Football Charts Generator")
 st.caption("Upload CSV / Excel → Match Report / Pizza / Shot Card")
 
 def _safe_float(v):
-try:
-    return float(v)
-except Exception:
-    return float("nan")
+    try:
+        return float(v)
+    except Exception:
+        return float("nan")
 
 def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
 df = df_raw.copy()
