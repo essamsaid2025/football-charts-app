@@ -1245,7 +1245,7 @@ def pizza_chart(
     slice_colors: Optional[List[str]] = None,
     show_values_legend: bool = True,
     center_image=None,
-    center_img_scale: float = 0.17,  # 0.18-0.28 مناسب
+    center_img_scale: float = 0.22,  # 0.18-0.28 مناسب
     footer_text: str = "",           # مثال: "Data:fbref | By: Essam Mohamed"
 ):
     dfp = df_pizza.copy()
@@ -1261,7 +1261,7 @@ def pizza_chart(
     if slice_colors is None or len(slice_colors) != len(values):
         slice_colors = ["#1f77b4"] * len(values)
 
-    bg = "#0B0F14"  # قريب من الصورة اللي بعتهالك
+    bg = "#2B2B2B"  # قريب من الصورة اللي بعتهالك
     ring = "#0B0F14"
     muted = "#E6E6E6"
 
@@ -1347,7 +1347,7 @@ def pizza_chart(
             ring1 = plt.Circle((0.5, 0.5), 0.5, transform=ax_img.transAxes,
                                fill=False, edgecolor=ring, linewidth=6.0, alpha=1.0)
             ring2 = plt.Circle((0.5, 0.5), 0.5, transform=ax_img.transAxes,
-                               fill=False, edgecolor="none", linewidth=2.0, alpha=0.9)
+                               fill=False, edgecolor="white", linewidth=2.0, alpha=0.9)
             ax_img.add_patch(ring1)
             ax_img.add_patch(ring2)
 
