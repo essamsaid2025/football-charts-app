@@ -183,7 +183,10 @@ with st.expander("🎛️ Settings", expanded=True):
     report_title = st.text_input("Title", value="Match Report")
     report_subtitle = st.text_input("Subtitle", value="")
 
-    header_img = st.file_uploader("Upload header image (Club logo / Player face) - PNG/JPG", type=["png", "jpg", "jpeg"])
+    header_img = st.file_uploader(
+        "Upload header image (Club logo / Player face) - PNG/JPG",
+        type=["png", "jpg", "jpeg"]
+    )
     header_img_side = st.selectbox("Image position", ["Left", "Right"], index=0)
 
     header_img_size = st.slider("Image size (as % of figure width)", 5, 18, 10)
@@ -316,6 +319,10 @@ with st.expander("🎛️ Settings", expanded=True):
     touch_dot_size = st.slider("Touch dot size", 60, 520, 220)
     touch_alpha = st.slider("Touch alpha", 20, 100, 95) / 100.0
 
+    st.markdown("---")
+    st.markdown("### Pizza center image")
+    pizza_center_scale = st.slider("Center image size (Pizza)", 12, 32, 22) / 100.0
+
 
 pass_colors = {
     "successful": col_pass_success,
@@ -425,12 +432,16 @@ if uploaded:
                 pizza_df = build_pizza_df(dfp_filtered, player_col, selected_player, selected_metrics)
                 slice_colors = [pct_color(p) for p in pizza_df["percentile"].tolist()]
 
+                # ✅ center_image from uploaded header image (club logo / player face)
                 fig = pizza_chart(
                     pizza_df,
                     title=pizza_title,
                     subtitle=pizza_subtitle,
                     slice_colors=slice_colors,
-                    show_values_legend=False
+                    show_values_legend=False,
+                    center_image=img_obj,                 # ✅ الصورة في نص الشارت
+                    center_img_scale=pizza_center_scale,  # ✅ من السلايدر
+                    footer_text=""                        # ✅ بدون اسم/فوتر
                 )
 
                 out_dir = os.path.join(tmp, "output")
