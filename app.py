@@ -57,18 +57,19 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
 
     mapping = {
         # shots
-        "on target": "1ontarget",
-        "ontarget": "1ontarget",
-        "1 on target": "1ontarget",
-        "shot on target": "1ontarget",
-        "sot": "1ontarget",
-        "saved": "1ontarget",
+        "on target": "ontarget",
+        "ontarget": "ontarget",
+        "1 on target": "ontarget",
+        "shot on target": "ontarget",
+        "sot": "ontarget",
+        "saved": "ontarget",
 
-        "off target": "1offtarget",
-        "offtarget": "1offtarget",
-        "shot off target": "1offtarget",
-        "miss": "1offtarget",
-        "wide": "1offtarget",
+        "off target": "off target",
+        "offtarget": "off target",
+        "shot off target": "off target",
+        "miss": "off target",
+        "wide": "off target",
+
 
         "goal": "goal",
         "scored": "goal",
@@ -379,16 +380,37 @@ if uploaded:
 
             if st.button("Generate Pizza"):
                 pizza_df = build_pizza_df(dfp_filtered, player_col, selected_player, selected_metrics)
-                base_colors = ["#1f77b4", "#d62728", "#ff7f0e", "#2ca02c", "#9467bd", "#17becf"]
-                slice_colors = [base_colors[i % len(base_colors)] for i in range(len(pizza_df))]
-                fig = pizza_chart(pizza_df, title=pizza_title, subtitle=pizza_subtitle, slice_colors=slice_colors)
+                def pct_color(p):
+                    try:
+                        p = float(p)
+                    except Exception:
+                        p = 0.0
+                    if p >= 85:
+                        return "#1F77B4"  # Elite
+                    elif p >= 70:
+                        return "#2ECC71"  # Good
+                    elif p >= 50:
+                        return "#F39C12"  # Average
+                    else:
+                        return "#E74C3C"  # Poor
+
+                slice_colors = [pct_color(p) for p in pizza_df["percentile"].tolist()]
+
+                fig = pizza_chart(
+                    pizza_df,
+                    title=pizza_title,
+                    subtitle=pizza_subtitle,
+                    slice_colors=slice_colors,
+                    show_values_legend=False
+                )
+                
 
                 out_dir = os.path.join(tmp, "output")
                 os.makedirs(out_dir, exist_ok=True)
                 png_path = os.path.join(out_dir, "pizza.png")
                 pdf_path = os.path.join(out_dir, "pizza.pdf")
 
-                fig.savefig(png_path, dpi=220, bbox_inches="tight", pad_inches=0.25)
+                fig.savefig(png_path, dpi=350, bbox_inches="tight", pad_inches=0.25)
                 with PdfPages(pdf_path) as pdf:
                     pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
 
