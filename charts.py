@@ -784,7 +784,7 @@ def add_report_header(
         y0 = 0.895
         x0 = 0.02 if img_side != "right" else (0.98 - w)
 
-        ax_img = fig.add_axes([x0, y0, w, h], zorder=50)
+        ax_img = fig.add_axes([x0=0.5-w/2, y0=0.5-h/2, w=0.13, h=0.13], zorder=50)
         ax_img.imshow(img_arr)
         ax_img.axis("off")
         ax_img.set_facecolor("none")
@@ -1267,7 +1267,7 @@ def pizza_chart(
 
     pizza = PyPizza(
         params=params,
-        background_color=bg,
+        background_color="#0B0F14",
         straight_line_color=ring,
         straight_line_lw=2.0,
         last_circle_color=muted,
@@ -1291,7 +1291,7 @@ def pizza_chart(
                 fontweight="bold",
                 bbox=dict(
                     edgecolor=ring,
-                    facecolor="#1E2126",
+                    facecolor="#0B0F14",
                     boxstyle="round,pad=0.25",
                     linewidth=1.2,
                 ),
