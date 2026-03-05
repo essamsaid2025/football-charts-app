@@ -826,15 +826,7 @@ def start_location_heatmap(df: pd.DataFrame, pitch_mode: str = "rect", pitch_wid
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
-    
-    # --- pitch thirds lines ---
-    pitch_length = 100
 
-    third_1 = pitch_length / 3
-    third_2 = pitch_length * 2 / 3
-
-    ax.axvline(third_1, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
-    ax.axvline(third_2, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
     try:
         pitch.kdeplot(df["x"], df["y"], ax=ax, fill=True, levels=50, alpha=0.7)
     except Exception:
@@ -879,15 +871,7 @@ def touch_map(
     fig, ax = plt.subplots(figsize=(12, 7.2))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
-    
-    # --- pitch thirds lines ---
-    pitch_length = 100
 
-    third_1 = pitch_length / 3
-    third_2 = pitch_length * 2 / 3
-
-    ax.axvline(third_1, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
-    ax.axvline(third_2, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
     pitch.scatter(
         d["x"], d["y"],
         ax=ax,
@@ -931,15 +915,6 @@ def _empty_pass_map_figure(pitch_mode: str, pitch_width: float, theme: dict, tit
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
-    
-    # --- pitch thirds lines ---
-    pitch_length = 100
-
-    third_1 = pitch_length / 3
-    third_2 = pitch_length * 2 / 3
-
-    ax.axvline(third_1, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
-    ax.axvline(third_2, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
 
     ax.set_title(title, color=theme["text"])
     ax.text(0.5, 0.5, msg, transform=ax.transAxes, ha="center", va="center",
@@ -1028,15 +1003,7 @@ def pass_map(
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
-    
-    # --- pitch thirds lines ---
-    pitch_length = 100
 
-    third_1 = pitch_length / 3
-    third_2 = pitch_length * 2 / 3
-
-    ax.axvline(third_1, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
-    ax.axvline(third_2, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
     has_end = d["x2"].notna() & d["y2"].notna()
     d_end = d[has_end].copy()
 
@@ -1105,15 +1072,7 @@ def shot_map(
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
-    
-    # --- pitch thirds lines ---
-    pitch_length = 100
 
-    third_1 = pitch_length / 3
-    third_2 = pitch_length * 2 / 3
-
-    ax.axvline(third_1, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
-    ax.axvline(third_2, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
     for t in SHOT_ORDER:
         stt = s[s["outcome"] == t]
         if len(stt) == 0:
@@ -1196,26 +1155,20 @@ def build_report_from_prepared_df(
         pass_min_packing = int(kwargs.get("pass_min_packing", 1))
     except Exception:
         pass_min_packing = 1
-    legend_on = kwargs.get("legend_on", True)   # تحكم عام في ظهور legend
-    
+
     os.makedirs(out_dir, exist_ok=True)
     pdf_path = os.path.join(out_dir, "report.pdf")
 
     df2 = df_prepared.copy()
     charts_to_include = charts_to_include or ["Outcome Bar", "Start Heatmap", "Touch Map (Scatter)", "Pass Map", "Shot Map"]
 
-    chart_legend_options = {
-    "Pass Map": ["Successful", "Unsuccessful", "Key Pass", "Assist", "Progresive", "line Breaking"],
-    "Shot Map": ["Goal", "Saved", "Blocked"],
-    "Outcome Bar": ["Successful", "Unsuccessful"],  # مثال
-    }
     figs = []
 
     if "Outcome Bar" in charts_to_include:
-        figs.append(("outcome_bar", outcome_bar(df2, bar_colors=bar_colors, theme_name=theme_name, legend_options=chart_legend_options.get("Outcome Bar"),)))
+        figs.append(("outcome_bar", outcome_bar(df2, bar_colors=bar_colors, theme_name=theme_name)))
 
     if "Start Heatmap" in charts_to_include:
-        figs.append(("start_heatmap", start_location_heatmap(df2, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name, legend_options=chart_legend_options.get("Start Heatmap"),)))
+        figs.append(("start_heatmap", start_location_heatmap(df2, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name)))
 
     if "Touch Map (Scatter)" in charts_to_include:
         figs.append(("touch_map", touch_map(
@@ -1228,7 +1181,6 @@ def build_report_from_prepared_df(
             dot_size=touch_dot_size,
             alpha=touch_alpha,
             marker=touch_marker,
-            legend_options=chart_legend_options.get("Touch Map (Scatter)"),
         )))
 
     if "Pass Map" in charts_to_include:
@@ -1242,7 +1194,6 @@ def build_report_from_prepared_df(
             pass_view=pass_view,
             result_scope=pass_result_scope,
             min_packing=pass_min_packing,
-            legend_options=chart_legend_options.get("Pass Map"),
         )))
 
     if "Shot Map" in charts_to_include:
@@ -1253,8 +1204,7 @@ def build_report_from_prepared_df(
             pitch_mode=pitch_mode,
             pitch_width=pitch_width,
             show_xg=True,
-            theme_name=theme_name,
-             legend_options=chart_legend_options.get("Shot Map"),
+            theme_name=theme_name
         )))
 
     pngs = []
