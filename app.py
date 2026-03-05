@@ -231,6 +231,19 @@ with st.expander("🎛️ Settings", expanded=True):
     st.caption(f"Model exists: **{model_exists}**")
 
     st.markdown("### Report charts to include")
+    st.markdown("### Legend settings")
+    legend_options = [
+        "Passes",
+        "Shots",
+        "Touches",
+        "Defensive Actions"
+    ]
+    
+    legend_items = st.multiselect(
+        "Select legend items to display",
+        legend_options,
+        default=legend_options
+    )
     all_charts = ["Outcome Bar", "Start Heatmap", "Touch Map (Scatter)", "Pass Map", "Shot Map"]
     selected_charts = st.multiselect("Choose charts", all_charts, default=all_charts)
 
@@ -626,6 +639,7 @@ if uploaded:
                 pass_view=pass_view,
                 pass_result_scope=pass_scope,
                 pass_min_packing=pass_min_packing,
+                legend_items=legend_items,
             )
 
             st.subheader("Preview")
