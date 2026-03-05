@@ -1253,7 +1253,7 @@ def build_report_from_prepared_df(
             pitch_mode=pitch_mode,
             pitch_width=pitch_width,
             show_xg=True,
-            theme_name=theme_name
+            theme_name=theme_name,
              legend_options=chart_legend_options.get("Shot Map"),
         )))
 
