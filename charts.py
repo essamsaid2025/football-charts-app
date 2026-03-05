@@ -1204,6 +1204,11 @@ def build_report_from_prepared_df(
     df2 = df_prepared.copy()
     charts_to_include = charts_to_include or ["Outcome Bar", "Start Heatmap", "Touch Map (Scatter)", "Pass Map", "Shot Map"]
 
+    chart_legend_options = {
+    "Pass Map": ["Successful", "Unsuccessful", "Key Pass", "Assist", "Progresive", "line Breaking"],
+    "Shot Map": ["Goal", "Saved", "Blocked"],
+    "Outcome Bar": ["Successful", "Unsuccessful"],  # مثال
+    }
     figs = []
 
     if "Outcome Bar" in charts_to_include:
@@ -1237,7 +1242,7 @@ def build_report_from_prepared_df(
             pass_view=pass_view,
             result_scope=pass_result_scope,
             min_packing=pass_min_packing,
-            legend_on=legend_on,
+            legend_options=chart_legend_options.get("Pass Map"),
         )))
 
     if "Shot Map" in charts_to_include:
