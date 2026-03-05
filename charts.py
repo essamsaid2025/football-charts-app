@@ -1212,10 +1212,10 @@ def build_report_from_prepared_df(
     figs = []
 
     if "Outcome Bar" in charts_to_include:
-        figs.append(("outcome_bar", outcome_bar(df2, bar_colors=bar_colors, theme_name=theme_name, legend_on=legend_on,)))
+        figs.append(("outcome_bar", outcome_bar(df2, bar_colors=bar_colors, theme_name=theme_name, legend_options=chart_legend_options.get("Outcome Bar"),)))
 
     if "Start Heatmap" in charts_to_include:
-        figs.append(("start_heatmap", start_location_heatmap(df2, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name, legend_on=legend_on,)))
+        figs.append(("start_heatmap", start_location_heatmap(df2, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name, legend_options=chart_legend_options.get("Start Heatmap"),)))
 
     if "Touch Map (Scatter)" in charts_to_include:
         figs.append(("touch_map", touch_map(
@@ -1228,7 +1228,7 @@ def build_report_from_prepared_df(
             dot_size=touch_dot_size,
             alpha=touch_alpha,
             marker=touch_marker,
-            legend_on=legend_on,
+            legend_options=chart_legend_options.get("Touch Map (Scatter)"),
         )))
 
     if "Pass Map" in charts_to_include:
@@ -1254,7 +1254,7 @@ def build_report_from_prepared_df(
             pitch_width=pitch_width,
             show_xg=True,
             theme_name=theme_name
-            legend_on=legend_on,
+             legend_options=chart_legend_options.get("Shot Map"),
         )))
 
     pngs = []
