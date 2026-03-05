@@ -826,7 +826,15 @@ def start_location_heatmap(df: pd.DataFrame, pitch_mode: str = "rect", pitch_wid
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
+    
+    # --- pitch thirds lines ---
+    pitch_length = 100
 
+    third_1 = pitch_length / 3
+    third_2 = pitch_length * 2 / 3
+
+    ax.axvline(third_1, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
+    ax.axvline(third_2, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
     try:
         pitch.kdeplot(df["x"], df["y"], ax=ax, fill=True, levels=50, alpha=0.7)
     except Exception:
@@ -871,7 +879,15 @@ def touch_map(
     fig, ax = plt.subplots(figsize=(12, 7.2))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
+    
+    # --- pitch thirds lines ---
+    pitch_length = 100
 
+    third_1 = pitch_length / 3
+    third_2 = pitch_length * 2 / 3
+
+    ax.axvline(third_1, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
+    ax.axvline(third_2, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
     pitch.scatter(
         d["x"], d["y"],
         ax=ax,
@@ -915,6 +931,15 @@ def _empty_pass_map_figure(pitch_mode: str, pitch_width: float, theme: dict, tit
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
+    
+    # --- pitch thirds lines ---
+    pitch_length = 100
+
+    third_1 = pitch_length / 3
+    third_2 = pitch_length * 2 / 3
+
+    ax.axvline(third_1, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
+    ax.axvline(third_2, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
 
     ax.set_title(title, color=theme["text"])
     ax.text(0.5, 0.5, msg, transform=ax.transAxes, ha="center", va="center",
@@ -1003,7 +1028,15 @@ def pass_map(
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
+    
+    # --- pitch thirds lines ---
+    pitch_length = 100
 
+    third_1 = pitch_length / 3
+    third_2 = pitch_length * 2 / 3
+
+    ax.axvline(third_1, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
+    ax.axvline(third_2, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
     has_end = d["x2"].notna() & d["y2"].notna()
     d_end = d[has_end].copy()
 
@@ -1072,7 +1105,15 @@ def shot_map(
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
+    
+    # --- pitch thirds lines ---
+    pitch_length = 100
 
+    third_1 = pitch_length / 3
+    third_2 = pitch_length * 2 / 3
+
+    ax.axvline(third_1, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
+    ax.axvline(third_2, color="#8a8a8a", linestyle="--", lw=1.2, zorder=1)
     for t in SHOT_ORDER:
         stt = s[s["outcome"] == t]
         if len(stt) == 0:
