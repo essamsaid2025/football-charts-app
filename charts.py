@@ -1184,17 +1184,22 @@ def build_report_from_prepared_df(
         )))
 
     if "Pass Map" in charts_to_include:
+        # فلترة حسب الموجود في العمود outcome
+        all_pass_types = df2['outcome'].dropna().unique().tolist()
+        pass_colors_filtered = {k: v for k, v in (pass_colors or {}).items() if k in all_pass_types}
+        pass_markers_filtered = {k: v for k, v in (pass_markers or {}).items() if k in all_pass_types}
+
         figs.append(("pass_map", pass_map(
             df2,
-            pass_colors=pass_colors,
-            pass_markers=pass_markers,
+            pass_colors=pass_colors_filtered,
+            pass_markers=pass_markers_filtered,
             pitch_mode=pitch_mode,
             pitch_width=pitch_width,
             theme_name=theme_name,
             pass_view=pass_view,
             result_scope=pass_result_scope,
             min_packing=pass_min_packing,
-        )))
+         )))
 
     if "Shot Map" in charts_to_include:
         figs.append(("shot_map", shot_map(
