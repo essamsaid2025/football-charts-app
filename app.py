@@ -15,6 +15,7 @@ from charts import (
     build_report_from_prepared_df,
     pizza_chart,
     shot_detail_card,
+    defensive_regains_map,
     THEMES,
 )
 
