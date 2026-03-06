@@ -16,12 +16,6 @@ from mplsoccer import Pitch, PyPizza
 
 # ✅ Helper: YES only (NO/empty = False)
 def _yes_only(s: pd.Series) -> pd.Series:
-    """
-    YES -> True
-    NO / Empty / NaN -> False
-    Accepts: yes/no, y/n, true/false, 1/0, arabic نعم/لا
-    Anything else -> False (safe default)
-    """
     if s is None:
         return pd.Series(dtype=bool)
 
@@ -41,6 +35,15 @@ PASS_ORDER = ["unsuccessful", "successful", "key pass", "assist"]
 SHOT_ORDER = ["off target", "ontarget", "goal", "blocked"]
 SHOT_TYPES = set(SHOT_ORDER)
 REQUIRED = ["outcome", "x", "y"]
+
+DEF_ACTION_COLS = [
+    "interception",
+    "tackle",
+    "recovery",
+    "aerial_duel",
+    "ground_duel",
+    "clearance",
+]
 
 THEMES = {
     "The Athletic Dark": {
@@ -88,7 +91,7 @@ THEMES = {
 
 
 # ----------------------------
-# Outcome normalization (strong)
+# Outcome normalization
 # ----------------------------
 def _clean_text_basic(s: str) -> str:
     s = str(s)
@@ -104,10 +107,8 @@ def _norm_outcome(s: Any) -> str:
         return ""
     s = _clean_text_basic(s)
 
-    # remove leading digits e.g. "1ontarget"
     s = re.sub(r"^\d+", "", s).strip()
 
-    # keep "key pass" intact
     if s.endswith(" pass") and s != "key pass":
         s = s[:-5].strip()
 
@@ -140,7 +141,6 @@ def _norm_outcome(s: Any) -> str:
 
         "assist": "assist",
 
-        # success/fail variants
         "successful": "successful",
         "success": "successful",
         "completed": "successful",
@@ -218,22 +218,53 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df["outcome"] = df["outcome"].apply(_norm_outcome)
     df = df.dropna(subset=["x", "y"]).copy()
 
+    # normalize defensive action column names if present
+    rename_map = {}
+    for c in df.columns:
+        c0 = str(c).strip().lower()
+        if c0 in ["interceptions"]:
+            rename_map[c] = "interception"
+        elif c0 in ["tackles"]:
+            rename_map[c] = "tackle"
+        elif c0 in ["recoveries"]:
+            rename_map[c] = "recovery"
+        elif c0 in ["aerial duel", "aerial duels", "aerial_duels"]:
+            rename_map[c] = "aerial_duel"
+        elif c0 in ["ground duel", "ground duels", "ground_duels"]:
+            rename_map[c] = "ground_duel"
+        elif c0 in ["clearances"]:
+            rename_map[c] = "clearance"
+    if rename_map:
+        df.rename(columns=rename_map, inplace=True)
+
     if "event_type" in df.columns:
         df["event_type"] = df["event_type"].astype(str).str.strip().str.lower()
     else:
-        df["event_type"] = "pass"
+        df["event_type"] = "other"
+        df.loc[df["outcome"].isin(PASS_ORDER), "event_type"] = "pass"
         df.loc[df["outcome"].isin(SHOT_TYPES), "event_type"] = "shot"
+        df.loc[df["outcome"] == "touch", "event_type"] = "touch"
+
+    # detect defensive rows from yes-columns
+    available_def_cols = [c for c in DEF_ACTION_COLS if c in df.columns]
+    if available_def_cols:
+        def_mask = pd.Series(False, index=df.index)
+        for c in available_def_cols:
+            def_mask = def_mask | _yes_only(df[c])
+        df.loc[def_mask, "event_type"] = "defensive"
 
     df_pass = df[df["event_type"] == "pass"].copy()
     df_shot = df[df["event_type"] == "shot"].copy()
-    df_touch = df[df["outcome"] == "touch"].copy()
+    df_touch = df[df["event_type"] == "touch"].copy()
+    df_def = df[df["event_type"] == "defensive"].copy()
+    df_other = df[~df["event_type"].isin(["pass", "shot", "touch", "defensive"])].copy()
 
     if not df_pass.empty:
         df_pass = df_pass[df_pass["outcome"].isin(PASS_ORDER)]
     if not df_shot.empty:
         df_shot = df_shot[df_shot["outcome"].isin(SHOT_ORDER)]
 
-    out = pd.concat([df_pass, df_shot, df_touch], ignore_index=True)
+    out = pd.concat([df_pass, df_shot, df_touch, df_def, df_other], ignore_index=True)
     if out.empty:
         out = df.copy()
 
@@ -363,11 +394,11 @@ def zone_based_xg(x: float, y: float, pitch_mode: str = "rect", pitch_width: flo
         d_bin = "25+"
 
     table = {
-        ("0-6", "big"): 0.55,   ("0-6", "mid"): 0.45,   ("0-6", "small"): 0.32,
-        ("6-12", "big"): 0.32,  ("6-12", "mid"): 0.22,  ("6-12", "small"): 0.12,
+        ("0-6", "big"): 0.55, ("0-6", "mid"): 0.45, ("0-6", "small"): 0.32,
+        ("6-12", "big"): 0.32, ("6-12", "mid"): 0.22, ("6-12", "small"): 0.12,
         ("12-18", "big"): 0.18, ("12-18", "mid"): 0.10, ("12-18", "small"): 0.05,
         ("18-25", "big"): 0.08, ("18-25", "mid"): 0.05, ("18-25", "small"): 0.03,
-        ("25+", "big"): 0.04,   ("25+", "mid"): 0.025,  ("25+", "small"): 0.015,
+        ("25+", "big"): 0.04, ("25+", "mid"): 0.025, ("25+", "small"): 0.015,
     }
     xg = table.get((d_bin, a_bin), 0.02)
     return float(max(0.01, min(0.85, xg)))
@@ -386,7 +417,7 @@ def estimate_xg_zone(df: pd.DataFrame, pitch_mode: str = "rect", pitch_width: fl
 
 
 # ----------------------------
-# xG Model (optional)  (KEEP AS-IS)
+# xG Model
 # ----------------------------
 MODEL_FEATURE_COLS = [
     "x", "y",
@@ -502,7 +533,7 @@ def estimate_xg_model(
 
 
 # ----------------------------
-# Shot end location fix (Opta-ish)
+# Shot end location fix
 # ----------------------------
 def _goal_mouth_bounds(pitch_mode: str = "rect", pitch_width: float = 64.0) -> Tuple[float, float]:
     y_max = pitch_width if pitch_mode == "rect" else 100.0
@@ -562,7 +593,7 @@ def fix_shot_end_location(df: pd.DataFrame, pitch_mode: str = "rect", pitch_widt
 
 
 # ----------------------------
-# Pass tagging (MANUAL) + collision fix
+# Pass tagging
 # ----------------------------
 def _pass_success_mask(outcome_series: pd.Series) -> pd.Series:
     s = outcome_series.astype(str).str.lower()
@@ -895,7 +926,7 @@ def touch_map(
 
 
 # ----------------------------
-# Pass map filters (robust)
+# Pass map helpers
 # ----------------------------
 def _bool_mask(col, index: pd.Index) -> pd.Series:
     if isinstance(col, pd.Series):
@@ -1116,6 +1147,85 @@ def shot_map(
     return fig
 
 
+def defensive_actions_map(
+    df: pd.DataFrame,
+    def_colors: Optional[dict] = None,
+    def_markers: Optional[dict] = None,
+    pitch_mode: str = "rect",
+    pitch_width: float = 64.0,
+    theme_name: str = "The Athletic Dark",
+):
+    def_colors = def_colors or {}
+    def_markers = def_markers or {}
+    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+
+    d = df[df["event_type"] == "defensive"].copy()
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
+    fig, ax = plt.subplots(figsize=(7.6, 4.8))
+    fig.patch.set_facecolor(theme["bg"])
+    _draw_pitch(ax, pitch, theme)
+
+    legend_handles = []
+
+    for act in DEF_ACTION_COLS:
+        if act not in d.columns:
+            continue
+
+        mask = _yes_only(d[act])
+        subset = d[mask].copy()
+        if subset.empty:
+            continue
+
+        success = subset[subset["outcome"] == "successful"]
+        fail = subset[subset["outcome"] == "unsuccessful"]
+
+        color = def_colors.get(act, theme.get("muted", "#A0A7B4"))
+        marker = def_markers.get(act, "o")
+        label = act.replace("_", " ").title()
+
+        if not success.empty:
+            pitch.scatter(
+                success["x"], success["y"],
+                ax=ax,
+                s=130,
+                marker=marker,
+                color=color,
+                edgecolors="white",
+                linewidth=1.4,
+                alpha=0.95,
+                zorder=6
+            )
+
+        if not fail.empty:
+            pitch.scatter(
+                fail["x"], fail["y"],
+                ax=ax,
+                s=130,
+                marker=marker,
+                facecolors="none",
+                edgecolors=color,
+                linewidth=2.0,
+                alpha=0.95,
+                zorder=6
+            )
+
+        legend_handles.append(
+            Line2D([0], [0],
+                   marker=marker,
+                   color="none",
+                   markerfacecolor=color,
+                   markeredgecolor="white",
+                   markersize=8,
+                   label=label)
+        )
+
+    ax.set_title("Defensive Actions Map", color=theme["text"])
+    ax.set_xlim(-2, 102)
+    ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
+    _add_legend(ax, legend_handles, theme, loc="upper center")
+    return fig
+
+
 # ----------------------------
 # Report builder
 # ----------------------------
@@ -1140,6 +1250,8 @@ def build_report_from_prepared_df(
     pass_markers: Optional[dict] = None,
     shot_colors: Optional[dict] = None,
     shot_markers: Optional[dict] = None,
+    def_colors: Optional[dict] = None,
+    def_markers: Optional[dict] = None,
     bar_colors: Optional[dict] = None,
     charts_to_include: Optional[List[str]] = None,
     touch_dot_color: str = "#34D5FF",
@@ -1160,7 +1272,14 @@ def build_report_from_prepared_df(
     pdf_path = os.path.join(out_dir, "report.pdf")
 
     df2 = df_prepared.copy()
-    charts_to_include = charts_to_include or ["Outcome Bar", "Start Heatmap", "Touch Map (Scatter)", "Pass Map", "Shot Map"]
+    charts_to_include = charts_to_include or [
+        "Outcome Bar",
+        "Start Heatmap",
+        "Touch Map (Scatter)",
+        "Pass Map",
+        "Shot Map",
+        "Defensive Actions Map",
+    ]
 
     figs = []
 
@@ -1184,8 +1303,7 @@ def build_report_from_prepared_df(
         )))
 
     if "Pass Map" in charts_to_include:
-        # فلترة حسب الموجود في العمود outcome
-        all_pass_types = df2['outcome'].dropna().unique().tolist()
+        all_pass_types = df2.loc[df2["event_type"] == "pass", "outcome"].dropna().unique().tolist()
         pass_colors_filtered = {k: v for k, v in (pass_colors or {}).items() if k in all_pass_types}
         pass_markers_filtered = {k: v for k, v in (pass_markers or {}).items() if k in all_pass_types}
 
@@ -1199,7 +1317,7 @@ def build_report_from_prepared_df(
             pass_view=pass_view,
             result_scope=pass_result_scope,
             min_packing=pass_min_packing,
-         )))
+        )))
 
     if "Shot Map" in charts_to_include:
         figs.append(("shot_map", shot_map(
@@ -1210,6 +1328,16 @@ def build_report_from_prepared_df(
             pitch_width=pitch_width,
             show_xg=True,
             theme_name=theme_name
+        )))
+
+    if "Defensive Actions Map" in charts_to_include:
+        figs.append(("defensive_actions_map", defensive_actions_map(
+            df2,
+            def_colors=def_colors,
+            def_markers=def_markers,
+            pitch_mode=pitch_mode,
+            pitch_width=pitch_width,
+            theme_name=theme_name,
         )))
 
     pngs = []
@@ -1241,7 +1369,7 @@ def build_report_from_prepared_df(
 
 
 # =========================================================
-# ✅ Pizza Chart (PRO) — center image + footer + Opta-ish look
+# Pizza Chart
 # =========================================================
 def pizza_chart(
     df_pizza: pd.DataFrame,
@@ -1250,8 +1378,8 @@ def pizza_chart(
     slice_colors: Optional[List[str]] = None,
     show_values_legend: bool = True,
     center_image=None,
-    center_img_scale: float = 0.22,  # 0.18-0.28 مناسب
-    footer_text: str = "",           # مثال: "Data:fbref | By: Essam Mohamed"
+    center_img_scale: float = 0.22,
+    footer_text: str = "",
 ):
     dfp = df_pizza.copy()
     dfp.columns = [c.strip().lower() for c in dfp.columns]
@@ -1266,7 +1394,7 @@ def pizza_chart(
     if slice_colors is None or len(slice_colors) != len(values):
         slice_colors = ["#1f77b4"] * len(values)
 
-    bg = "#2B2B2B"  # قريب من الصورة اللي بعتهالك
+    bg = "#2B2B2B"
     ring = "#0B0F14"
     muted = "#E6E6E6"
 
@@ -1315,18 +1443,15 @@ def pizza_chart(
 
     fig.patch.set_facecolor(bg)
 
-    # titles
     fig.text(0.5, 0.975, (title or "").strip(), ha="center", va="top",
              color="white", fontsize=24, fontweight="bold", family="serif")
     fig.text(0.5, 0.945, (subtitle or "").strip(), ha="center", va="top",
              color="#D0D4DA", fontsize=16, family="serif")
 
-    # footer
     if footer_text:
         fig.text(0.98, 0.03, footer_text, ha="right", va="bottom",
                  color="white", fontsize=12)
 
-    # ✅ center image
     if center_image is not None:
         try:
             img = center_image
@@ -1342,22 +1467,17 @@ def pizza_chart(
             ax_img.axis("off")
             ax_img.set_facecolor("none")
 
-            # circular crop
             circ = plt.Circle((0.5, 0.5), 0.5, transform=ax_img.transAxes,
                               facecolor="none", edgecolor="none")
             ax_img.add_patch(circ)
             ax_img.set_clip_path(circ)
 
-            # ring border
             ring1 = plt.Circle((0.5, 0.5), 0.5, transform=ax_img.transAxes,
                                fill=False, edgecolor=ring, linewidth=6.0, alpha=1.0)
-
             ax_img.add_patch(ring1)
-           
         except Exception:
             pass
 
-    # optional legend block
     if show_values_legend:
         lines = [f"{m}: {v}   (pct {p:.1f})" for m, v, p in zip(params, value_text, values)]
         fig.text(
@@ -1366,7 +1486,6 @@ def pizza_chart(
             color="white", fontsize=10, family="monospace"
         )
 
-    # cleanup spines
     for spine in ax.spines.values():
         spine.set_visible(False)
 
