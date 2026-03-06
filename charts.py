@@ -1669,8 +1669,8 @@ def defensive_regains_map(
     _draw_pitch(ax, pitch, theme)
 
     y_max = pitch_width if pitch_mode == "rect" else 100.0
-    x_edges = np.array([0, 25, 50, 75, 100], dtype=float)
-    y_edges = np.linspace(0, y_max, 7)
+    x_edges = np.array([0, 20, 40, 60, 80, 100])
+    y_edges = np.array([0, 16, 32, 48, 64])
 
     counts, _, _ = np.histogram2d(d["x"], d["y"], bins=[x_edges, y_edges])
     counts = counts.T
