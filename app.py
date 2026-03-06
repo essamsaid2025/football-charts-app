@@ -55,11 +55,6 @@ def ensure_outcome_column(df_raw: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    IMPORTANT:
-    - keep consistent with charts.py normalization
-    - DO NOT create '1ontarget' / '1offtarget'
-    """
     out = df.copy()
     if "outcome" not in out.columns:
         return out
@@ -87,7 +82,7 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
         "blocked": "blocked",
         "block": "blocked",
 
-        # passes
+        # passes / defensive outcomes
         "successful": "successful",
         "success": "successful",
         "complete": "successful",
@@ -172,6 +167,7 @@ CHART_REQUIREMENTS = {
     "Touch Map (Scatter)": ["x", "y", "(optional) outcome='touch'"],
     "Pass Map": ["outcome", "x", "y", "x2", "y2"],
     "Shot Map": ["outcome", "x", "y", "(optional) x2,y2", "(optional) xg"],
+    "Defensive Actions Map": ["x", "y", "outcome"],
 }
 
 
@@ -238,13 +234,21 @@ with st.expander("🎛️ Settings", expanded=True):
         "Touches",
         "Defensive Actions"
     ]
-    
+
     legend_items = st.multiselect(
         "Select legend items to display",
         legend_options,
         default=legend_options
     )
-    all_charts = ["Outcome Bar", "Start Heatmap", "Touch Map (Scatter)", "Pass Map", "Shot Map"]
+
+    all_charts = [
+        "Outcome Bar",
+        "Start Heatmap",
+        "Touch Map (Scatter)",
+        "Pass Map",
+        "Shot Map",
+        "Defensive Actions Map",
+    ]
     selected_charts = st.multiselect("Choose charts", all_charts, default=all_charts)
 
     if selected_charts:
@@ -288,6 +292,14 @@ with st.expander("🎛️ Settings", expanded=True):
     col_shot_goal = st.color_picker("Goal", "#00FF6A")
     col_shot_blocked = st.color_picker("Blocked", "#AAAAAA")
 
+    st.markdown("### Defensive action colors")
+    col_interception = st.color_picker("Interception", "#00C2FF")
+    col_tackle = st.color_picker("Tackle", "#FF8A00")
+    col_recovery = st.color_picker("Recovery", "#00FF6A")
+    col_aerial = st.color_picker("Aerial Duel", "#FFD400")
+    col_ground = st.color_picker("Ground Duel", "#FF4D4D")
+    col_clearance = st.color_picker("Clearance", "#A78BFA")
+
     st.markdown("### Outcome bar colors")
     bar_success = st.color_picker("Bar: successful", "#00FF6A")
     bar_unsuccess = st.color_picker("Bar: unsuccessful", "#FF4D4D")
@@ -326,6 +338,14 @@ with st.expander("🎛️ Settings", expanded=True):
     mk_pass_key = st.selectbox("Marker: Key pass", marker_labels, index=marker_labels.index("Diamond (D)"))
     mk_pass_assist = st.selectbox("Marker: Assist", marker_labels, index=marker_labels.index("Star (*)"))
 
+    st.markdown("#### Defensive action markers")
+    mk_interception = st.selectbox("Marker: Interception", marker_labels, index=marker_labels.index("Circle (o)"))
+    mk_tackle = st.selectbox("Marker: Tackle", marker_labels, index=marker_labels.index("Square (s)"))
+    mk_recovery = st.selectbox("Marker: Recovery", marker_labels, index=marker_labels.index("Diamond (D)"))
+    mk_aerial = st.selectbox("Marker: Aerial Duel", marker_labels, index=marker_labels.index("Triangle up (^)"))
+    mk_ground = st.selectbox("Marker: Ground Duel", marker_labels, index=marker_labels.index("X (x)"))
+    mk_clearance = st.selectbox("Marker: Clearance", marker_labels, index=marker_labels.index("Star (*)"))
+
     st.markdown("#### Touch map marker")
     touch_marker_label = st.selectbox("Marker: Touch", marker_labels, index=marker_labels.index("Circle (o)"))
     touch_dot_color = st.color_picker("Touch dots color", "#34D5FF")
@@ -341,7 +361,6 @@ with st.expander("🎛️ Settings", expanded=True):
         key="pizza_center_uploader",
     )
 
-    # ✅ scale as fraction 0.12-0.32 (matches charts.py clamp)
     pizza_center_scale = st.slider("Center image size (Pizza)", 12, 32, 18) / 100.0
     st.caption("Tip: لو الصورة كبيرة خلّيها 0.16–0.20")
 
@@ -362,6 +381,14 @@ bar_colors = {
     "successful": bar_success, "unsuccessful": bar_unsuccess, "key pass": bar_key, "assist": bar_assist,
     "ontarget": bar_ont, "off target": bar_off, "goal": bar_goal, "blocked": bar_blocked
 }
+def_colors = {
+    "interception": col_interception,
+    "tackle": col_tackle,
+    "recovery": col_recovery,
+    "aerial_duel": col_aerial,
+    "ground_duel": col_ground,
+    "clearance": col_clearance,
+}
 
 shot_markers = {
     "off target": marker_options[mk_shot_off],
@@ -375,10 +402,17 @@ pass_markers = {
     "key pass": marker_options[mk_pass_key],
     "assist": marker_options[mk_pass_assist],
 }
+def_markers = {
+    "interception": marker_options[mk_interception],
+    "tackle": marker_options[mk_tackle],
+    "recovery": marker_options[mk_recovery],
+    "aerial_duel": marker_options[mk_aerial],
+    "ground_duel": marker_options[mk_ground],
+    "clearance": marker_options[mk_clearance],
+}
 touch_marker = marker_options[touch_marker_label]
 
 
-# header image object (report)
 header_img_obj = None
 if header_img is not None:
     try:
@@ -386,7 +420,6 @@ if header_img is not None:
     except Exception:
         header_img_obj = None
 
-# pizza center image object (pizza)
 pizza_img_obj = None
 if pizza_center_img is not None:
     try:
@@ -451,19 +484,17 @@ if uploaded:
                 except Exception:
                     p = 0.0
                 if p >= 85:
-                    return "#1F77B4"  # Elite
+                    return "#1F77B4"
                 elif p >= 70:
-                    return "#2ECC71"  # Good
+                    return "#2ECC71"
                 elif p >= 50:
-                    return "#F39C12"  # Average
+                    return "#F39C12"
                 else:
-                    return "#E74C3C"  # Poor
+                    return "#E74C3C"
 
             if st.button("Generate Pizza"):
                 pizza_df = build_pizza_df(dfp_filtered, player_col, selected_player, selected_metrics)
                 slice_colors = [pct_color(p) for p in pizza_df["percentile"].tolist()]
-
-                # ✅ use pizza center image uploader first, fallback to header image if needed
                 center_img = pizza_img_obj if pizza_img_obj is not None else header_img_obj
 
                 fig = pizza_chart(
@@ -472,9 +503,9 @@ if uploaded:
                     subtitle=pizza_subtitle,
                     slice_colors=slice_colors,
                     show_values_legend=False,
-                    center_image=center_img,             # ✅ الصورة في نص الشارت
-                    center_img_scale=pizza_center_scale, # ✅ من السلايدر
-                    footer_text=""                       # ✅ بدون فوتر/اسم
+                    center_image=center_img,
+                    center_img_scale=pizza_center_scale,
+                    footer_text=""
                 )
 
                 out_dir = os.path.join(tmp, "output")
@@ -629,6 +660,8 @@ if uploaded:
                 pass_markers=pass_markers,
                 shot_colors=shot_colors,
                 shot_markers=shot_markers,
+                def_colors=def_colors,
+                def_markers=def_markers,
                 bar_colors=bar_colors,
                 charts_to_include=selected_charts,
                 touch_dot_color=touch_dot_color,
