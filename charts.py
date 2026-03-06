@@ -45,6 +45,37 @@ DEF_ACTION_COLS = [
     "clearance",
 ]
 
+def _standardize_defensive_columns(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    rename_map = {}
+
+    for c in out.columns:
+        c0 = str(c).strip().lower()
+
+        if c0 == "x":
+            rename_map[c] = "x"
+        elif c0 == "y":
+            rename_map[c] = "y"
+        elif c0 in ["interception", "interceptions"]:
+            rename_map[c] = "interception"
+        elif c0 in ["tackle", "tackles"]:
+            rename_map[c] = "tackle"
+        elif c0 in ["recovery", "recoveries"]:
+            rename_map[c] = "recovery"
+        elif c0 in ["aerial duel", "aerial duels", "aerial_duel", "aerial_duels"]:
+            rename_map[c] = "aerial_duel"
+        elif c0 in ["ground duel", "ground duels", "ground_duel", "ground_duels"]:
+            rename_map[c] = "ground_duel"
+        elif c0 in ["clearance", "clearances"]:
+            rename_map[c] = "clearance"
+        elif c0 == "outcome":
+            rename_map[c] = "outcome"
+
+    if rename_map:
+        out = out.rename(columns=rename_map)
+
+    return out
+    
 THEMES = {
     "The Athletic Dark": {
         "bg": "#0E1117",
@@ -217,7 +248,7 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
 
     df["outcome"] = df["outcome"].apply(_norm_outcome)
     df = df.dropna(subset=["x", "y"]).copy()
-
+    df = _standardize_defensive_columns(df)
     # normalize defensive action column names if present
     rename_map = {}
     for c in df.columns:
@@ -252,7 +283,6 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
         for c in available_def_cols:
             def_mask = def_mask | _yes_only(df[c])
         df.loc[def_mask, "event_type"] = "defensive"
-
     df_pass = df[df["event_type"] == "pass"].copy()
     df_shot = df[df["event_type"] == "shot"].copy()
     df_touch = df[df["event_type"] == "touch"].copy()
@@ -269,6 +299,7 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
         out = df.copy()
 
     return out
+   
 
 
 # ----------------------------
@@ -1597,3 +1628,168 @@ def shot_detail_card(
     ax_info.text(0.02, 0.47, display_outcome, color=theme["text"], fontsize=26, weight="bold", transform=ax_info.transAxes)
 
     return fig, shots
+
+    def defensive_regains_map(
+    df: pd.DataFrame,
+    title: str = "Ball Regains Map",
+    def_colors: Optional[dict] = None,
+    def_markers: Optional[dict] = None,
+    pitch_mode: str = "rect",
+    pitch_width: float = 64.0,
+    theme_name: str = "The Athletic Dark",
+    marker_size: int = 110,
+    zone_alpha: float = 0.78,
+    show_zone_values: bool = False,
+):
+    from matplotlib.patches import Rectangle
+    from matplotlib.colors import LinearSegmentedColormap, Normalize
+
+    def_colors = def_colors or {}
+    def_markers = def_markers or {}
+    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+
+    d = df.copy()
+    d = _standardize_defensive_columns(d)
+
+    for c in ["x", "y"]:
+        d[c] = pd.to_numeric(d[c], errors="coerce")
+    d = d.dropna(subset=["x", "y"]).copy()
+
+    available_def_cols = [c for c in DEF_ACTION_COLS if c in d.columns]
+    if available_def_cols:
+        mask = pd.Series(False, index=d.index)
+        for c in available_def_cols:
+            mask = mask | _yes_only(d[c])
+        d = d[mask].copy()
+
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
+
+    fig, ax = plt.subplots(figsize=(8.6, 11.4))
+    fig.patch.set_facecolor(theme["bg"])
+    _draw_pitch(ax, pitch, theme)
+
+    y_max = pitch_width if pitch_mode == "rect" else 100.0
+    x_edges = np.array([0, 25, 50, 75, 100], dtype=float)
+    y_edges = np.linspace(0, y_max, 7)
+
+    counts, _, _ = np.histogram2d(d["x"], d["y"], bins=[x_edges, y_edges])
+    counts = counts.T
+
+    cmap = LinearSegmentedColormap.from_list(
+        "regains_map",
+        ["#0B2A4A", "#7A8793", "#E9D7D7", "#C8102E"]
+    )
+    vmax = max(1.0, float(np.nanmax(counts)))
+    norm = Normalize(vmin=0, vmax=vmax)
+
+    for yi in range(len(y_edges) - 1):
+        for xi in range(len(x_edges) - 1):
+            x0 = x_edges[xi]
+            y0 = y_edges[yi]
+            w = x_edges[xi + 1] - x_edges[xi]
+            h = y_edges[yi + 1] - y_edges[yi]
+            val = counts[yi, xi]
+
+            rect = Rectangle(
+                (x0, y0), w, h,
+                facecolor=cmap(norm(val)),
+                edgecolor=theme["pitch_lines"],
+                linewidth=1.6,
+                alpha=zone_alpha,
+                zorder=1
+            )
+            ax.add_patch(rect)
+
+            if show_zone_values and val > 0:
+                ax.text(
+                    x0 + w / 2.0,
+                    y0 + h / 2.0,
+                    str(int(val)),
+                    ha="center",
+                    va="center",
+                    color="white",
+                    fontsize=11,
+                    weight="bold",
+                    zorder=2
+                )
+
+    pitch.draw(ax=ax)
+
+    action_order = [
+        "tackle",
+        "interception",
+        "recovery",
+        "aerial_duel",
+        "ground_duel",
+        "clearance",
+    ]
+
+    counts_by_action = {}
+
+    for act in action_order:
+        if act not in d.columns:
+            continue
+
+        subset = d[_yes_only(d[act])].copy()
+        if subset.empty:
+            continue
+
+        counts_by_action[act] = len(subset)
+
+        pitch.scatter(
+            subset["x"],
+            subset["y"],
+            ax=ax,
+            s=marker_size,
+            marker=def_markers.get(act, "o"),
+            color="white",
+            edgecolors=def_colors.get(act, "#FF8A00"),
+            linewidth=1.8,
+            alpha=0.98,
+            zorder=5,
+        )
+
+    ax.set_title(title, color=theme["text"], fontsize=28, weight="bold", pad=18)
+    ax.set_xlim(-2, 102)
+    ax.set_ylim(-2, y_max + 2)
+
+    legend_y = 0.75
+    legend_step = 0.075
+
+    display_names = {
+        "tackle": "Tackle",
+        "interception": "Interception",
+        "recovery": "Recovery",
+        "aerial_duel": "Aerial Duel",
+        "ground_duel": "Ground Duel",
+        "clearance": "Clearance",
+    }
+
+    for i, act in enumerate(action_order):
+        if act not in counts_by_action:
+            continue
+
+        yy = legend_y - i * legend_step
+        ax.scatter(
+            [1.04], [yy],
+            transform=ax.transAxes,
+            s=marker_size * 0.9,
+            marker=def_markers.get(act, "o"),
+            color="white",
+            edgecolors=def_colors.get(act, "#FF8A00"),
+            linewidth=1.8,
+            clip_on=False,
+            zorder=10
+        )
+        ax.text(
+            1.10, yy,
+            f"{display_names[act]}   {counts_by_action[act]}",
+            transform=ax.transAxes,
+            va="center",
+            ha="left",
+            color=theme["text"],
+            fontsize=12,
+            weight="bold"
+        )
+
+    return fig
