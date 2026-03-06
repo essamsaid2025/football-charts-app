@@ -1629,7 +1629,7 @@ def shot_detail_card(
 
     return fig, shots
 
-    def defensive_regains_map(
+def defensive_regains_map(
     df: pd.DataFrame,
     title: str = "Ball Regains Map",
     def_colors: Optional[dict] = None,
