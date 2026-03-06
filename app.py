@@ -15,6 +15,7 @@ from charts import (
     build_report_from_prepared_df,
     pizza_chart,
     shot_detail_card,
+    defensive_regains_map,
     THEMES,
 )
 
@@ -346,6 +347,14 @@ with st.expander("🎛️ Settings", expanded=True):
     mk_ground = st.selectbox("Marker: Ground Duel", marker_labels, index=marker_labels.index("X (x)"))
     mk_clearance = st.selectbox("Marker: Clearance", marker_labels, index=marker_labels.index("Star (*)"))
 
+    st.markdown("---")
+    st.markdown("### Defensive Map settings")
+
+    def_map_title = st.text_input("Defensive map title", value="Ball Regains Map")
+    def_show_zone_values = st.checkbox("Show zone values", value=False)
+    def_marker_size = st.slider("Defensive marker size", 60, 260, 110)
+    def_zone_alpha = st.slider("Zone alpha", 20, 100, 78) / 100.0
+
     st.markdown("#### Touch map marker")
     touch_marker_label = st.selectbox("Marker: Touch", marker_labels, index=marker_labels.index("Circle (o)"))
     touch_dot_color = st.color_picker("Touch dots color", "#34D5FF")
@@ -431,7 +440,7 @@ if pizza_center_img is not None:
 # -----------------------------
 # Main
 # -----------------------------
-mode = st.radio("Choose output type", ["Match Charts", "Pizza Chart", "Shot Detail Card"])
+mode = st.radio("Choose output type", ["Match Charts", "Pizza Chart", "Shot Detail Card", "Defensive Actions Map"])
 uploaded = st.file_uploader("Upload your file", type=["csv", "xlsx", "xls"])
 
 if uploaded:
@@ -582,7 +591,41 @@ if uploaded:
         st.success(f"Prepared ✅ rows: {len(df2)}")
         if "xg_source" in df2.columns and len(df2):
             st.info(f"xG source used: **{df2['xg_source'].iloc[0]}**")
+        # -----------------------------
+        # DEFENSIVE ACTIONS MAP
+        # -----------------------------
+        if mode == "Defensive Actions Map":
+            if st.button("Generate Defensive Map"):
+                fig = defensive_regains_map(
+                    df2,
+                    title=def_map_title,
+                    def_colors=def_colors,
+                    def_markers=def_markers,
+                    pitch_mode=pitch_mode,
+                    pitch_width=pitch_width,
+                    theme_name=theme_name,
+                    marker_size=def_marker_size,
+                    zone_alpha=def_zone_alpha,
+                    show_zone_values=def_show_zone_values,
+                )
 
+                out_dir = os.path.join(tmp, "output")
+                os.makedirs(out_dir, exist_ok=True)
+                png_path = os.path.join(out_dir, "defensive_actions_map.png")
+                pdf_path = os.path.join(out_dir, "defensive_actions_map.pdf")
+
+                fig.savefig(png_path, dpi=350, bbox_inches="tight", pad_inches=0.25)
+                with PdfPages(pdf_path) as pdf:
+                    pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
+
+                st.pyplot(fig)
+                with open(png_path, "rb") as f2:
+                    st.download_button("⬇️ Download defensive_actions_map.png", f2, file_name="defensive_actions_map.png")
+                with open(pdf_path, "rb") as f2:
+                    st.download_button("⬇️ Download defensive_actions_map.pdf", f2, file_name="defensive_actions_map.pdf")
+
+            st.stop()
+    
         # -----------------------------
         # SHOT DETAIL CARD
         # -----------------------------
