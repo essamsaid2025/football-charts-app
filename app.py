@@ -519,6 +519,7 @@ with left_col:
 
     st.markdown("### Event shapes (markers)")
     marker_options = {
+        "None": None,
         "Circle (o)": "o",
         "Star (*)": "*",
         "Triangle up (^)": "^",
@@ -703,9 +704,6 @@ with right_col:
         with open(path, "wb") as f:
             f.write(uploaded.getbuffer())
 
-        # -----------------------------
-        # LOAD FOR PIZZA MODE
-        # -----------------------------
         if mode == "Pizza Chart":
             dfp = load_data(path)
             st.session_state.data_info = {
@@ -830,9 +828,6 @@ with right_col:
             st.markdown("</div>", unsafe_allow_html=True)
             st.stop()
 
-        # -----------------------------
-        # OTHER MODES LOAD
-        # -----------------------------
         df_raw = load_data(path)
 
         with st.expander("Raw file preview (first 25 rows)", expanded=False):
@@ -901,9 +896,6 @@ with right_col:
         if "xg_source" in df2.columns and len(df2):
             st.info(f"xG source used: **{df2['xg_source'].iloc[0]}**")
 
-        # -----------------------------
-        # DEFENSIVE ACTIONS MAP
-        # -----------------------------
         if mode == "Defensive Actions Map":
             if st.button("Generate Defensive Map", key="generate_def_map"):
                 fig = defensive_regains_map(
@@ -966,9 +958,6 @@ with right_col:
             st.markdown("</div>", unsafe_allow_html=True)
             st.stop()
 
-        # -----------------------------
-        # SHOT DETAIL CARD
-        # -----------------------------
         if mode == "Shot Detail Card":
             shots_only = df2[df2["event_type"] == "shot"].copy().reset_index(drop=True)
             if shots_only.empty:
@@ -1043,9 +1032,6 @@ with right_col:
             st.markdown("</div>", unsafe_allow_html=True)
             st.stop()
 
-        # -----------------------------
-        # MATCH CHARTS REPORT
-        # -----------------------------
         generate_clicked = st.button("Generate Report", disabled=not can_generate_report, key="generate_report")
 
         if not can_generate_report:
