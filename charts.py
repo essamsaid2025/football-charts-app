@@ -45,6 +45,7 @@ DEF_ACTION_COLS = [
     "clearance",
 ]
 
+
 def _standardize_defensive_columns(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     rename_map = {}
@@ -75,7 +76,8 @@ def _standardize_defensive_columns(df: pd.DataFrame) -> pd.DataFrame:
         out = out.rename(columns=rename_map)
 
     return out
-    
+
+
 THEMES = {
     "The Athletic Dark": {
         "bg": "#0E1117",
@@ -249,7 +251,7 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df["outcome"] = df["outcome"].apply(_norm_outcome)
     df = df.dropna(subset=["x", "y"]).copy()
     df = _standardize_defensive_columns(df)
-    # normalize defensive action column names if present
+
     rename_map = {}
     for c in df.columns:
         c0 = str(c).strip().lower()
@@ -276,13 +278,13 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
         df.loc[df["outcome"].isin(SHOT_TYPES), "event_type"] = "shot"
         df.loc[df["outcome"] == "touch", "event_type"] = "touch"
 
-    # detect defensive rows from yes-columns
     available_def_cols = [c for c in DEF_ACTION_COLS if c in df.columns]
     if available_def_cols:
         def_mask = pd.Series(False, index=df.index)
         for c in available_def_cols:
             def_mask = def_mask | _yes_only(df[c])
         df.loc[def_mask, "event_type"] = "defensive"
+
     df_pass = df[df["event_type"] == "pass"].copy()
     df_shot = df[df["event_type"] == "shot"].copy()
     df_touch = df[df["event_type"] == "touch"].copy()
@@ -299,7 +301,6 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
         out = df.copy()
 
     return out
-   
 
 
 # ----------------------------
@@ -784,6 +785,10 @@ def _add_legend(ax, handles, theme: dict, loc: str = "lower center"):
         t.set_color(theme.get("text", "white"))
 
 
+def _is_no_marker(marker) -> bool:
+    return marker is None or str(marker).strip().lower() in {"none", "no marker", "null", ""}
+
+
 # ----------------------------
 # Header for PDF charts
 # ----------------------------
@@ -934,24 +939,27 @@ def touch_map(
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
 
-    pitch.scatter(
-        d["x"], d["y"],
-        ax=ax,
-        s=dot_size,
-        marker=marker,
-        color=dot_color,
-        edgecolors=edge_color,
-        linewidth=2,
-        alpha=alpha,
-        zorder=5
-    )
+    if not _is_no_marker(marker):
+        pitch.scatter(
+            d["x"], d["y"],
+            ax=ax,
+            s=dot_size,
+            marker=marker,
+            color=dot_color,
+            edgecolors=edge_color,
+            linewidth=2,
+            alpha=alpha,
+            zorder=5
+        )
 
     ax.set_title("Touch Map", color=theme["text"], fontsize=18, weight="bold")
     ax.set_xlim(-2, 102)
     ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
 
-    handles = [Line2D([0], [0], marker=marker, color="none", markerfacecolor=dot_color,
-                      markeredgecolor=edge_color, markersize=10, label="Touches")]
+    handles = []
+    if not _is_no_marker(marker):
+        handles = [Line2D([0], [0], marker=marker, color="none", markerfacecolor=dot_color,
+                          markeredgecolor=edge_color, markersize=10, label="Touches")]
     _add_legend(ax, handles, theme, loc="upper center")
     return fig
 
@@ -1083,7 +1091,11 @@ def pass_map(
         dt_all = d[d["outcome"] == t]
         if len(dt_all) == 0:
             continue
+
         mk = pass_markers.get(t, "o")
+        if _is_no_marker(mk):
+            continue
+
         pitch.scatter(
             dt_all["x"], dt_all["y"],
             ax=ax,
@@ -1108,6 +1120,9 @@ def pass_map(
     for t in PASS_ORDER:
         if t in pass_colors:
             mk = pass_markers.get(t, "o")
+            if _is_no_marker(mk):
+                continue
+
             handles.append(Line2D([0], [0], marker=mk, color="none",
                                   markerfacecolor=pass_colors.get(t),
                                   markeredgecolor="white",
@@ -1141,17 +1156,19 @@ def shot_map(
             continue
 
         mk = shot_markers.get(t, "o")
-        pitch.scatter(
-            stt["x"], stt["y"],
-            ax=ax,
-            s=160,
-            marker=mk,
-            color=shot_colors.get(t, theme.get("muted", "#A0A7B4")),
-            edgecolors="white",
-            linewidth=1.6,
-            alpha=0.95,
-            zorder=5
-        )
+
+        if not _is_no_marker(mk):
+            pitch.scatter(
+                stt["x"], stt["y"],
+                ax=ax,
+                s=160,
+                marker=mk,
+                color=shot_colors.get(t, theme.get("muted", "#A0A7B4")),
+                edgecolors="white",
+                linewidth=1.6,
+                alpha=0.95,
+                zorder=5
+            )
 
         if show_xg and "xg" in stt.columns:
             for _, r in stt.iterrows():
@@ -1170,6 +1187,9 @@ def shot_map(
     for t in SHOT_ORDER:
         if t in shot_colors:
             mk = shot_markers.get(t, "o")
+            if _is_no_marker(mk):
+                continue
+
             handles.append(Line2D([0], [0], marker=mk, color="none",
                                   markerfacecolor=shot_colors.get(t),
                                   markeredgecolor="white",
@@ -1214,7 +1234,7 @@ def defensive_actions_map(
         marker = def_markers.get(act, "o")
         label = act.replace("_", " ").title()
 
-        if not success.empty:
+        if not success.empty and not _is_no_marker(marker):
             pitch.scatter(
                 success["x"], success["y"],
                 ax=ax,
@@ -1227,7 +1247,7 @@ def defensive_actions_map(
                 zorder=6
             )
 
-        if not fail.empty:
+        if not fail.empty and not _is_no_marker(marker):
             pitch.scatter(
                 fail["x"], fail["y"],
                 ax=ax,
@@ -1240,15 +1260,16 @@ def defensive_actions_map(
                 zorder=6
             )
 
-        legend_handles.append(
-            Line2D([0], [0],
-                   marker=marker,
-                   color="none",
-                   markerfacecolor=color,
-                   markeredgecolor="white",
-                   markersize=8,
-                   label=label)
-        )
+        if not _is_no_marker(marker):
+            legend_handles.append(
+                Line2D([0], [0],
+                       marker=marker,
+                       color="none",
+                       markerfacecolor=color,
+                       markeredgecolor="white",
+                       markersize=8,
+                       label=label)
+            )
 
     ax.set_title("Defensive Actions Map", color=theme["text"])
     ax.set_xlim(-2, 102)
@@ -1589,8 +1610,11 @@ def shot_detail_card(
     ax_pitch.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
 
     x, y = float(r["x"]), float(r["y"])
-    pitch.scatter([x], [y], ax=ax_pitch, s=520, marker=mk, color=c, edgecolors="white", linewidth=2, zorder=5, clip_on=False)
-    pitch.scatter([x], [y], ax=ax_pitch, s=190, marker=mk, color="white", alpha=0.25, zorder=6, clip_on=False)
+
+    if not _is_no_marker(mk):
+        pitch.scatter([x], [y], ax=ax_pitch, s=520, marker=mk, color=c, edgecolors="white", linewidth=2, zorder=5, clip_on=False)
+        pitch.scatter([x], [y], ax=ax_pitch, s=190, marker=mk, color="white", alpha=0.25, zorder=6, clip_on=False)
+
     ax_pitch.text(x + 1.2, y + 1.2, "xG %s" % xg_txt, color="white", fontsize=12, weight="bold", zorder=10)
 
     has_end = ("x2" in shots.columns and "y2" in shots.columns and pd.notna(r.get("x2")) and pd.notna(r.get("y2")))
@@ -1599,7 +1623,9 @@ def shot_detail_card(
     if has_end:
         x2, y2 = float(r["x2"]), float(r["y2"])
         ax_pitch.plot([x, x2], [y, y2], linestyle=":", linewidth=3, color="white", alpha=0.9, zorder=4)
-        pitch.scatter([x2], [y2], ax=ax_pitch, s=140, marker="o", color="white", alpha=0.9, zorder=6, clip_on=False)
+
+        if not _is_no_marker(mk):
+            pitch.scatter([x2], [y2], ax=ax_pitch, s=140, marker="o", color="white", alpha=0.9, zorder=6, clip_on=False)
 
         def map_to_mini_goal(y_val: float) -> float:
             y_val = float(y_val)
@@ -1608,7 +1634,8 @@ def shot_detail_card(
             return 25 + t * 50
 
         gx = map_to_mini_goal(y2)
-        ax_goal.scatter([gx], [12], s=240, marker=mk, color=c, edgecolors="white", linewidth=2, zorder=5)
+        if not _is_no_marker(mk):
+            ax_goal.scatter([gx], [12], s=240, marker=mk, color=c, edgecolors="white", linewidth=2, zorder=5)
     else:
         gy = (pitch_width / 2.0) if pitch_mode == "rect" else 50.0
         ax_pitch.plot([x, 100], [y, gy], linestyle=":", linewidth=3, color="white", alpha=0.6, zorder=4)
@@ -1628,6 +1655,7 @@ def shot_detail_card(
     ax_info.text(0.02, 0.47, display_outcome, color=theme["text"], fontsize=26, weight="bold", transform=ax_info.transAxes)
 
     return fig, shots
+
 
 def defensive_regains_map(
     df: pd.DataFrame,
@@ -1736,12 +1764,16 @@ def defensive_regains_map(
 
         counts_by_action[act] = len(subset)
 
+        marker = def_markers.get(act, "o")
+        if _is_no_marker(marker):
+            continue
+
         pitch.scatter(
             subset["x"],
             subset["y"],
             ax=ax,
             s=marker_size,
-            marker=def_markers.get(act, "o"),
+            marker=marker,
             color="white",
             edgecolors=def_colors.get(act, "#FF8A00"),
             linewidth=1.8,
@@ -1769,12 +1801,16 @@ def defensive_regains_map(
         if act not in counts_by_action:
             continue
 
+        marker = def_markers.get(act, "o")
+        if _is_no_marker(marker):
+            continue
+
         yy = legend_y - i * legend_step
         ax.scatter(
             [1.04], [yy],
             transform=ax.transAxes,
             s=marker_size * 0.9,
-            marker=def_markers.get(act, "o"),
+            marker=marker,
             color="white",
             edgecolors=def_colors.get(act, "#FF8A00"),
             linewidth=1.8,
