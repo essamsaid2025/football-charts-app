@@ -1,5 +1,6 @@
 import os
 import tempfile
+import io
 import joblib
 
 import streamlit as st
@@ -19,15 +20,194 @@ from charts import (
     THEMES,
 )
 
-st.set_page_config(page_title="Football Charts Generator", layout="wide")
+st.set_page_config(
+    page_title="Football Charts Generator",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
-st.markdown("## ⚽ Football Charts Generator")
-st.caption("Upload CSV / Excel → Match Report / Pizza / Shot Card")
+# =========================================================
+# STYLES
+# =========================================================
+st.markdown(
+    """
+    <style>
+        :root {
+            --bg: #0b1220;
+            --card: #111827;
+            --card-2: #0f172a;
+            --border: #243041;
+            --text: #f3f4f6;
+            --muted: #9ca3af;
+            --accent: #38bdf8;
+        }
+
+        .stApp {
+            background: linear-gradient(180deg, #09111f 0%, #0b1220 100%);
+            color: var(--text);
+        }
+
+        .block-container {
+            padding-top: 1.2rem;
+            padding-bottom: 1.5rem;
+            padding-left: 1.5rem;
+            padding-right: 1.5rem;
+            max-width: 100%;
+        }
+
+        h1, h2, h3, h4, h5, h6, p, span, div, label {
+            color: var(--text);
+        }
+
+        .app-header {
+            background: linear-gradient(135deg, rgba(56,189,248,0.16), rgba(16,185,129,0.10));
+            border: 1px solid rgba(255,255,255,0.08);
+            padding: 20px 22px;
+            border-radius: 20px;
+            margin-bottom: 18px;
+        }
+
+        .app-title {
+            font-size: 2rem;
+            font-weight: 800;
+            margin: 0;
+            line-height: 1.1;
+        }
+
+        .app-subtitle {
+            color: var(--muted);
+            margin-top: 8px;
+            font-size: 0.98rem;
+        }
+
+        .panel-card {
+            background: rgba(17,24,39,0.92);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 16px 16px 10px 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.22);
+            margin-bottom: 14px;
+        }
+
+        .panel-title {
+            font-size: 1.05rem;
+            font-weight: 800;
+            margin-bottom: 10px;
+            color: #ffffff;
+        }
+
+        .panel-note {
+            color: var(--muted);
+            font-size: 0.92rem;
+            margin-top: -3px;
+            margin-bottom: 10px;
+        }
+
+        .preview-shell {
+            background: rgba(17,24,39,0.92);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 16px;
+            min-height: 70vh;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.22);
+        }
+
+        .preview-placeholder {
+            border: 1px dashed #334155;
+            background: rgba(15,23,42,0.65);
+            border-radius: 16px;
+            padding: 28px 20px;
+            text-align: center;
+            color: #94a3b8;
+            margin-top: 10px;
+        }
+
+        .section-divider {
+            height: 1px;
+            background: linear-gradient(90deg, rgba(255,255,255,0.03), rgba(255,255,255,0.12), rgba(255,255,255,0.03));
+            margin: 14px 0 14px 0;
+            border-radius: 999px;
+        }
+
+        div[data-testid="stFileUploader"] section {
+            background: rgba(15,23,42,0.85);
+            border: 1px dashed #334155;
+            border-radius: 14px;
+        }
+
+        div[data-baseweb="select"] > div,
+        div[data-baseweb="input"] > div,
+        .stTextInput > div > div,
+        .stNumberInput > div > div {
+            background: #0f172a;
+        }
+
+        .stButton > button {
+            width: 100%;
+            border-radius: 12px;
+            border: 1px solid #2d3b50;
+            background: linear-gradient(135deg, #0ea5e9, #2563eb);
+            color: white;
+            font-weight: 700;
+            padding: 0.6rem 1rem;
+        }
+
+        .stDownloadButton > button {
+            width: 100%;
+            border-radius: 12px;
+            border: 1px solid #2d3b50;
+            background: #162235;
+            color: white;
+            font-weight: 700;
+            padding: 0.6rem 1rem;
+        }
+
+        .small-kpi {
+            background: rgba(15,23,42,0.85);
+            border: 1px solid #243041;
+            border-radius: 14px;
+            padding: 12px;
+            text-align: center;
+        }
+
+        .small-kpi .label {
+            color: #9ca3af;
+            font-size: 0.86rem;
+            margin-bottom: 6px;
+        }
+
+        .small-kpi .value {
+            color: #ffffff;
+            font-size: 1.1rem;
+            font-weight: 800;
+        }
+
+        .stExpander {
+            border-radius: 14px !important;
+            border: 1px solid #243041 !important;
+            background: rgba(15,23,42,0.55) !important;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <div class="app-header">
+        <div class="app-title">⚽ Football Charts Generator</div>
+        <div class="app-subtitle">
+            Upload CSV / Excel → Match Report / Pizza / Shot Card / Defensive Map
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 
-# -----------------------------
-# Helpers
-# -----------------------------
+# =========================================================
+# HELPERS
+# =========================================================
 def _safe_float(v):
     try:
         return float(v)
@@ -63,7 +243,6 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
     s = out["outcome"].astype(str).str.strip().str.lower()
 
     mapping = {
-        # shots
         "on target": "ontarget",
         "ontarget": "ontarget",
         "1 on target": "ontarget",
@@ -83,7 +262,6 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
         "blocked": "blocked",
         "block": "blocked",
 
-        # passes / defensive outcomes
         "successful": "successful",
         "success": "successful",
         "complete": "successful",
@@ -111,7 +289,6 @@ def normalize_outcome_values(df: pd.DataFrame) -> pd.DataFrame:
         "assist": "assist",
         "a": "assist",
 
-        # touch
         "touch": "touch",
         "ball touch": "touch",
         "receive": "touch",
@@ -142,7 +319,7 @@ def build_pizza_df(players_df: pd.DataFrame, player_col: str, player_name: str, 
         out.append({
             "metric": m,
             "value": "" if pd.isna(val) else round(float(val), 2),
-            "percentile": 0 if pd.isna(pct) else round(float(pct), 1)
+            "percentile": 0 if pd.isna(pct) else round(float(pct), 1),
         })
     return pd.DataFrame(out)
 
@@ -172,10 +349,41 @@ CHART_REQUIREMENTS = {
 }
 
 
-# -----------------------------
-# UI Settings
-# -----------------------------
-with st.expander("🎛️ Settings", expanded=True):
+def fig_to_png_bytes(fig):
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=300, bbox_inches="tight", pad_inches=0.25)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def read_file_bytes(path):
+    with open(path, "rb") as f:
+        return f.read()
+
+
+# =========================================================
+# LAYOUT
+# =========================================================
+left_col, right_col = st.columns([1.05, 1.55], gap="large")
+
+with left_col:
+    st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title">Output & File</div>', unsafe_allow_html=True)
+
+    mode = st.radio(
+        "Choose output type",
+        ["Match Charts", "Pizza Chart", "Shot Detail Card", "Defensive Actions Map"],
+        horizontal=False,
+    )
+
+    uploaded = st.file_uploader("Upload your file", type=["csv", "xlsx", "xls"])
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title">🎛️ Settings</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-note">All controls stay on the left. Preview and downloads stay on the right.</div>', unsafe_allow_html=True)
+
     st.markdown("### 🧩 Report Header")
     report_title = st.text_input("Title", value="Match Report")
     report_subtitle = st.text_input("Subtitle", value="")
@@ -186,21 +394,20 @@ with st.expander("🎛️ Settings", expanded=True):
         key="header_img_uploader",
     )
     header_img_side = st.selectbox("Image position", ["Left", "Right"], index=0)
-
     header_img_size = st.slider("Image size (as % of figure width)", 5, 18, 10)
     header_img_width_frac = header_img_size / 100.0
 
-    st.markdown("### Title / Subtitle style")
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    st.markdown("### Title / Subtitle Style")
     title_align = st.selectbox("Title align", ["Center", "Left", "Right"], index=0)
     subtitle_align = st.selectbox("Subtitle align", ["Center", "Left", "Right"], index=0)
-
     title_fontsize = st.slider("Title font size", 12, 28, 16)
     subtitle_fontsize = st.slider("Subtitle font size", 9, 20, 11)
-
     title_color = st.color_picker("Title color", "#FFFFFF")
     subtitle_color = st.color_picker("Subtitle color", "#A0A7B4")
 
-    st.markdown("---")
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
     st.markdown("### Theme")
     theme_name = st.selectbox(
@@ -227,19 +434,15 @@ with st.expander("🎛️ Settings", expanded=True):
     xg_method = "model" if xg_method_ui == "Model" else "zone"
     st.caption(f"Model exists: **{model_exists}**")
 
-    st.markdown("### Report charts to include")
-    st.markdown("### Legend settings")
-    legend_options = [
-        "Passes",
-        "Shots",
-        "Touches",
-        "Defensive Actions"
-    ]
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+    st.markdown("### Report Charts to Include")
+    legend_options = ["Passes", "Shots", "Touches", "Defensive Actions"]
 
     legend_items = st.multiselect(
         "Select legend items to display",
         legend_options,
-        default=legend_options
+        default=legend_options,
     )
 
     all_charts = [
@@ -257,9 +460,9 @@ with st.expander("🎛️ Settings", expanded=True):
             for ch in selected_charts:
                 st.write(f"**{ch}** → " + ", ".join(CHART_REQUIREMENTS.get(ch, [])))
 
-    st.markdown("---")
-    st.markdown("### Pass Map Filters")
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
+    st.markdown("### Pass Map Filters")
     pass_view = st.selectbox(
         "Pass map view",
         [
@@ -269,18 +472,19 @@ with st.expander("🎛️ Settings", expanded=True):
             "Line-breaking",
             "Progressive passes",
         ],
-        index=0
+        index=0,
     )
 
     pass_scope = st.selectbox(
         "Pass result scope",
         ["Attempts (all)", "Successful only", "Unsuccessful only"],
-        index=0
+        index=0,
     )
 
     pass_min_packing = st.slider("Min packing (only used if no line_breaking column)", 1, 3, 1)
 
-    st.markdown("---")
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
     st.markdown("### Pass colors")
     col_pass_success = st.color_picker("Successful", "#00FF6A")
     col_pass_unsuccess = st.color_picker("Unsuccessful", "#FF4D4D")
@@ -311,7 +515,8 @@ with st.expander("🎛️ Settings", expanded=True):
     bar_goal = st.color_picker("Bar: goal", "#00FF6A")
     bar_blocked = st.color_picker("Bar: blocked", "#AAAAAA")
 
-    st.markdown("---")
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
     st.markdown("### Event shapes (markers)")
     marker_options = {
         "Circle (o)": "o",
@@ -347,9 +552,7 @@ with st.expander("🎛️ Settings", expanded=True):
     mk_ground = st.selectbox("Marker: Ground Duel", marker_labels, index=marker_labels.index("X (x)"))
     mk_clearance = st.selectbox("Marker: Clearance", marker_labels, index=marker_labels.index("Star (*)"))
 
-    st.markdown("---")
     st.markdown("### Defensive Map settings")
-
     def_map_title = st.text_input("Defensive map title", value="Ball Regains Map")
     def_show_zone_values = st.checkbox("Show zone values", value=False)
     def_marker_size = st.slider("Defensive marker size", 60, 260, 110)
@@ -362,33 +565,44 @@ with st.expander("🎛️ Settings", expanded=True):
     touch_dot_size = st.slider("Touch dot size", 60, 520, 220)
     touch_alpha = st.slider("Touch alpha", 20, 100, 95) / 100.0
 
-    st.markdown("---")
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
     st.markdown("### 🍕 Pizza center image")
     pizza_center_img = st.file_uploader(
         "Upload pizza center image (Club logo / Player face) - PNG/JPG",
         type=["png", "jpg", "jpeg"],
         key="pizza_center_uploader",
     )
-
     pizza_center_scale = st.slider("Center image size (Pizza)", 12, 32, 18) / 100.0
     st.caption("Tip: لو الصورة كبيرة خلّيها 0.16–0.20")
 
+    st.markdown("</div>", unsafe_allow_html=True)
 
+
+# =========================================================
+# SETTINGS DICTS
+# =========================================================
 pass_colors = {
     "successful": col_pass_success,
     "unsuccessful": col_pass_unsuccess,
     "key pass": col_pass_key,
-    "assist": col_pass_assist
+    "assist": col_pass_assist,
 }
 shot_colors = {
     "off target": col_shot_off,
     "ontarget": col_shot_on,
     "goal": col_shot_goal,
-    "blocked": col_shot_blocked
+    "blocked": col_shot_blocked,
 }
 bar_colors = {
-    "successful": bar_success, "unsuccessful": bar_unsuccess, "key pass": bar_key, "assist": bar_assist,
-    "ontarget": bar_ont, "off target": bar_off, "goal": bar_goal, "blocked": bar_blocked
+    "successful": bar_success,
+    "unsuccessful": bar_unsuccess,
+    "key pass": bar_key,
+    "assist": bar_assist,
+    "ontarget": bar_ont,
+    "off target": bar_off,
+    "goal": bar_goal,
+    "blocked": bar_blocked,
 }
 def_colors = {
     "interception": col_interception,
@@ -437,24 +651,76 @@ if pizza_center_img is not None:
         pizza_img_obj = None
 
 
-# -----------------------------
-# Main
-# -----------------------------
-mode = st.radio("Choose output type", ["Match Charts", "Pizza Chart", "Shot Detail Card", "Defensive Actions Map"])
-uploaded = st.file_uploader("Upload your file", type=["csv", "xlsx", "xls"])
+# =========================================================
+# SESSION STATE FOR PREVIEW
+# =========================================================
+if "preview_images" not in st.session_state:
+    st.session_state.preview_images = []
 
-if uploaded:
+if "download_files" not in st.session_state:
+    st.session_state.download_files = []
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "data_info" not in st.session_state:
+    st.session_state.data_info = {}
+
+if "last_mode" not in st.session_state:
+    st.session_state.last_mode = mode
+
+
+if st.session_state.last_mode != mode:
+    st.session_state.preview_images = []
+    st.session_state.download_files = []
+    st.session_state.messages = []
+    st.session_state.data_info = {}
+    st.session_state.last_mode = mode
+
+
+# =========================================================
+# MAIN PROCESSING
+# =========================================================
+with right_col:
+    st.markdown('<div class="preview-shell">', unsafe_allow_html=True)
+    st.markdown("### 📊 Preview & Downloads")
+
+    if uploaded is None:
+        st.markdown(
+            """
+            <div class="preview-placeholder">
+                <div style="font-size:1.2rem;font-weight:800;margin-bottom:8px;">No file uploaded yet</div>
+                <div>Upload a CSV / Excel file from the left panel, choose your mode, then generate the output.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.stop()
+
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, uploaded.name)
         with open(path, "wb") as f:
             f.write(uploaded.getbuffer())
 
         # -----------------------------
-        # PIZZA MODE
+        # LOAD FOR PIZZA MODE
         # -----------------------------
         if mode == "Pizza Chart":
             dfp = load_data(path)
-            st.success(f"Loaded ✅ rows: {len(dfp)}")
+            st.session_state.data_info = {
+                "rows": len(dfp),
+                "cols": len(dfp.columns),
+                "mode": mode,
+            }
+
+            k1, k2, k3 = st.columns(3)
+            with k1:
+                st.markdown(f'<div class="small-kpi"><div class="label">Mode</div><div class="value">{mode}</div></div>', unsafe_allow_html=True)
+            with k2:
+                st.markdown(f'<div class="small-kpi"><div class="label">Rows</div><div class="value">{len(dfp)}</div></div>', unsafe_allow_html=True)
+            with k3:
+                st.markdown(f'<div class="small-kpi"><div class="label">Columns</div><div class="value">{len(dfp.columns)}</div></div>', unsafe_allow_html=True)
 
             with st.expander("Preview data (first 25 rows)", expanded=False):
                 st.write("Columns:", list(dfp.columns))
@@ -501,7 +767,7 @@ if uploaded:
                 else:
                     return "#E74C3C"
 
-            if st.button("Generate Pizza"):
+            if st.button("Generate Pizza", key="generate_pizza"):
                 pizza_df = build_pizza_df(dfp_filtered, player_col, selected_player, selected_metrics)
                 slice_colors = [pct_color(p) for p in pizza_df["percentile"].tolist()]
                 center_img = pizza_img_obj if pizza_img_obj is not None else header_img_obj
@@ -514,7 +780,7 @@ if uploaded:
                     show_values_legend=False,
                     center_image=center_img,
                     center_img_scale=pizza_center_scale,
-                    footer_text=""
+                    footer_text="",
                 )
 
                 out_dir = os.path.join(tmp, "output")
@@ -526,16 +792,46 @@ if uploaded:
                 with PdfPages(pdf_path) as pdf:
                     pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
 
-                st.pyplot(fig)
-                with open(pdf_path, "rb") as f2:
-                    st.download_button("⬇️ Download pizza.pdf", f2, file_name="pizza.pdf")
-                with open(png_path, "rb") as f2:
-                    st.download_button("⬇️ Download pizza.png", f2, file_name="pizza.png")
+                st.session_state.preview_images = [fig_to_png_bytes(fig)]
+                st.session_state.download_files = [
+                    ("pizza.pdf", read_file_bytes(pdf_path), "application/pdf"),
+                    ("pizza.png", read_file_bytes(png_path), "image/png"),
+                ]
+                st.session_state.messages = [("success", "Pizza chart generated successfully.")]
 
+            if st.session_state.messages:
+                for level, msg in st.session_state.messages:
+                    getattr(st, level)(msg)
+
+            if st.session_state.preview_images:
+                st.subheader("Preview")
+                for img in st.session_state.preview_images:
+                    st.image(img, use_container_width=True)
+
+                st.subheader("Downloads")
+                for fname, fbytes, mime in st.session_state.download_files:
+                    st.download_button(
+                        f"⬇️ Download {fname}",
+                        data=fbytes,
+                        file_name=fname,
+                        mime=mime,
+                        key=f"dl_{fname}",
+                    )
+            else:
+                st.markdown(
+                    """
+                    <div class="preview-placeholder">
+                        Choose player + metrics, then click <b>Generate Pizza</b>.
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown("</div>", unsafe_allow_html=True)
             st.stop()
 
         # -----------------------------
-        # MATCH / SHOTS MODE
+        # OTHER MODES LOAD
         # -----------------------------
         df_raw = load_data(path)
 
@@ -588,14 +884,28 @@ if uploaded:
             model_pipe=model_pipe,
         )
 
-        st.success(f"Prepared ✅ rows: {len(df2)}")
+        st.session_state.data_info = {
+            "rows": len(df2),
+            "cols": len(df2.columns),
+            "mode": mode,
+        }
+
+        k1, k2, k3 = st.columns(3)
+        with k1:
+            st.markdown(f'<div class="small-kpi"><div class="label">Mode</div><div class="value">{mode}</div></div>', unsafe_allow_html=True)
+        with k2:
+            st.markdown(f'<div class="small-kpi"><div class="label">Rows</div><div class="value">{len(df2)}</div></div>', unsafe_allow_html=True)
+        with k3:
+            st.markdown(f'<div class="small-kpi"><div class="label">Columns</div><div class="value">{len(df2.columns)}</div></div>', unsafe_allow_html=True)
+
         if "xg_source" in df2.columns and len(df2):
             st.info(f"xG source used: **{df2['xg_source'].iloc[0]}**")
+
         # -----------------------------
         # DEFENSIVE ACTIONS MAP
         # -----------------------------
         if mode == "Defensive Actions Map":
-            if st.button("Generate Defensive Map"):
+            if st.button("Generate Defensive Map", key="generate_def_map"):
                 fig = defensive_regains_map(
                     df2,
                     title=def_map_title,
@@ -618,14 +928,44 @@ if uploaded:
                 with PdfPages(pdf_path) as pdf:
                     pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
 
-                st.pyplot(fig)
-                with open(png_path, "rb") as f2:
-                    st.download_button("⬇️ Download defensive_actions_map.png", f2, file_name="defensive_actions_map.png")
-                with open(pdf_path, "rb") as f2:
-                    st.download_button("⬇️ Download defensive_actions_map.pdf", f2, file_name="defensive_actions_map.pdf")
+                st.session_state.preview_images = [fig_to_png_bytes(fig)]
+                st.session_state.download_files = [
+                    ("defensive_actions_map.png", read_file_bytes(png_path), "image/png"),
+                    ("defensive_actions_map.pdf", read_file_bytes(pdf_path), "application/pdf"),
+                ]
+                st.session_state.messages = [("success", "Defensive map generated successfully.")]
 
+            if st.session_state.messages:
+                for level, msg in st.session_state.messages:
+                    getattr(st, level)(msg)
+
+            if st.session_state.preview_images:
+                st.subheader("Preview")
+                for img in st.session_state.preview_images:
+                    st.image(img, use_container_width=True)
+
+                st.subheader("Downloads")
+                for fname, fbytes, mime in st.session_state.download_files:
+                    st.download_button(
+                        f"⬇️ Download {fname}",
+                        data=fbytes,
+                        file_name=fname,
+                        mime=mime,
+                        key=f"dl_{fname}",
+                    )
+            else:
+                st.markdown(
+                    """
+                    <div class="preview-placeholder">
+                        Click <b>Generate Defensive Map</b> to render the chart here.
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown("</div>", unsafe_allow_html=True)
             st.stop()
-    
+
         # -----------------------------
         # SHOT DETAIL CARD
         # -----------------------------
@@ -633,17 +973,18 @@ if uploaded:
             shots_only = df2[df2["event_type"] == "shot"].copy().reset_index(drop=True)
             if shots_only.empty:
                 st.error("No shots found in this file.")
+                st.markdown("</div>", unsafe_allow_html=True)
                 st.stop()
 
             shots_only["label"] = shots_only.apply(
                 lambda r: f'{r.name+1} | {str(r["outcome"]).upper()} | xG {_safe_float(r.get("xg")):.2f} | ({_safe_float(r["x"]):.1f},{_safe_float(r["y"]):.1f})',
-                axis=1
+                axis=1,
             )
             selected = st.selectbox("Select a shot", shots_only["label"].tolist(), index=0)
             shot_index = int(selected.split("|")[0].strip()) - 1
             card_title = st.text_input("Card title", value="Shot Detail")
 
-            if st.button("Generate Shot Card"):
+            if st.button("Generate Shot Card", key="generate_shot_card"):
                 fig, _ = shot_detail_card(
                     df2,
                     shot_index=int(shot_index),
@@ -664,18 +1005,49 @@ if uploaded:
                 with PdfPages(pdf_path) as pdf:
                     pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
 
-                st.pyplot(fig)
-                with open(png_path, "rb") as f2:
-                    st.download_button("⬇️ Download shot_card.png", f2, file_name="shot_card.png")
-                with open(pdf_path, "rb") as f2:
-                    st.download_button("⬇️ Download shot_card.pdf", f2, file_name="shot_card.pdf")
+                st.session_state.preview_images = [fig_to_png_bytes(fig)]
+                st.session_state.download_files = [
+                    ("shot_card.png", read_file_bytes(png_path), "image/png"),
+                    ("shot_card.pdf", read_file_bytes(pdf_path), "application/pdf"),
+                ]
+                st.session_state.messages = [("success", "Shot detail card generated successfully.")]
 
+            if st.session_state.messages:
+                for level, msg in st.session_state.messages:
+                    getattr(st, level)(msg)
+
+            if st.session_state.preview_images:
+                st.subheader("Preview")
+                for img in st.session_state.preview_images:
+                    st.image(img, use_container_width=True)
+
+                st.subheader("Downloads")
+                for fname, fbytes, mime in st.session_state.download_files:
+                    st.download_button(
+                        f"⬇️ Download {fname}",
+                        data=fbytes,
+                        file_name=fname,
+                        mime=mime,
+                        key=f"dl_{fname}",
+                    )
+            else:
+                st.markdown(
+                    """
+                    <div class="preview-placeholder">
+                        Select a shot, then click <b>Generate Shot Card</b>.
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown("</div>", unsafe_allow_html=True)
             st.stop()
 
         # -----------------------------
-        # REPORT PDF
+        # MATCH CHARTS REPORT
         # -----------------------------
-        generate_clicked = st.button("Generate Report", disabled=not can_generate_report)
+        generate_clicked = st.button("Generate Report", disabled=not can_generate_report, key="generate_report")
+
         if not can_generate_report:
             st.info("Generate Report is disabled until required columns exist for all selected charts.")
 
@@ -718,14 +1090,40 @@ if uploaded:
                 legend_items=legend_items,
             )
 
-            st.subheader("Preview")
-            for p in png_paths:
-                st.image(p, use_container_width=True)
-
-            st.subheader("Downloads")
-            with open(pdf_path, "rb") as f2:
-                st.download_button("⬇️ Download report.pdf", f2, file_name="report.pdf")
+            st.session_state.preview_images = [read_file_bytes(p) for p in png_paths]
+            st.session_state.download_files = [("report.pdf", read_file_bytes(pdf_path), "application/pdf")]
             for p in png_paths:
                 name = os.path.basename(p)
-                with open(p, "rb") as f2:
-                    st.download_button(f"⬇️ Download {name}", f2, file_name=name)
+                st.session_state.download_files.append((name, read_file_bytes(p), "image/png"))
+
+            st.session_state.messages = [("success", "Match report generated successfully.")]
+
+        if st.session_state.messages:
+            for level, msg in st.session_state.messages:
+                getattr(st, level)(msg)
+
+        if st.session_state.preview_images:
+            st.subheader("Preview")
+            for img in st.session_state.preview_images:
+                st.image(img, use_container_width=True)
+
+            st.subheader("Downloads")
+            for fname, fbytes, mime in st.session_state.download_files:
+                st.download_button(
+                    f"⬇️ Download {fname}",
+                    data=fbytes,
+                    file_name=fname,
+                    mime=mime,
+                    key=f"dl_{fname}",
+                )
+        else:
+            st.markdown(
+                """
+                <div class="preview-placeholder">
+                    Configure the settings from the left panel, then click <b>Generate Report</b>.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("</div>", unsafe_allow_html=True)
