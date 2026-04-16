@@ -17,6 +17,7 @@ from charts import (
     pizza_chart,
     shot_detail_card,
     defensive_regains_map,
+    shot_spot_and_direction_map,
     THEMES,
 )
 
@@ -197,13 +198,12 @@ st.markdown(
     <div class="app-header">
         <div class="app-title">⚽ Football Charts Generator</div>
         <div class="app-subtitle">
-            Upload CSV / Excel → Match Report / Pizza / Shot Card / Defensive Map
+            Upload CSV / Excel → Match Report / Pizza / Shot Card / Defensive Map / Shot Direction Map
         </div>
     </div>
     """,
     unsafe_allow_html=True,
 )
-
 
 # =========================================================
 # HELPERS
@@ -346,6 +346,7 @@ CHART_REQUIREMENTS = {
     "Pass Map": ["outcome", "x", "y", "x2", "y2"],
     "Shot Map": ["outcome", "x", "y", "(optional) x2,y2", "(optional) xg"],
     "Defensive Actions Map": ["x", "y", "outcome"],
+    "Shot Spot + Direction Map": ["x", "y", "outcome", "x2", "y2"],
 }
 
 
@@ -360,7 +361,6 @@ def read_file_bytes(path):
     with open(path, "rb") as f:
         return f.read()
 
-
 # =========================================================
 # LAYOUT
 # =========================================================
@@ -372,7 +372,13 @@ with left_col:
 
     mode = st.radio(
         "Choose output type",
-        ["Match Charts", "Pizza Chart", "Shot Detail Card", "Defensive Actions Map"],
+        [
+            "Match Charts",
+            "Pizza Chart",
+            "Shot Detail Card",
+            "Defensive Actions Map",
+            "Shot Spot + Direction Map",
+        ],
         horizontal=False,
     )
 
@@ -419,6 +425,9 @@ with left_col:
     attack_dir_ui = st.selectbox("Attack direction", ["Left → Right", "Right → Left"])
     attack_dir = "ltr" if attack_dir_ui == "Left → Right" else "rtl"
 
+    pitch_orientation_ui = st.selectbox("Pitch orientation", ["Horizontal", "Vertical"], index=0)
+    pitch_orientation = "horizontal" if pitch_orientation_ui == "Horizontal" else "vertical"
+
     flip_y = st.checkbox("Flip Y axis (use this if your Y=0 is at the bottom)", value=False)
 
     pitch_mode_ui = st.selectbox("Pitch shape", ["Rectangular (recommended)", "Square (0-100)"])
@@ -452,8 +461,9 @@ with left_col:
         "Pass Map",
         "Shot Map",
         "Defensive Actions Map",
+        "Shot Spot + Direction Map",
     ]
-    selected_charts = st.multiselect("Choose charts", all_charts, default=all_charts)
+    selected_charts = st.multiselect("Choose charts", all_charts, default=all_charts[:-1])
 
     if selected_charts:
         with st.expander("📌 Required columns for selected charts (pre-check)", expanded=False):
@@ -492,9 +502,9 @@ with left_col:
     col_pass_assist = st.color_picker("Assist", "#FFD400")
 
     st.markdown("### Shot colors")
-    col_shot_off = st.color_picker("Off target", "#FF8A00")
-    col_shot_on = st.color_picker("On target", "#00C2FF")
-    col_shot_goal = st.color_picker("Goal", "#00FF6A")
+    col_shot_off = st.color_picker("Off target", "#7A7A7A")
+    col_shot_on = st.color_picker("On target", "#111111")
+    col_shot_goal = st.color_picker("Goal", "#FF0000")
     col_shot_blocked = st.color_picker("Blocked", "#AAAAAA")
 
     st.markdown("### Defensive action colors")
@@ -534,9 +544,9 @@ with left_col:
     marker_labels = list(marker_options.keys())
 
     st.markdown("#### Shot markers")
-    mk_shot_off = st.selectbox("Marker: Off target", marker_labels, index=marker_labels.index("Triangle up (^)"))
-    mk_shot_on = st.selectbox("Marker: On target", marker_labels, index=marker_labels.index("Diamond (D)"))
-    mk_shot_goal = st.selectbox("Marker: Goal", marker_labels, index=marker_labels.index("Star (*)"))
+    mk_shot_off = st.selectbox("Marker: Off target", marker_labels, index=marker_labels.index("X (x)"))
+    mk_shot_on = st.selectbox("Marker: On target", marker_labels, index=marker_labels.index("Circle (o)"))
+    mk_shot_goal = st.selectbox("Marker: Goal", marker_labels, index=marker_labels.index("Circle (o)"))
     mk_shot_blocked = st.selectbox("Marker: Blocked", marker_labels, index=marker_labels.index("Square (s)"))
 
     st.markdown("#### Pass start markers")
@@ -566,6 +576,10 @@ with left_col:
     touch_dot_size = st.slider("Touch dot size", 60, 520, 220)
     touch_alpha = st.slider("Touch alpha", 20, 100, 95) / 100.0
 
+    st.markdown("### Shot Spot + Direction settings")
+    shot_combo_title = st.text_input("Shot combo map title", value="Shot Spot + Direction Map")
+    shot_combo_plot_all = st.checkbox("Plot all shots", value=True)
+
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
     st.markdown("### 🍕 Pizza center image")
@@ -578,7 +592,6 @@ with left_col:
     st.caption("Tip: لو الصورة كبيرة خلّيها 0.16–0.20")
 
     st.markdown("</div>", unsafe_allow_html=True)
-
 
 # =========================================================
 # SETTINGS DICTS
@@ -636,7 +649,6 @@ def_markers = {
 }
 touch_marker = marker_options[touch_marker_label]
 
-
 header_img_obj = None
 if header_img is not None:
     try:
@@ -650,7 +662,6 @@ if pizza_center_img is not None:
         pizza_img_obj = Image.open(pizza_center_img).convert("RGBA")
     except Exception:
         pizza_img_obj = None
-
 
 # =========================================================
 # SESSION STATE FOR PREVIEW
@@ -670,14 +681,12 @@ if "data_info" not in st.session_state:
 if "last_mode" not in st.session_state:
     st.session_state.last_mode = mode
 
-
 if st.session_state.last_mode != mode:
     st.session_state.preview_images = []
     st.session_state.download_files = []
     st.session_state.messages = []
     st.session_state.data_info = {}
     st.session_state.last_mode = mode
-
 
 # =========================================================
 # MAIN PROCESSING
@@ -704,6 +713,9 @@ with right_col:
         with open(path, "wb") as f:
             f.write(uploaded.getbuffer())
 
+        # =====================================================
+        # PIZZA
+        # =====================================================
         if mode == "Pizza Chart":
             dfp = load_data(path)
             st.session_state.data_info = {
@@ -828,6 +840,9 @@ with right_col:
             st.markdown("</div>", unsafe_allow_html=True)
             st.stop()
 
+        # =====================================================
+        # COMMON DATA PREP
+        # =====================================================
         df_raw = load_data(path)
 
         with st.expander("Raw file preview (first 25 rows)", expanded=False):
@@ -841,7 +856,11 @@ with right_col:
 
         cols_lower = _lower_cols(df_raw)
         missing_by_chart = {}
-        for ch in selected_charts:
+        charts_to_check = selected_charts if mode == "Match Charts" else [mode.replace("Shot Detail Card", "Shot Map").replace("Defensive Actions Map", "Defensive Actions Map")]
+        if mode == "Shot Spot + Direction Map":
+            charts_to_check = ["Shot Spot + Direction Map"]
+
+        for ch in selected_charts if mode == "Match Charts" else charts_to_check:
             req = CHART_REQUIREMENTS.get(ch, [])
             miss = _missing_for_chart(cols_lower, req)
             if miss:
@@ -852,7 +871,11 @@ with right_col:
             for ch, miss in missing_by_chart.items():
                 st.write(f"**{ch}** missing → {', '.join(miss)}")
         else:
-            st.success("✅ Required columns check passed (or not needed for this mode).")
+            if mode != "Match Charts" and missing_by_chart:
+                for ch, miss in missing_by_chart.items():
+                    st.error(f"❌ {ch} missing → {', '.join(miss)}")
+            else:
+                st.success("✅ Required columns check passed (or not needed for this mode).")
 
         can_generate_report = (len(missing_by_chart) == 0)
 
@@ -896,6 +919,9 @@ with right_col:
         if "xg_source" in df2.columns and len(df2):
             st.info(f"xG source used: **{df2['xg_source'].iloc[0]}**")
 
+        # =====================================================
+        # DEFENSIVE MAP
+        # =====================================================
         if mode == "Defensive Actions Map":
             if st.button("Generate Defensive Map", key="generate_def_map"):
                 fig = defensive_regains_map(
@@ -909,6 +935,7 @@ with right_col:
                     marker_size=def_marker_size,
                     zone_alpha=def_zone_alpha,
                     show_zone_values=def_show_zone_values,
+                    orientation=pitch_orientation,
                 )
 
                 out_dir = os.path.join(tmp, "output")
@@ -958,6 +985,9 @@ with right_col:
             st.markdown("</div>", unsafe_allow_html=True)
             st.stop()
 
+        # =====================================================
+        # SHOT DETAIL CARD
+        # =====================================================
         if mode == "Shot Detail Card":
             shots_only = df2[df2["event_type"] == "shot"].copy().reset_index(drop=True)
             if shots_only.empty:
@@ -983,6 +1013,7 @@ with right_col:
                     shot_colors=shot_colors,
                     shot_markers=shot_markers,
                     theme_name=theme_name,
+                    orientation=pitch_orientation,
                 )
 
                 out_dir = os.path.join(tmp, "output")
@@ -1032,6 +1063,89 @@ with right_col:
             st.markdown("</div>", unsafe_allow_html=True)
             st.stop()
 
+        # =====================================================
+        # SHOT SPOT + DIRECTION MAP
+        # =====================================================
+        if mode == "Shot Spot + Direction Map":
+            shots_only = df2[df2["event_type"] == "shot"].copy().reset_index(drop=True)
+            if shots_only.empty:
+                st.error("No shots found in this file.")
+                st.markdown("</div>", unsafe_allow_html=True)
+                st.stop()
+
+            selected_idx = None
+            if not shot_combo_plot_all:
+                shots_only["label"] = shots_only.apply(
+                    lambda r: f'{r.name+1} | {str(r["outcome"]).upper()} | xG {_safe_float(r.get("xg")):.2f} | ({_safe_float(r["x"]):.1f},{_safe_float(r["y"]):.1f})',
+                    axis=1,
+                )
+                selected = st.selectbox("Select a shot", shots_only["label"].tolist(), index=0)
+                selected_idx = int(selected.split("|")[0].strip()) - 1
+
+            if st.button("Generate Shot Spot + Direction Map", key="generate_shot_combo"):
+                fig = shot_spot_and_direction_map(
+                    df2,
+                    title=shot_combo_title,
+                    shot_colors=shot_colors,
+                    shot_markers=shot_markers,
+                    pitch_mode=pitch_mode,
+                    pitch_width=pitch_width,
+                    theme_name=theme_name,
+                    orientation=pitch_orientation,
+                    plot_all=shot_combo_plot_all,
+                    shot_index=selected_idx,
+                )
+
+                out_dir = os.path.join(tmp, "output")
+                os.makedirs(out_dir, exist_ok=True)
+                png_path = os.path.join(out_dir, "shot_spot_direction_map.png")
+                pdf_path = os.path.join(out_dir, "shot_spot_direction_map.pdf")
+
+                fig.savefig(png_path, dpi=350, bbox_inches="tight", pad_inches=0.25)
+                with PdfPages(pdf_path) as pdf:
+                    pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
+
+                st.session_state.preview_images = [fig_to_png_bytes(fig)]
+                st.session_state.download_files = [
+                    ("shot_spot_direction_map.png", read_file_bytes(png_path), "image/png"),
+                    ("shot_spot_direction_map.pdf", read_file_bytes(pdf_path), "application/pdf"),
+                ]
+                st.session_state.messages = [("success", "Shot Spot + Direction map generated successfully.")]
+
+            if st.session_state.messages:
+                for level, msg in st.session_state.messages:
+                    getattr(st, level)(msg)
+
+            if st.session_state.preview_images:
+                st.subheader("Preview")
+                for img in st.session_state.preview_images:
+                    st.image(img, use_container_width=True)
+
+                st.subheader("Downloads")
+                for fname, fbytes, mime in st.session_state.download_files:
+                    st.download_button(
+                        f"⬇️ Download {fname}",
+                        data=fbytes,
+                        file_name=fname,
+                        mime=mime,
+                        key=f"dl_{fname}",
+                    )
+            else:
+                st.markdown(
+                    """
+                    <div class="preview-placeholder">
+                        Click <b>Generate Shot Spot + Direction Map</b>.
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown("</div>", unsafe_allow_html=True)
+            st.stop()
+
+        # =====================================================
+        # MATCH REPORT
+        # =====================================================
         generate_clicked = st.button("Generate Report", disabled=not can_generate_report, key="generate_report")
 
         if not can_generate_report:
@@ -1057,6 +1171,7 @@ with right_col:
                 theme_name=theme_name,
                 pitch_mode=pitch_mode,
                 pitch_width=pitch_width,
+                pitch_orientation=pitch_orientation,
                 pass_colors=pass_colors,
                 pass_markers=pass_markers,
                 shot_colors=shot_colors,
