@@ -6,6 +6,4 @@ openpyxl
 joblib
 scikit-learn
 numpy
-pandas
-matplotlib
-mplsoccer
+pillow
