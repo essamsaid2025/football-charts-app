@@ -11,7 +11,7 @@ import matplotlib.gridspec as gridspec
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
-from mplsoccer import Pitch, PyPizza
+from mplsoccer import Pitch, VerticalPitch, PyPizza
 
 
 # ✅ Helper: YES only (NO/empty = False)
@@ -230,6 +230,18 @@ def load_data(path: str) -> pd.DataFrame:
 def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
+    # Prevent duplicate columns after stripping/case normalization
+    seen_cols = {}
+    new_cols = []
+    for c in df.columns:
+        key = str(c).strip().lower()
+        if key in seen_cols:
+            seen_cols[key] += 1
+            new_cols.append(f"{c}__dup{seen_cols[key]}")
+        else:
+            seen_cols[key] = 0
+            new_cols.append(c)
+    df.columns = new_cols
     cols_lower_map = {c.lower(): c for c in df.columns}
 
     if "outcome" not in cols_lower_map:
@@ -239,13 +251,6 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     for want in ["x", "y", "x2", "y2"]:
         if want in cols_lower_map:
             df.rename(columns={cols_lower_map[want]: want}, inplace=True)
-
-    # Safety net: after renaming stripped/case-insensitive columns,
-    # remove duplicated column names while keeping the first real value column.
-    # Duplicate `outcome` columns make df["outcome"].isin(...) return a DataFrame,
-    # which causes Pandas .loc to raise KeyError.
-    if df.columns.duplicated().any():
-        df = df.loc[:, ~df.columns.duplicated()].copy()
 
     missing = [c for c in REQUIRED if c not in df.columns]
     if missing:
@@ -345,6 +350,7 @@ def make_pitch(
     pitch_mode: str = "rect",
     pitch_width: float = 64.0,
     theme: Optional[dict] = None,
+    vertical_pitch: bool = False,
 ) -> Pitch:
     theme = theme or {}
     pitch_color = theme.get("pitch", "#1f5f3b")
@@ -352,8 +358,10 @@ def make_pitch(
     stripe_color = theme.get("pitch_stripe", None)
     stripe = True if stripe_color else False
 
+    PitchClass = VerticalPitch if vertical_pitch else Pitch
+
     if pitch_mode == "square":
-        return Pitch(
+        return PitchClass(
             pitch_type="custom",
             pitch_length=100,
             pitch_width=100,
@@ -364,7 +372,7 @@ def make_pitch(
             stripe_color=stripe_color,
         )
 
-    return Pitch(
+    return PitchClass(
         pitch_type="custom",
         pitch_length=100,
         pitch_width=pitch_width,
@@ -894,9 +902,9 @@ def outcome_bar(df: pd.DataFrame, bar_colors: Optional[dict] = None, theme_name:
     return fig
 
 
-def start_location_heatmap(df: pd.DataFrame, pitch_mode: str = "rect", pitch_width: float = 64.0, theme_name: str = "The Athletic Dark"):
+def start_location_heatmap(df: pd.DataFrame, pitch_mode: str = "rect", pitch_width: float = 64.0, theme_name: str = "The Athletic Dark", vertical_pitch: bool = False):
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
-    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
@@ -925,9 +933,10 @@ def touch_map(
     dot_size: int = 220,
     alpha: float = 0.95,
     marker: str = "o",
+    vertical_pitch: bool = False,
 ):
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
-    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
 
     d = df.copy()
     if "outcome" in d.columns:
@@ -987,8 +996,8 @@ def _bool_mask(col, index: pd.Index) -> pd.Series:
     return pd.Series(False, index=index, dtype=bool)
 
 
-def _empty_pass_map_figure(pitch_mode: str, pitch_width: float, theme: dict, title: str, msg: str):
-    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
+def _empty_pass_map_figure(pitch_mode: str, pitch_width: float, theme: dict, title: str, msg: str, vertical_pitch: bool = False):
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
@@ -1042,6 +1051,7 @@ def pass_map(
     pitch_mode: str = "rect",
     pitch_width: float = 64.0,
     theme_name: str = "The Athletic Dark",
+    vertical_pitch: bool = False,
     pass_view: str = "All passes",
     result_scope: str = "Attempts (all)",
     min_packing: int = 1,
@@ -1073,10 +1083,11 @@ def pass_map(
             pitch_width=pitch_width,
             theme=theme,
             title=title,
-            msg="No passes match the selected filters.\nTry changing Pass View / Scope or lowering min packing."
+            msg="No passes match the selected filters.\nTry changing Pass View / Scope or lowering min packing.",
+            vertical_pitch=vertical_pitch
         )
 
-    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
@@ -1145,14 +1156,15 @@ def shot_map(
     pitch_mode: str = "rect",
     pitch_width: float = 64.0,
     show_xg: bool = False,
-    theme_name: str = "The Athletic Dark"
+    theme_name: str = "The Athletic Dark",
+    vertical_pitch: bool = False
 ):
     shot_colors = shot_colors or {}
     shot_markers = shot_markers or {}
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
 
     s = df[df["event_type"] == "shot"].copy()
-    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
@@ -1212,13 +1224,14 @@ def defensive_actions_map(
     pitch_mode: str = "rect",
     pitch_width: float = 64.0,
     theme_name: str = "The Athletic Dark",
+    vertical_pitch: bool = False,
 ):
     def_colors = def_colors or {}
     def_markers = def_markers or {}
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
 
     d = df[df["event_type"] == "defensive"].copy()
-    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
     fig, ax = plt.subplots(figsize=(7.6, 4.8))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
@@ -1285,194 +1298,6 @@ def defensive_actions_map(
     return fig
 
 
-
-
-# =========================================================
-# Extra report helpers: column footer + extra charts
-# =========================================================
-CHART_REQUIREMENTS_MAP = {
-    "Outcome Bar": ["outcome"],
-    "Start Heatmap": ["x", "y"],
-    "Touch Map (Scatter)": ["x", "y", "outcome (optional: touch)"],
-    "Pass Map": ["outcome", "x", "y", "x2", "y2"],
-    "Shot Map": ["outcome", "x", "y", "x2(optional)", "y2(optional)", "xg(optional)"],
-    "Shot Spot + Direction": ["outcome", "x", "y", "x2", "y2"],
-    "Defensive Actions Map": ["x", "y", "outcome", "interception/tackle/recovery/aerial_duel/ground_duel/clearance"],
-    "Actions Heatmap": ["x", "y", "outcome", "interception/tackle/recovery/aerial_duel/ground_duel/clearance(optional)"],
-}
-
-def add_required_columns_footer(fig, chart_title: str, theme_name: str = "The Athletic Dark"):
-    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
-    req = CHART_REQUIREMENTS_MAP.get(chart_title, [])
-    if not req:
-        return fig
-    txt = "Required columns: " + ", ".join(req)
-    fig.text(0.5, 0.012, txt, ha="center", va="bottom", color=theme.get("muted", "#A0A7B4"), fontsize=8)
-    try:
-        fig.subplots_adjust(bottom=0.08)
-    except Exception:
-        pass
-    return fig
-
-def _legend_loc_from_user(loc: str) -> str:
-    loc = (loc or "bottom").lower().strip()
-    if loc == "none":
-        return "none"
-    if loc == "top":
-        return "upper center"
-    if loc == "right":
-        return "center right"
-    return "lower center"
-
-def actions_heatmap(
-    df: pd.DataFrame,
-    title: str = "Actions Heatmap",
-    pitch_mode: str = "rect",
-    pitch_width: float = 64.0,
-    theme_name: str = "The Athletic Dark",
-    bins_x: int = 6,
-    bins_y: int = 4,
-    show_values: bool = True,
-):
-    from matplotlib.patches import Rectangle
-    from matplotlib.colors import LinearSegmentedColormap, Normalize
-    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
-    d = df.copy()
-    if "x" not in d.columns or "y" not in d.columns:
-        raise ValueError("Actions Heatmap needs x and y columns")
-    d["x"] = pd.to_numeric(d["x"], errors="coerce")
-    d["y"] = pd.to_numeric(d["y"], errors="coerce")
-    d = d.dropna(subset=["x", "y"]).copy()
-
-    # Prefer real defensive/action flags if available, otherwise use all events.
-    action_cols = [c for c in DEF_ACTION_COLS if c in d.columns]
-    if action_cols:
-        mask = pd.Series(False, index=d.index)
-        for c in action_cols:
-            mask = mask | _yes_only(d[c])
-        if mask.any():
-            d = d[mask].copy()
-
-    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
-    fig, ax = plt.subplots(figsize=(8.8, 5.6))
-    fig.patch.set_facecolor(theme["bg"])
-    _draw_pitch(ax, pitch, theme)
-
-    y_max = pitch_width if pitch_mode == "rect" else 100.0
-    x_edges = np.linspace(0, 100, bins_x + 1)
-    y_edges = np.linspace(0, y_max, bins_y + 1)
-    counts, _, _ = np.histogram2d(d["x"], d["y"], bins=[x_edges, y_edges])
-    counts = counts.T
-
-    cmap = LinearSegmentedColormap.from_list("actions_heat", [theme.get("pitch", "#1f5f3b"), "#FDE68A", "#EF4444"])
-    vmax = max(1.0, float(np.nanmax(counts)))
-    norm = Normalize(vmin=0, vmax=vmax)
-    for yi in range(len(y_edges)-1):
-        for xi in range(len(x_edges)-1):
-            val = counts[yi, xi]
-            rect = Rectangle((x_edges[xi], y_edges[yi]), x_edges[xi+1]-x_edges[xi], y_edges[yi+1]-y_edges[yi],
-                             facecolor=cmap(norm(val)), edgecolor=theme.get("pitch_lines", "white"),
-                             linewidth=1.2, alpha=0.76, zorder=2)
-            ax.add_patch(rect)
-            if show_values and val > 0:
-                ax.text((x_edges[xi]+x_edges[xi+1])/2, (y_edges[yi]+y_edges[yi+1])/2, str(int(val)),
-                        color=theme.get("text", "white"), ha="center", va="center", fontsize=12, weight="bold", zorder=3)
-    pitch.draw(ax=ax)
-    ax.set_title(title, color=theme["text"], fontsize=16, weight="bold")
-    ax.set_xlim(-2, 102); ax.set_ylim(-2, y_max + 2)
-    return fig
-
-def shot_spot_direction_chart(
-    df: pd.DataFrame,
-    shot_colors: Optional[dict] = None,
-    shot_markers: Optional[dict] = None,
-    pitch_mode: str = "rect",
-    pitch_width: float = 64.0,
-    theme_name: str = "The Athletic Dark",
-    show_legend: bool = True,
-):
-    # Two-part shot chart similar to the screenshot: shot spot + goal/direction area.
-    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
-    shot_colors = shot_colors or {}
-    shot_markers = shot_markers or {}
-    s = df[df.get("event_type", "") == "shot"].copy() if "event_type" in df.columns else df.copy()
-    for c in ["x", "y", "x2", "y2"]:
-        if c in s.columns:
-            s[c] = pd.to_numeric(s[c], errors="coerce")
-    s = s.dropna(subset=["x", "y"]).copy()
-
-    fig = plt.figure(figsize=(9, 8.5), facecolor=theme["bg"])
-    gs = gridspec.GridSpec(2, 1, height_ratios=[1.05, 0.95], hspace=0.28)
-    ax_pitch = fig.add_subplot(gs[0, 0])
-    ax_goal = fig.add_subplot(gs[1, 0])
-
-    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
-    _draw_pitch(ax_pitch, pitch, theme)
-    y_max = pitch_width if pitch_mode == "rect" else 100.0
-    ax_pitch.set_xlim(45, 102); ax_pitch.set_ylim(-2, y_max + 2)
-    ax_pitch.set_title("SHOT SPOT", color=theme["text"], fontsize=11, weight="bold")
-
-    for outcome in SHOT_ORDER:
-        dd = s[s["outcome"].astype(str).str.lower() == outcome]
-        if dd.empty:
-            continue
-        mk = shot_markers.get(outcome, "o")
-        if _is_no_marker(mk):
-            continue
-        pitch.scatter(dd["x"], dd["y"], ax=ax_pitch, s=80, marker=mk,
-                      color=shot_colors.get(outcome, theme.get("muted", "#A0A7B4")),
-                      edgecolors=theme.get("bg", "#000"), linewidth=0.8, zorder=5)
-
-    # Goal / direction area
-    ax_goal.set_facecolor(theme.get("panel", "#111827"))
-    ax_goal.set_xlim(0, 100); ax_goal.set_ylim(0, 55); ax_goal.axis("off")
-    ax_goal.set_title("SHOT DIRECTION AREA", color=theme["text"], fontsize=11, weight="bold", pad=8)
-    # draw goal frame + net grid
-    frame_col = theme.get("pitch_lines", "#E6E6E6")
-    ax_goal.plot([12, 88], [8, 8], color=frame_col, lw=2)
-    ax_goal.plot([12, 12], [8, 48], color=frame_col, lw=2)
-    ax_goal.plot([88, 88], [8, 48], color=frame_col, lw=2)
-    ax_goal.plot([12, 88], [48, 48], color=frame_col, lw=2)
-    for xx in np.linspace(14, 86, 18):
-        ax_goal.plot([xx, xx], [8, 48], color=frame_col, lw=0.35, alpha=0.25)
-    for yy in np.linspace(10, 46, 10):
-        ax_goal.plot([12, 88], [yy, yy], color=frame_col, lw=0.35, alpha=0.25)
-
-    y_low, y_high = _goal_mouth_bounds(pitch_mode, pitch_width)
-    def map_goal_y(yv):
-        if pd.isna(yv): return np.nan
-        yy = max(y_low - 8, min(y_high + 8, float(yv)))
-        return 12 + ((yy - (y_low - 8)) / ((y_high + 8) - (y_low - 8) + 1e-9)) * 76
-
-    for outcome in SHOT_ORDER:
-        dd = s[s["outcome"].astype(str).str.lower() == outcome].copy()
-        if dd.empty: continue
-        mk = shot_markers.get(outcome, "o")
-        if _is_no_marker(mk): continue
-        gx = dd["y2"].map(map_goal_y) if "y2" in dd.columns else pd.Series(np.nan, index=dd.index)
-        # If no end location, place using start y as approximate direction.
-        gx = gx.fillna(dd["y"].map(map_goal_y))
-        gy = np.where(outcome.isin if False else False, 20, 20)
-        # goals/on target inside goal, wide/blocked outside or lower area
-        ydraw = 22 if outcome in ["goal", "ontarget"] else (50 if outcome == "off target" else 16)
-        ax_goal.scatter(gx, np.full(len(dd), ydraw), s=65, marker=mk,
-                        color=shot_colors.get(outcome, theme.get("muted", "#A0A7B4")),
-                        edgecolors=theme.get("bg", "#000"), linewidth=0.8, zorder=5)
-
-    if show_legend:
-        handles = []
-        names = {"goal":"Goal", "ontarget":"Shot on target", "off target":"Wide shot", "blocked":"Blocked"}
-        for outcome in SHOT_ORDER:
-            if outcome in shot_colors:
-                mk = shot_markers.get(outcome, "o")
-                if not _is_no_marker(mk):
-                    handles.append(Line2D([0],[0], marker=mk, color="none", markerfacecolor=shot_colors[outcome],
-                                          markeredgecolor=theme.get("bg", "#000"), markersize=7, label=names.get(outcome, outcome)))
-        leg = ax_goal.legend(handles=handles, loc="lower left", bbox_to_anchor=(0.0, -0.10), ncol=4, frameon=False, fontsize=8)
-        for t in leg.get_texts():
-            t.set_color(theme.get("text", "white"))
-    return fig
-
 # ----------------------------
 # Report builder
 # ----------------------------
@@ -1506,6 +1331,8 @@ def build_report_from_prepared_df(
     touch_dot_size: int = 220,
     touch_alpha: float = 0.95,
     touch_marker: str = "o",
+    vertical_pitch: bool = False,
+    show_legends: bool = True,
     **kwargs,
 ):
     pass_view = kwargs.get("pass_view", "All passes")
@@ -1534,7 +1361,7 @@ def build_report_from_prepared_df(
         figs.append(("outcome_bar", outcome_bar(df2, bar_colors=bar_colors, theme_name=theme_name)))
 
     if "Start Heatmap" in charts_to_include:
-        figs.append(("start_heatmap", start_location_heatmap(df2, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name)))
+        figs.append(("start_heatmap", start_location_heatmap(df2, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name, vertical_pitch=vertical_pitch)))
 
     if "Touch Map (Scatter)" in charts_to_include:
         figs.append(("touch_map", touch_map(
@@ -1547,6 +1374,7 @@ def build_report_from_prepared_df(
             dot_size=touch_dot_size,
             alpha=touch_alpha,
             marker=touch_marker,
+            vertical_pitch=vertical_pitch,
         )))
 
     if "Pass Map" in charts_to_include:
@@ -1564,6 +1392,7 @@ def build_report_from_prepared_df(
             pass_view=pass_view,
             result_scope=pass_result_scope,
             min_packing=pass_min_packing,
+            vertical_pitch=vertical_pitch,
         )))
 
     if "Shot Map" in charts_to_include:
@@ -1574,7 +1403,8 @@ def build_report_from_prepared_df(
             pitch_mode=pitch_mode,
             pitch_width=pitch_width,
             show_xg=True,
-            theme_name=theme_name
+            theme_name=theme_name,
+            vertical_pitch=vertical_pitch
         )))
 
     if "Defensive Actions Map" in charts_to_include:
@@ -1585,6 +1415,7 @@ def build_report_from_prepared_df(
             pitch_mode=pitch_mode,
             pitch_width=pitch_width,
             theme_name=theme_name,
+            vertical_pitch=vertical_pitch,
         )))
 
     pngs = []
@@ -1627,6 +1458,7 @@ def pizza_chart(
     center_image=None,
     center_img_scale: float = 0.22,
     footer_text: str = "",
+    theme_name: str = "The Athletic Dark",
 ):
     dfp = df_pizza.copy()
     dfp.columns = [c.strip().lower() for c in dfp.columns]
@@ -1798,7 +1630,7 @@ def shot_detail_card(
     ax_goal.plot([75, 75], [5, 22], lw=2, color=theme["goal"])
     ax_goal.plot([25, 75], [22, 22], lw=2, color=theme["goal"])
 
-    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
     pitch.draw(ax=ax_pitch)
     ax_pitch.set_facecolor(theme["pitch"])
     ax_pitch.set_xlim(-2, 102)
@@ -1860,6 +1692,7 @@ def defensive_regains_map(
     pitch_mode: str = "rect",
     pitch_width: float = 64.0,
     theme_name: str = "The Athletic Dark",
+    vertical_pitch: bool = False,
     marker_size: int = 110,
     zone_alpha: float = 0.78,
     show_zone_values: bool = False,
@@ -1885,7 +1718,7 @@ def defensive_regains_map(
             mask = mask | _yes_only(d[c])
         d = d[mask].copy()
 
-    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
 
     fig, ax = plt.subplots(figsize=(8.6, 11.4))
     fig.patch.set_facecolor(theme["bg"])
@@ -2024,147 +1857,186 @@ def defensive_regains_map(
         )
 
     return fig
+
 # =========================================================
-# UPDATED REPORT BUILDER (overrides the earlier one)
-# Adds: required columns footer, actions heatmap, shot spot + direction,
-# chart layout control, and legend visibility control.
+# EXTRA CHARTS / UTILITIES ADDED FOR SCOUTING WORKFLOW
 # =========================================================
-def build_report_from_prepared_df(
-    df_prepared: pd.DataFrame,
-    out_dir: str,
-    title: str = "Match Report",
-    subtitle: str = "",
-    header_image=None,
-    header_img_side: str = "left",
-    header_img_width_frac: float = 0.10,
-    title_align: str = "center",
-    subtitle_align: str = "center",
-    title_fontsize: int = 16,
-    subtitle_fontsize: int = 11,
-    title_color: Optional[str] = None,
-    subtitle_color: Optional[str] = None,
-    theme_name: str = "The Athletic Dark",
-    pitch_mode: str = "rect",
-    pitch_width: float = 64.0,
-    pass_colors: Optional[dict] = None,
-    pass_markers: Optional[dict] = None,
-    shot_colors: Optional[dict] = None,
-    shot_markers: Optional[dict] = None,
-    def_colors: Optional[dict] = None,
-    def_markers: Optional[dict] = None,
-    bar_colors: Optional[dict] = None,
-    charts_to_include: Optional[List[str]] = None,
-    touch_dot_color: str = "#34D5FF",
-    touch_dot_edge: str = "#0B0F14",
-    touch_dot_size: int = 220,
-    touch_alpha: float = 0.95,
-    touch_marker: str = "o",
-    **kwargs,
-):
-    pass_view = kwargs.get("pass_view", "All passes")
-    pass_result_scope = kwargs.get("pass_result_scope", "Attempts (all)")
-    pass_min_packing = int(kwargs.get("pass_min_packing", 1) or 1)
-    legend_items = kwargs.get("legend_items", ["Outcome", "Heatmaps", "Passes", "Shots", "Touches", "Defensive Actions"])
-    show_column_footer = bool(kwargs.get("show_column_footer", True))
-    chart_layout = (kwargs.get("chart_layout", "horizontal") or "horizontal").lower()
+def chart_required_columns_note(fig, columns: List[str], theme_name: str = "The Athletic Dark"):
+    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+    cols = ", ".join(columns or [])
+    fig.text(0.5, 0.012, f"Required columns: {cols}", ha="center", va="bottom",
+             color=theme.get("muted", "#A0A7B4"), fontsize=8)
+    return fig
 
-    os.makedirs(out_dir, exist_ok=True)
-    pdf_path = os.path.join(out_dir, "report.pdf")
-    df2 = df_prepared.copy()
-    charts_to_include = charts_to_include or [
-        "Outcome Bar", "Start Heatmap", "Touch Map (Scatter)", "Pass Map",
-        "Shot Map", "Shot Spot + Direction", "Defensive Actions Map", "Actions Heatmap"
-    ]
 
-    figs = []
-    def _safe_add(name, make_func):
-        try:
-            fig = make_func()
-            if chart_layout == "vertical":
-                try:
-                    fig.set_size_inches(8.5, 11.0, forward=True)
-                except Exception:
-                    pass
-            if show_column_footer:
-                add_required_columns_footer(fig, name, theme_name=theme_name)
-            figs.append((name.lower().replace(" ", "_").replace("+", "plus").replace("(", "").replace(")", ""), name, fig))
-        except Exception as e:
-            # Never crash the app because one optional chart failed.
-            theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
-            fig, ax = plt.subplots(figsize=(8, 4.8))
-            fig.patch.set_facecolor(theme["bg"]); ax.set_facecolor(theme.get("panel", theme["bg"]))
-            ax.axis("off")
-            ax.text(0.5, 0.55, name, ha="center", va="center", color=theme["text"], fontsize=16, weight="bold")
-            ax.text(0.5, 0.42, f"Chart skipped safely: {e}", ha="center", va="center", color=theme.get("muted", "#A0A7B4"), fontsize=10, wrap=True)
-            if show_column_footer:
-                add_required_columns_footer(fig, name, theme_name=theme_name)
-            figs.append((name.lower().replace(" ", "_"), name, fig))
+def _event_df(df: pd.DataFrame, event_type: str = "all") -> pd.DataFrame:
+    d = df.copy()
+    e = (event_type or "all").strip().lower()
+    if e != "all" and "event_type" in d.columns:
+        d = d[d["event_type"].astype(str).str.lower() == e].copy()
+    for c in ["x", "y", "x2", "y2"]:
+        if c in d.columns:
+            d[c] = pd.to_numeric(d[c], errors="coerce")
+    return d
 
-    if "Outcome Bar" in charts_to_include:
-        _safe_add("Outcome Bar", lambda: outcome_bar(df2, bar_colors=bar_colors if "Outcome" in legend_items else {}, theme_name=theme_name))
 
-    if "Start Heatmap" in charts_to_include:
-        _safe_add("Start Heatmap", lambda: start_location_heatmap(df2, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name))
+def zone_heatmap(df: pd.DataFrame, pitch_mode: str = "rect", pitch_width: float = 64.0,
+                 theme_name: str = "The Athletic Dark", event_type: str = "all",
+                 title: str = "Zone Heatmap", vertical_pitch: bool = False,
+                 bins_x: int = 5, bins_y: int = 4, show_values: bool = True):
+    from matplotlib.patches import Rectangle
+    from matplotlib.colors import LinearSegmentedColormap, Normalize
+    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+    d = _event_df(df, event_type).dropna(subset=["x", "y"]).copy()
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
+    fig, ax = plt.subplots(figsize=(8.6, 11.4) if vertical_pitch else (10.5, 6.4))
+    fig.patch.set_facecolor(theme["bg"])
+    _draw_pitch(ax, pitch, theme)
+    y_max = pitch_width if pitch_mode == "rect" else 100.0
+    x_edges = np.linspace(0, 100, bins_x + 1)
+    y_edges = np.linspace(0, y_max, bins_y + 1)
+    counts, _, _ = np.histogram2d(d["x"], d["y"], bins=[x_edges, y_edges]) if not d.empty else (np.zeros((bins_x,bins_y)), None, None)
+    counts = counts.T
+    cmap = LinearSegmentedColormap.from_list("actions_heat", [theme.get("pitch", "#1f5f3b"), "#F6C85F", "#C8102E"])
+    norm = Normalize(vmin=0, vmax=max(1.0, float(np.nanmax(counts))))
+    for yi in range(len(y_edges)-1):
+        for xi in range(len(x_edges)-1):
+            val = counts[yi, xi]
+            rect = Rectangle((x_edges[xi], y_edges[yi]), x_edges[xi+1]-x_edges[xi], y_edges[yi+1]-y_edges[yi],
+                             facecolor=cmap(norm(val)), edgecolor=theme.get("pitch_lines", "white"),
+                             linewidth=1.2, alpha=0.72, zorder=1)
+            ax.add_patch(rect)
+            if show_values and val > 0:
+                ax.text((x_edges[xi]+x_edges[xi+1])/2, (y_edges[yi]+y_edges[yi+1])/2, str(int(val)),
+                        ha="center", va="center", color=theme.get("text", "white"), fontsize=11, weight="bold", zorder=5)
+    pitch.draw(ax=ax)
+    ax.set_title(title, color=theme["text"], fontsize=18, weight="bold")
+    ax.set_xlim(-2, 102); ax.set_ylim(-2, y_max+2)
+    handles=[Patch(facecolor="#F6C85F", label="More actions")]
+    _add_legend(ax, handles, theme, loc="upper center")
+    return fig
 
-    if "Touch Map (Scatter)" in charts_to_include:
-        _safe_add("Touch Map (Scatter)", lambda: touch_map(
-            df2, pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name,
-            dot_color=touch_dot_color, edge_color=touch_dot_edge, dot_size=touch_dot_size,
-            alpha=touch_alpha, marker=touch_marker if "Touches" in legend_items else touch_marker,
-        ))
 
-    if "Pass Map" in charts_to_include:
-        all_pass_types = df2.loc[df2["event_type"] == "pass", "outcome"].dropna().unique().tolist() if "event_type" in df2.columns else []
-        pc = {k: v for k, v in (pass_colors or {}).items() if k in all_pass_types}
-        pm = {k: v for k, v in (pass_markers or {}).items() if k in all_pass_types}
-        if "Passes" not in legend_items:
-            pc = {}; pm = {}
-        _safe_add("Pass Map", lambda: pass_map(
-            df2, pass_colors=pc, pass_markers=pm, pitch_mode=pitch_mode, pitch_width=pitch_width,
-            theme_name=theme_name, pass_view=pass_view, result_scope=pass_result_scope,
-            min_packing=pass_min_packing,
-        ))
+def progressive_actions_chart(df: pd.DataFrame, theme_name: str = "The Athletic Dark"):
+    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+    labels = ["Progressive passes", "Into final third", "Into penalty box", "Line-breaking"]
+    cols = ["progressive_pass", "into_final_third", "into_penalty_box", "line_breaking"]
+    vals = []
+    for c in cols:
+        vals.append(int(_yes_only(df[c]).sum()) if c in df.columns else 0)
+    fig, ax = plt.subplots(figsize=(8,4.5)); _apply_fig_theme(fig, ax, theme)
+    ax.bar(labels, vals, color=theme.get("muted", "#A0A7B4"))
+    ax.set_title("Progressive Actions", color=theme["text"], weight="bold")
+    ax.tick_params(axis="x", rotation=20, colors=theme["muted"]); ax.tick_params(axis="y", colors=theme["muted"])
+    for sp in ax.spines.values(): sp.set_color(theme["lines"])
+    return fig
 
-    if "Shot Map" in charts_to_include:
-        _safe_add("Shot Map", lambda: shot_map(
-            df2, shot_colors=shot_colors if "Shots" in legend_items else {},
-            shot_markers=shot_markers if "Shots" in legend_items else {},
-            pitch_mode=pitch_mode, pitch_width=pitch_width, show_xg=True, theme_name=theme_name,
-        ))
 
-    if "Shot Spot + Direction" in charts_to_include:
-        _safe_add("Shot Spot + Direction", lambda: shot_spot_direction_chart(
-            df2, shot_colors=shot_colors or {}, shot_markers=shot_markers or {},
-            pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name,
-            show_legend=("Shots" in legend_items),
-        ))
+def passing_direction_chart(df: pd.DataFrame, theme_name: str = "The Athletic Dark"):
+    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+    d = df[df.get("event_type", "") == "pass"].copy() if "event_type" in df.columns else df.copy()
+    for c in ["x", "y", "x2", "y2"]: d[c] = pd.to_numeric(d.get(c), errors="coerce")
+    d = d.dropna(subset=["x", "y", "x2", "y2"])
+    dx = d["x2"] - d["x"]; dy = d["y2"] - d["y"]
+    forward = int((dx > 5).sum()); backward = int((dx < -5).sum()); lateral = int((dx.abs() <= 5).sum())
+    fig, ax = plt.subplots(figsize=(7,4)); _apply_fig_theme(fig, ax, theme)
+    labels=["Forward", "Lateral", "Backward"]; vals=[forward, lateral, backward]
+    ax.bar(labels, vals, color=theme.get("muted", "#A0A7B4"))
+    ax.set_title("Passing Direction", color=theme["text"], weight="bold")
+    ax.tick_params(axis="x", colors=theme["muted"]); ax.tick_params(axis="y", colors=theme["muted"])
+    for sp in ax.spines.values(): sp.set_color(theme["lines"])
+    return fig
 
-    if "Defensive Actions Map" in charts_to_include:
-        _safe_add("Defensive Actions Map", lambda: defensive_actions_map(
-            df2, def_colors=def_colors if "Defensive Actions" in legend_items else {},
-            def_markers=def_markers if "Defensive Actions" in legend_items else {},
-            pitch_mode=pitch_mode, pitch_width=pitch_width, theme_name=theme_name,
-        ))
 
-    if "Actions Heatmap" in charts_to_include:
-        _safe_add("Actions Heatmap", lambda: actions_heatmap(
-            df2, title="Actions Heatmap", pitch_mode=pitch_mode, pitch_width=pitch_width,
-            theme_name=theme_name, bins_x=6, bins_y=4, show_values=True,
-        ))
+def carry_map(df: pd.DataFrame, pitch_mode: str = "rect", pitch_width: float = 64.0, theme_name: str = "The Athletic Dark", vertical_pitch: bool = False):
+    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+    d = _event_df(df, "carry")
+    if d.empty: d = _event_df(df, "all")
+    d = d.dropna(subset=["x", "y", "x2", "y2"])
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
+    fig, ax = plt.subplots(figsize=(8.6, 11.4) if vertical_pitch else (10.5, 6.4)); fig.patch.set_facecolor(theme["bg"]); _draw_pitch(ax, pitch, theme)
+    if not d.empty: pitch.arrows(d["x"], d["y"], d["x2"], d["y2"], ax=ax, color=theme.get("text", "white"), width=2, alpha=0.85)
+    ax.set_title("Carry Map", color=theme["text"], weight="bold"); ax.set_xlim(-2,102); ax.set_ylim(-2,(pitch_width if pitch_mode=="rect" else 100)+2)
+    _add_legend(ax, [Line2D([0],[0], color=theme.get("text","white"), lw=2, label="Carries")], theme, loc="upper center")
+    return fig
 
-    pngs = []
-    with PdfPages(pdf_path) as pdf:
-        for file_stem, chart_name, fig in figs:
-            add_report_header(
-                fig, title=title, subtitle=subtitle, header_image=header_image,
-                img_side=header_img_side, img_width_frac=header_img_width_frac,
-                theme_name=theme_name, title_align=title_align, subtitle_align=subtitle_align,
-                title_fontsize=title_fontsize, subtitle_fontsize=subtitle_fontsize,
-                title_color=title_color, subtitle_color=subtitle_color,
-            )
-            png_path = os.path.join(out_dir, f"{file_stem}.png")
-            fig.savefig(png_path, dpi=220, bbox_inches="tight", pad_inches=0.25)
-            pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
-            plt.close(fig)
-            pngs.append(png_path)
-    return pdf_path, pngs
+
+def receive_map(df: pd.DataFrame, pitch_mode: str = "rect", pitch_width: float = 64.0, theme_name: str = "The Athletic Dark", vertical_pitch: bool = False):
+    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+    d = _event_df(df, "receive")
+    if d.empty and "outcome" in df.columns:
+        d = df[df["outcome"].astype(str).str.lower().isin(["receive", "received", "reception", "touch"])].copy()
+    if d.empty: d = _event_df(df, "all")
+    d = d.dropna(subset=["x", "y"])
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
+    fig, ax = plt.subplots(figsize=(8.6, 11.4) if vertical_pitch else (10.5, 6.4)); fig.patch.set_facecolor(theme["bg"]); _draw_pitch(ax, pitch, theme)
+    if not d.empty: pitch.scatter(d["x"], d["y"], ax=ax, s=120, color=theme.get("text", "white"), edgecolors=theme.get("lines", "#333"), linewidth=1.2)
+    ax.set_title("Receive Map", color=theme["text"], weight="bold"); ax.set_xlim(-2,102); ax.set_ylim(-2,(pitch_width if pitch_mode=="rect" else 100)+2)
+    _add_legend(ax, [Line2D([0],[0], marker="o", color="none", markerfacecolor=theme.get("text","white"), markersize=8, label="Receives")], theme, loc="upper center")
+    return fig
+
+
+def player_comparison_dashboard(df: pd.DataFrame, player_col: str, player_1: str, player_2: str, metrics: List[str], theme_name: str = "The Athletic Dark", title: str = "Player Comparison"):
+    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+    r1 = df[df[player_col].astype(str) == str(player_1)].iloc[0]
+    r2 = df[df[player_col].astype(str) == str(player_2)].iloc[0]
+    vals1 = [pd.to_numeric(r1.get(m), errors="coerce") for m in metrics]
+    vals2 = [pd.to_numeric(r2.get(m), errors="coerce") for m in metrics]
+    x = np.arange(len(metrics)); w=0.36
+    fig, ax = plt.subplots(figsize=(max(9, len(metrics)*1.1),5)); _apply_fig_theme(fig, ax, theme)
+    ax.bar(x-w/2, vals1, w, label=player_1); ax.bar(x+w/2, vals2, w, label=player_2)
+    ax.set_xticks(x); ax.set_xticklabels(metrics, rotation=25, ha="right", color=theme["muted"])
+    ax.set_title(title, color=theme["text"], weight="bold"); ax.tick_params(axis="y", colors=theme["muted"])
+    _add_legend(ax, ax.get_legend_handles_labels()[0], theme, loc="upper center")
+    return fig
+
+
+def shot_spot_and_direction_map(df: pd.DataFrame, title: str = "Shot Spot + Direction Map", shot_colors: Optional[dict] = None,
+                                shot_markers: Optional[dict] = None, pitch_mode: str = "rect", pitch_width: float = 64.0,
+                                theme_name: str = "The Athletic Dark", plot_all: bool = True, shot_index: Optional[int] = None,
+                                vertical_pitch: bool = False):
+    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+    shot_colors = shot_colors or {}
+    shot_markers = shot_markers or {}
+    s = df[df.get("event_type", "") == "shot"].copy().reset_index(drop=True) if "event_type" in df.columns else df.copy()
+    if not plot_all and shot_index is not None and len(s):
+        s = s.iloc[[int(shot_index)]].copy()
+    for c in ["x", "y", "x2", "y2"]: s[c] = pd.to_numeric(s.get(c), errors="coerce")
+    s = s.dropna(subset=["x", "y"])
+    fig = plt.figure(figsize=(8.2, 9.4) if vertical_pitch else (9.2, 7.2), facecolor=theme["bg"])
+    gs = gridspec.GridSpec(2, 1, height_ratios=[1.15, 0.85], hspace=0.32)
+    ax_pitch = fig.add_subplot(gs[0]); ax_goal = fig.add_subplot(gs[1])
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
+    _draw_pitch(ax_pitch, pitch, theme)
+    y_max = pitch_width if pitch_mode == "rect" else 100.0
+    for outc in SHOT_ORDER:
+        d = s[s["outcome"].astype(str).str.lower()==outc]
+        if d.empty: continue
+        mk = shot_markers.get(outc, "o"); col = shot_colors.get(outc, theme.get("text", "white"))
+        if not _is_no_marker(mk): pitch.scatter(d["x"], d["y"], ax=ax_pitch, s=95, marker=mk, color=col, edgecolors="black", linewidth=1.0, zorder=5)
+    ax_pitch.set_title("SHOT SPOT", color=theme["text"], fontsize=10, weight="bold")
+    ax_pitch.set_xlim(-2,102); ax_pitch.set_ylim(-2,y_max+2)
+    ax_goal.set_facecolor(theme.get("panel", "white")); ax_goal.set_xlim(0, 100); ax_goal.set_ylim(0, 45); ax_goal.axis("off")
+    for xx in np.linspace(0,100,26): ax_goal.plot([xx,xx],[6,42], color=theme.get("lines","#ddd"), alpha=.18, lw=.6)
+    for yy in np.linspace(6,42,12): ax_goal.plot([0,100],[yy,yy], color=theme.get("lines","#ddd"), alpha=.18, lw=.6)
+    ax_goal.plot([8,92],[6,6], color=theme.get("goal","#888"), lw=2)
+    ax_goal.plot([8,8],[6,42], color=theme.get("goal","#888"), lw=2)
+    ax_goal.plot([92,92],[6,42], color=theme.get("goal","#888"), lw=2)
+    ax_goal.plot([8,92],[42,42], color=theme.get("goal","#888"), lw=2)
+    y_low, y_high = _goal_mouth_bounds(pitch_mode, pitch_width)
+    def gx(yv):
+        yv = max(y_low-4, min(y_high+4, float(yv)))
+        return 8 + ((yv-(y_low-4))/((y_high+4)-(y_low-4)+1e-9))*84
+    for _, r in s.iterrows():
+        outc=str(r.get("outcome","")).lower(); mk=shot_markers.get(outc,"o"); col=shot_colors.get(outc, theme.get("text","white"))
+        y2 = r.get("y2") if pd.notna(r.get("y2")) else r.get("y")
+        yy = 24 if outc in ["goal", "ontarget"] else (44 if float(r.get("y",0)) > y_max/2 else 2)
+        if not _is_no_marker(mk): ax_goal.scatter([gx(y2)], [yy], s=70, marker=mk, color=col, edgecolors="black", linewidth=0.8, zorder=5)
+    ax_goal.set_title("SHOT DIRECTION AREA", color=theme["text"], fontsize=10, weight="bold")
+    handles=[]
+    for outc in SHOT_ORDER:
+        mk=shot_markers.get(outc,"o"); col=shot_colors.get(outc, theme.get("text","white"))
+        if not _is_no_marker(mk): handles.append(Line2D([0],[0], marker=mk, color="none", markerfacecolor=col, markeredgecolor="black", markersize=7, label=("On target" if outc=="ontarget" else outc.title())))
+    _add_legend(ax_goal, handles, theme, loc="lower center")
+    fig.suptitle(title, color=theme["text"], fontsize=14, weight="bold", y=.98)
+    return fig
