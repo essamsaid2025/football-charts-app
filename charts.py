@@ -1467,8 +1467,8 @@ def pizza_chart(
         raise ValueError("Pizza input لازم يحتوي أعمدة: metric, value, percentile")
 
     params = dfp["metric"].astype(str).tolist()
-    values = pd.to_numeric(dfp["percentile"], errors="coerce").fillna(0).tolist()
-    value_text = dfp["value"].astype(str).tolist()
+    values = pd.to_numeric(dfp["percentile"], errors="coerce").fillna(0).clip(0,100).round(1).tolist()
+    value_text = pd.to_numeric(dfp["value"], errors="coerce").round(1).astype(str).tolist()
 
     if slice_colors is None or len(slice_colors) != len(values):
         slice_colors = ["#1f77b4"] * len(values)
@@ -2085,6 +2085,15 @@ def percentile_rank(series: pd.Series, value: float) -> float:
     return float((s < float(value)).mean() * 100.0)
 
 
+def _fmt_one_decimal(v):
+    try:
+        if pd.isna(v):
+            return 0.0
+        return round(float(v), 1)
+    except Exception:
+        return 0.0
+
+
 def build_player_metric_table(df: pd.DataFrame, player_col: str, player_name: str, metrics: List[str], value_mode: str = 'Percentile') -> pd.DataFrame:
     d = df.copy()
     for m in metrics:
@@ -2097,9 +2106,14 @@ def build_player_metric_table(df: pd.DataFrame, player_col: str, player_name: st
     for m in metrics:
         val = pd.to_numeric(r[m], errors='coerce')
         pct = percentile_rank(d[m], val)
-        rows.append({'metric': str(m), 'value': val, 'percentile': 0 if pd.isna(pct) else pct})
+        rows.append({
+            'metric': str(m),
+            'value': _fmt_one_decimal(val),
+            'percentile': _fmt_one_decimal(0 if pd.isna(pct) else pct),
+        })
     out = pd.DataFrame(rows)
     out['plot_value'] = out['percentile'] if str(value_mode).lower().startswith('percent') else out['value']
+    out['plot_value'] = pd.to_numeric(out['plot_value'], errors='coerce').fillna(0).round(1)
     return out
 
 
@@ -2183,8 +2197,8 @@ def mpl_pizza_dark(metric_table: pd.DataFrame, title: str = '', subtitle: str = 
                    center_image=None, center_img_scale: float = 0.14, footer_text: str = '',
                    bg_color: str = '#222222'):
     d = metric_table.copy()
-    params = d['metric'].astype(str).str.replace(' ', '\n').tolist()
-    values = pd.to_numeric(d['percentile'], errors='coerce').fillna(0).clip(0,100).tolist()
+    params = [str(x).replace(' per 90', '\nper 90').replace(' won %', '\nwon %').replace(' ', '\n') for x in d['metric'].astype(str).tolist()]
+    values = pd.to_numeric(d['percentile'], errors='coerce').fillna(0).clip(0,100).round(1).tolist()
     if categories is None or len(categories) != len(values):
         categories = ['Attacking'] * len(values)
     slice_colors = add_metric_category_colors(categories, attacking_color, possession_color, defending_color, '#777777')
@@ -2194,8 +2208,8 @@ def mpl_pizza_dark(metric_table: pd.DataFrame, title: str = '', subtitle: str = 
     fig, ax = baker.make_pizza(values, figsize=(8,8.5), color_blank_space='same', slice_colors=slice_colors,
                                value_colors=text_colors, value_bck_colors=slice_colors, blank_alpha=0.4,
                                kwargs_slices=dict(edgecolor='#000000', zorder=2, linewidth=1),
-                               kwargs_params=dict(color='#F2F2F2', fontsize=10, va='center'),
-                               kwargs_values=dict(color='#F2F2F2', fontsize=10, zorder=3,
+                               kwargs_params=dict(color='#F2F2F2', fontsize=9, va='center'),
+                               kwargs_values=dict(fontsize=9, zorder=3,
                                                   bbox=dict(edgecolor='#000000', facecolor='cornflowerblue', boxstyle='round,pad=0.2', lw=1)))
     fig.patch.set_facecolor(bg_color)
     fig.text(0.515, 0.975, title, size=16, ha='center', color='#F2F2F2', weight='bold')
@@ -2223,8 +2237,8 @@ def athletic_pizza(metric_table: pd.DataFrame, title: str = '', subtitle: str = 
                    attacking_color: str = '#4B78B9', possession_color: str = '#F0C987', defending_color: str = '#9E374B',
                    bg_color: str = '#F4F4EF', text_color: str = '#1B1B1B'):
     d = metric_table.copy()
-    params = d['metric'].astype(str).str.replace(' ', '\n').tolist()
-    values = pd.to_numeric(d['percentile'], errors='coerce').fillna(0).clip(0,100).tolist()
+    params = [str(x).replace(' per 90', '\nper 90').replace(' won %', '\nwon %').replace(' ', '\n') for x in d['metric'].astype(str).tolist()]
+    values = pd.to_numeric(d['percentile'], errors='coerce').fillna(0).clip(0,100).round(1).tolist()
     if categories is None or len(categories) != len(values): categories = ['Attacking'] * len(values)
     slice_colors = add_metric_category_colors(categories, attacking_color, possession_color, defending_color, '#A9B7B7')
     baker = PyPizza(params=params, background_color=bg_color, straight_line_color=text_color, straight_line_lw=1.5,
@@ -2232,8 +2246,9 @@ def athletic_pizza(metric_table: pd.DataFrame, title: str = '', subtitle: str = 
                     other_circle_lw=1, inner_circle_size=12)
     fig, ax = baker.make_pizza(values, figsize=(9,10), slice_colors=slice_colors, blank_alpha=.18,
                                kwargs_slices=dict(edgecolor=text_color, linewidth=1.1),
-                               kwargs_params=dict(color=text_color, fontsize=12, fontweight='bold'),
-                               kwargs_values=dict(color='white', fontsize=14, fontweight='bold'))
+                               kwargs_params=dict(color=text_color, fontsize=10, fontweight='bold'),
+                               kwargs_values=dict(color=text_color, fontsize=10, fontweight='bold',
+                                                  bbox=dict(edgecolor=text_color, facecolor=bg_color, boxstyle='round,pad=0.18', linewidth=.8)))
     fig.patch.set_facecolor(bg_color)
     fig.text(0.06, .965, title, ha='left', va='top', color=text_color, fontsize=26, weight='bold', family='serif')
     fig.text(0.06, .91, subtitle, ha='left', va='top', color='#8F8F8F', fontsize=15, weight='bold', family='serif')
