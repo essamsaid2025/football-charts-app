@@ -14,6 +14,20 @@ from matplotlib.patches import Patch
 from mplsoccer import Pitch, VerticalPitch, PyPizza
 
 
+# ----------------------------
+# Number formatting helper
+# ----------------------------
+def format_value(v, decimals: int = 1, strip_zero: bool = False) -> str:
+    """Return clean chart labels such as 84.3 instead of long decimals."""
+    try:
+        out = f"{float(v):.{decimals}f}"
+        if strip_zero:
+            out = out.rstrip("0").rstrip(".")
+        return out
+    except Exception:
+        return str(v)
+
+
 # ✅ Helper: YES only (NO/empty = False)
 def _yes_only(s: pd.Series) -> pd.Series:
     if s is None:
@@ -1467,8 +1481,8 @@ def pizza_chart(
         raise ValueError("Pizza input لازم يحتوي أعمدة: metric, value, percentile")
 
     params = dfp["metric"].astype(str).tolist()
-    values = pd.to_numeric(dfp["percentile"], errors="coerce").fillna(0).clip(0,100).round(1).tolist()
-    value_text = pd.to_numeric(dfp["value"], errors="coerce").round(1).astype(str).tolist()
+    values = pd.to_numeric(dfp["percentile"], errors="coerce").fillna(0).round(1).tolist()
+    value_text = pd.to_numeric(dfp["value"], errors="coerce").map(lambda x: format_value(x, 1)).tolist()
 
     if slice_colors is None or len(slice_colors) != len(values):
         slice_colors = ["#1f77b4"] * len(values)
@@ -2085,15 +2099,6 @@ def percentile_rank(series: pd.Series, value: float) -> float:
     return float((s < float(value)).mean() * 100.0)
 
 
-def _fmt_one_decimal(v):
-    try:
-        if pd.isna(v):
-            return 0.0
-        return round(float(v), 1)
-    except Exception:
-        return 0.0
-
-
 def build_player_metric_table(df: pd.DataFrame, player_col: str, player_name: str, metrics: List[str], value_mode: str = 'Percentile') -> pd.DataFrame:
     d = df.copy()
     for m in metrics:
@@ -2108,12 +2113,12 @@ def build_player_metric_table(df: pd.DataFrame, player_col: str, player_name: st
         pct = percentile_rank(d[m], val)
         rows.append({
             'metric': str(m),
-            'value': _fmt_one_decimal(val),
-            'percentile': _fmt_one_decimal(0 if pd.isna(pct) else pct),
+            'value': np.nan if pd.isna(val) else round(float(val), 1),
+            'percentile': 0.0 if pd.isna(pct) else round(float(pct), 1),
         })
     out = pd.DataFrame(rows)
     out['plot_value'] = out['percentile'] if str(value_mode).lower().startswith('percent') else out['value']
-    out['plot_value'] = pd.to_numeric(out['plot_value'], errors='coerce').fillna(0).round(1)
+    out['plot_value'] = pd.to_numeric(out['plot_value'], errors='coerce').round(1)
     return out
 
 
@@ -2158,13 +2163,13 @@ def generic_bar_chart(metric_table: pd.DataFrame, title: str = 'Bar Chart', valu
         ax.set_xlabel(value_col, color=text_color)
         if show_values:
             for i, v in enumerate(d[value_col]):
-                ax.text(float(v) + max(1, float(d[value_col].max())*0.01), i, f'{v:.1f}', va='center', color=text_color, fontsize=9, weight='bold')
+                ax.text(float(v) + max(1, float(d[value_col].max())*0.01), i, format_value(v, 1), va='center', color=text_color, fontsize=9, weight='bold')
     else:
         ax.bar(d['metric'], d[value_col], color=bar_color)
         ax.tick_params(axis='x', rotation=35)
         if show_values:
             for i, v in enumerate(d[value_col]):
-                ax.text(i, float(v), f'{v:.1f}', ha='center', va='bottom', color=text_color, fontsize=9, weight='bold')
+                ax.text(i, float(v), format_value(v, 1), ha='center', va='bottom', color=text_color, fontsize=9, weight='bold')
     ax.set_title(title, color=text_color, fontsize=18, weight='bold')
     ax.tick_params(colors=text_color)
     for sp in ax.spines.values(): sp.set_color(text_color); sp.set_alpha(.25)
@@ -2184,7 +2189,7 @@ def percentile_bar_chart(metric_table: pd.DataFrame, title: str = 'Percentile Ba
     ax.set_xlim(0, 100)
     ax.axvline(50, color=text_color, alpha=.18, ls='--')
     for i, v in enumerate(d['percentile']):
-        ax.text(min(98, float(v)+1.0), i, f'{v:.0f}', va='center', color=text_color, fontsize=10, weight='bold')
+        ax.text(min(98, float(v)+1.0), i, format_value(v, 1), va='center', color=text_color, fontsize=10, weight='bold')
     ax.set_title(title, color=text_color, fontsize=18, weight='bold')
     ax.set_xlabel('Percentile', color=text_color)
     ax.tick_params(colors=text_color)
@@ -2197,7 +2202,7 @@ def mpl_pizza_dark(metric_table: pd.DataFrame, title: str = '', subtitle: str = 
                    center_image=None, center_img_scale: float = 0.14, footer_text: str = '',
                    bg_color: str = '#222222'):
     d = metric_table.copy()
-    params = [str(x).replace(' per 90', '\nper 90').replace(' won %', '\nwon %').replace(' ', '\n') for x in d['metric'].astype(str).tolist()]
+    params = d['metric'].astype(str).str.replace(' ', '\n').tolist()
     values = pd.to_numeric(d['percentile'], errors='coerce').fillna(0).clip(0,100).round(1).tolist()
     if categories is None or len(categories) != len(values):
         categories = ['Attacking'] * len(values)
@@ -2208,8 +2213,8 @@ def mpl_pizza_dark(metric_table: pd.DataFrame, title: str = '', subtitle: str = 
     fig, ax = baker.make_pizza(values, figsize=(8,8.5), color_blank_space='same', slice_colors=slice_colors,
                                value_colors=text_colors, value_bck_colors=slice_colors, blank_alpha=0.4,
                                kwargs_slices=dict(edgecolor='#000000', zorder=2, linewidth=1),
-                               kwargs_params=dict(color='#F2F2F2', fontsize=9, va='center'),
-                               kwargs_values=dict(fontsize=9, zorder=3,
+                               kwargs_params=dict(color='#F2F2F2', fontsize=10, va='center'),
+                               kwargs_values=dict(color='#F2F2F2', fontsize=10, zorder=3,
                                                   bbox=dict(edgecolor='#000000', facecolor='cornflowerblue', boxstyle='round,pad=0.2', lw=1)))
     fig.patch.set_facecolor(bg_color)
     fig.text(0.515, 0.975, title, size=16, ha='center', color='#F2F2F2', weight='bold')
@@ -2237,7 +2242,7 @@ def athletic_pizza(metric_table: pd.DataFrame, title: str = '', subtitle: str = 
                    attacking_color: str = '#4B78B9', possession_color: str = '#F0C987', defending_color: str = '#9E374B',
                    bg_color: str = '#F4F4EF', text_color: str = '#1B1B1B'):
     d = metric_table.copy()
-    params = [str(x).replace(' per 90', '\nper 90').replace(' won %', '\nwon %').replace(' ', '\n') for x in d['metric'].astype(str).tolist()]
+    params = d['metric'].astype(str).str.replace(' ', '\n').tolist()
     values = pd.to_numeric(d['percentile'], errors='coerce').fillna(0).clip(0,100).round(1).tolist()
     if categories is None or len(categories) != len(values): categories = ['Attacking'] * len(values)
     slice_colors = add_metric_category_colors(categories, attacking_color, possession_color, defending_color, '#A9B7B7')
@@ -2246,9 +2251,8 @@ def athletic_pizza(metric_table: pd.DataFrame, title: str = '', subtitle: str = 
                     other_circle_lw=1, inner_circle_size=12)
     fig, ax = baker.make_pizza(values, figsize=(9,10), slice_colors=slice_colors, blank_alpha=.18,
                                kwargs_slices=dict(edgecolor=text_color, linewidth=1.1),
-                               kwargs_params=dict(color=text_color, fontsize=10, fontweight='bold'),
-                               kwargs_values=dict(color=text_color, fontsize=10, fontweight='bold',
-                                                  bbox=dict(edgecolor=text_color, facecolor=bg_color, boxstyle='round,pad=0.18', linewidth=.8)))
+                               kwargs_params=dict(color=text_color, fontsize=12, fontweight='bold'),
+                               kwargs_values=dict(color='white', fontsize=14, fontweight='bold'))
     fig.patch.set_facecolor(bg_color)
     fig.text(0.06, .965, title, ha='left', va='top', color=text_color, fontsize=26, weight='bold', family='serif')
     fig.text(0.06, .91, subtitle, ha='left', va='top', color='#8F8F8F', fontsize=15, weight='bold', family='serif')
