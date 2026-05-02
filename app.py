@@ -29,16 +29,225 @@ st.set_page_config(page_title='Football Charts Generator', layout='wide', initia
 
 st.markdown('''
 <style>
-.stApp {background:#0b1220;color:#f3f4f6;}
-.block-container {padding-top:1rem; max-width:100%;}
-h1,h2,h3,h4,h5,h6,p,span,div,label {color:#f3f4f6;}
-.app-header{background:linear-gradient(135deg,rgba(56,189,248,.18),rgba(16,185,129,.10));border:1px solid rgba(255,255,255,.08);padding:20px 22px;border-radius:20px;margin-bottom:16px;}
-.app-title{font-size:2rem;font-weight:900;margin:0;line-height:1.1;}
-.app-subtitle{color:#9ca3af;margin-top:8px;font-size:.95rem;}
-.panel{background:rgba(17,24,39,.94);border:1px solid #243041;border-radius:18px;padding:15px;margin-bottom:14px;}
-.preview{background:rgba(17,24,39,.94);border:1px solid #243041;border-radius:18px;padding:16px;min-height:74vh;}
-.small{color:#9ca3af;font-size:.9rem;}
-.stButton>button,.stDownloadButton>button{width:100%;border-radius:12px;font-weight:800;}
+/* ================================
+   OPTA / WYSCOUT DARK UI THEME
+   ================================ */
+:root{
+    --bg:#06101f;
+    --bg2:#0b1220;
+    --sidebar:#070f1d;
+    --panel:#0f1b2d;
+    --panel2:#111827;
+    --border:#25344a;
+    --border2:#334155;
+    --text:#f8fafc;
+    --muted:#94a3b8;
+    --accent:#38bdf8;
+    --accent2:#22c55e;
+    --danger:#ef4444;
+}
+
+/* App background */
+.stApp{
+    background:
+      radial-gradient(circle at top left, rgba(56,189,248,.13), transparent 28%),
+      linear-gradient(180deg, var(--bg) 0%, var(--bg2) 100%) !important;
+    color:var(--text) !important;
+}
+.block-container{
+    padding-top:1rem !important;
+    padding-left:1.4rem !important;
+    padding-right:1.4rem !important;
+    max-width:100% !important;
+}
+
+/* Force global text colors */
+h1,h2,h3,h4,h5,h6,p,span,div,label,small{
+    color:var(--text) !important;
+}
+
+/* Header */
+.app-header{
+    background:linear-gradient(135deg,rgba(56,189,248,.18),rgba(34,197,94,.10));
+    border:1px solid rgba(148,163,184,.20);
+    padding:22px 24px;
+    border-radius:22px;
+    margin-bottom:18px;
+    box-shadow:0 18px 45px rgba(0,0,0,.24);
+}
+.app-title{
+    font-size:2.05rem;
+    font-weight:950;
+    margin:0;
+    line-height:1.08;
+    letter-spacing:-.03em;
+}
+.app-subtitle{
+    color:var(--muted) !important;
+    margin-top:8px;
+    font-size:.98rem;
+}
+
+/* Sidebar */
+section[data-testid="stSidebar"]{
+    background:linear-gradient(180deg,#050b16 0%,#081426 100%) !important;
+    border-right:1px solid var(--border) !important;
+}
+section[data-testid="stSidebar"] > div{
+    background:transparent !important;
+}
+section[data-testid="stSidebar"] *{
+    color:var(--text) !important;
+}
+section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] .stMarkdown,
+section[data-testid="stSidebar"] .stCaptionContainer{
+    color:var(--text) !important;
+    opacity:1 !important;
+}
+
+/* Cards / panels */
+.panel{
+    background:linear-gradient(180deg,rgba(15,27,45,.98),rgba(9,18,32,.98)) !important;
+    border:1px solid var(--border) !important;
+    border-radius:18px !important;
+    padding:16px !important;
+    margin-bottom:14px !important;
+    box-shadow:0 12px 32px rgba(0,0,0,.22) !important;
+}
+.preview{
+    background:linear-gradient(180deg,rgba(15,27,45,.96),rgba(9,18,32,.96)) !important;
+    border:1px solid var(--border) !important;
+    border-radius:20px !important;
+    padding:18px !important;
+    min-height:74vh !important;
+    box-shadow:0 12px 32px rgba(0,0,0,.22) !important;
+}
+.small{color:var(--muted) !important;font-size:.9rem;}
+
+/* Inputs */
+.stTextInput input,
+.stNumberInput input,
+.stTextArea textarea,
+section[data-testid="stSidebar"] input,
+section[data-testid="stSidebar"] textarea{
+    background:#0b1728 !important;
+    color:var(--text) !important;
+    border:1px solid var(--border2) !important;
+    border-radius:12px !important;
+}
+.stTextInput input:focus,
+.stNumberInput input:focus,
+.stTextArea textarea:focus{
+    border-color:var(--accent) !important;
+    box-shadow:0 0 0 1px rgba(56,189,248,.45) !important;
+}
+
+/* Select boxes */
+div[data-baseweb="select"] > div{
+    background:#0b1728 !important;
+    border:1px solid var(--border2) !important;
+    border-radius:12px !important;
+    color:var(--text) !important;
+}
+div[data-baseweb="select"] span,
+div[data-baseweb="select"] div{
+    color:var(--text) !important;
+}
+ul[role="listbox"], div[role="listbox"]{
+    background:#0b1728 !important;
+    color:var(--text) !important;
+}
+
+/* Radio / checkbox */
+.stRadio label,
+.stCheckbox label{
+    color:var(--text) !important;
+    opacity:1 !important;
+}
+.stRadio div[role="radiogroup"] label > div:first-child,
+.stCheckbox label > div:first-child{
+    border-color:#64748b !important;
+}
+
+/* File uploader */
+div[data-testid="stFileUploader"] section{
+    background:#0b1728 !important;
+    border:1px dashed #3b82f6 !important;
+    border-radius:16px !important;
+}
+div[data-testid="stFileUploader"] section *{
+    color:var(--text) !important;
+}
+div[data-testid="stFileUploader"] button{
+    background:#111827 !important;
+    color:var(--text) !important;
+    border:1px solid var(--border2) !important;
+    border-radius:12px !important;
+}
+
+/* Buttons */
+.stButton > button{
+    width:100% !important;
+    border-radius:13px !important;
+    border:1px solid rgba(56,189,248,.35) !important;
+    background:linear-gradient(135deg,#0ea5e9,#2563eb) !important;
+    color:white !important;
+    font-weight:900 !important;
+    padding:.65rem 1rem !important;
+    box-shadow:0 10px 26px rgba(37,99,235,.22) !important;
+}
+.stButton > button:hover{
+    border-color:#7dd3fc !important;
+    filter:brightness(1.08) !important;
+}
+.stDownloadButton > button{
+    width:100% !important;
+    border-radius:13px !important;
+    border:1px solid var(--border2) !important;
+    background:#101d31 !important;
+    color:white !important;
+    font-weight:850 !important;
+    padding:.65rem 1rem !important;
+}
+
+/* Alerts */
+div[data-testid="stAlert"]{
+    background:#0f2340 !important;
+    border:1px solid #1e40af !important;
+    border-radius:14px !important;
+    color:var(--text) !important;
+}
+div[data-testid="stAlert"] *{color:var(--text) !important;}
+
+/* Expanders / dataframes */
+.streamlit-expanderHeader{
+    background:#0b1728 !important;
+    color:var(--text) !important;
+    border-radius:12px !important;
+}
+[data-testid="stExpander"]{
+    background:#0b1728 !important;
+    border:1px solid var(--border) !important;
+    border-radius:14px !important;
+}
+[data-testid="stDataFrame"]{
+    border:1px solid var(--border) !important;
+    border-radius:14px !important;
+    overflow:hidden !important;
+}
+
+/* Sliders */
+.stSlider label{color:var(--text) !important;}
+.stSlider [data-baseweb="slider"] div{
+    color:var(--text) !important;
+}
+
+/* Make collapsed sidebar button visible */
+button[kind="header"]{
+    color:var(--text) !important;
+}
 </style>
 ''', unsafe_allow_html=True)
 
