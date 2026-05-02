@@ -1,9 +1,10 @@
 streamlit
 pandas
+numpy
 matplotlib
-mplsoccer
+Pillow
+mplsoccer==1.4.0
 openpyxl
 joblib
 scikit-learn
-numpy
-pillow
+scipy
