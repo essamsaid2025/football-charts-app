@@ -160,6 +160,45 @@ ul[role="listbox"], div[role="listbox"]{
     color:var(--text) !important;
 }
 
+
+/* Multiselect / dropdown menu fix */
+div[data-baseweb="popover"],
+div[data-baseweb="popover"] > div,
+div[data-baseweb="menu"],
+ul[role="listbox"],
+div[role="listbox"]{
+    background:#0b1728 !important;
+    color:#f8fafc !important;
+    border:1px solid #334155 !important;
+    border-radius:12px !important;
+}
+div[data-baseweb="popover"] *,
+div[data-baseweb="menu"] *,
+ul[role="listbox"] *,
+div[role="listbox"] *{
+    color:#f8fafc !important;
+    opacity:1 !important;
+}
+li[role="option"],
+div[role="option"]{
+    background:#0b1728 !important;
+    color:#f8fafc !important;
+}
+li[role="option"]:hover,
+div[role="option"]:hover,
+li[aria-selected="true"],
+div[aria-selected="true"]{
+    background:#1e293b !important;
+    color:#ffffff !important;
+}
+span[data-baseweb="tag"]{
+    background:#ef4444 !important;
+    color:#ffffff !important;
+}
+span[data-baseweb="tag"] *{
+    color:#ffffff !important;
+}
+
 /* Radio / checkbox */
 .stRadio label,
 .stCheckbox label{
@@ -383,7 +422,7 @@ if mode in player_metric_modes:
         df_metrics = clean_metric_df(df_raw)
         meta_cols = [player_col]
         for c in df_metrics.columns:
-            if str(c).strip().lower() in ['team','squad','position','pos','age','minutes','mins','league','season']:
+            if str(c).strip().lower() in ['team','squad','position','pos','age','minutes','mins','league','season','id']:
                 meta_cols.append(c)
         metric_cols = numeric_metric_columns(df_metrics, exclude_cols=meta_cols, min_valid=1)
         if not metric_cols:
@@ -438,7 +477,15 @@ if mode in player_metric_modes:
                 else:
                     # Old simple pizza from previous app
                     simple = table.rename(columns={'metric':'metric','value':'value','percentile':'percentile'})[['metric','value','percentile']]
-                    colors = [attacking_color if p >= 75 else possession_color if p >= 50 else defending_color for p in simple['percentile']]
+                    # Old Simple Pizza scale only:
+                    # Elite = Blue, Above average = Green, Average = Orange, Below average = Red
+                    colors = [
+                        '#1A78CF' if float(p) >= 85 else
+                        '#2ECC71' if float(p) >= 70 else
+                        '#FF9300' if float(p) >= 50 else
+                        '#D70232'
+                        for p in simple['percentile']
+                    ]
                     fig = pizza_chart(simple, title=title or selected_player, subtitle=subtitle, slice_colors=colors, center_image=center_img, center_img_scale=center_scale, show_values_legend=False)
                     files = save_outputs(fig, 'simple_pizza')
             st.image(files[0][1], use_container_width=True)
