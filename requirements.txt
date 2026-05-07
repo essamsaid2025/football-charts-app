@@ -8,4 +8,4 @@ openpyxl
 joblib
 scikit-learn
 scipy
-streamlit-drawable-canvas
+plotly
