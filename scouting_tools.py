@@ -431,3 +431,137 @@ def make_template_csv() -> bytes:
         },
     ]
     return pd.DataFrame(rows).to_csv(index=False).encode("utf-8-sig")
+
+# =========================================================
+# RECOMMENDATION TEXT GENERATOR
+# =========================================================
+def _safe_cell(row, col, default=""):
+    try:
+        if col and col in row.index and pd.notna(row.get(col)):
+            return row.get(col)
+    except Exception:
+        pass
+    return default
+
+
+def _metric_phrase(metrics_pairs, max_items=3):
+    if not metrics_pairs:
+        return "not enough standout metrics"
+    return ", ".join([f"{m} ({p:.0f}th percentile)" for m, p in metrics_pairs[:max_items]])
+
+
+def recommendation_text(
+    df_scored: pd.DataFrame,
+    player_col: str,
+    player_name: str,
+    metrics: List[str],
+    role: str = "Player",
+    team_col: Optional[str] = None,
+    position_col: Optional[str] = None,
+    age_col: Optional[str] = None,
+    minutes_col: Optional[str] = None,
+) -> str:
+    """Generate a scout-style recommendation based on score, percentiles, role and sample size."""
+    row = df_scored[df_scored[player_col].astype(str) == str(player_name)]
+    if row.empty:
+        return "**Recommendation:** Player not found."
+
+    r = row.iloc[0]
+    prof = player_profile(df_scored, player_col, player_name, metrics, top_n=5)
+    score = prof.get("score", np.nan)
+    label = prof.get("label", "Not enough data")
+    strengths = prof.get("strengths", [])
+    weaknesses = prof.get("weaknesses", [])
+
+    team = _safe_cell(r, team_col, "")
+    pos = _safe_cell(r, position_col, role)
+    age = _safe_cell(r, age_col, "")
+    mins = _safe_cell(r, minutes_col, "")
+
+    score_txt = "NA" if pd.isna(score) else f"{float(score):.1f}/100"
+    strength_txt = _metric_phrase(strengths, 3)
+    weakness_txt = _metric_phrase(weaknesses, 3)
+
+    # Context labels
+    age_note = ""
+    try:
+        age_f = float(age)
+        if age_f <= 21:
+            age_note = "He also has a strong age profile, so the upside/potential angle is positive."
+        elif age_f <= 24:
+            age_note = "He is still in a good development window with room to improve."
+        elif age_f >= 30:
+            age_note = "Age should be considered carefully if the target is long-term squad building."
+    except Exception:
+        pass
+
+    sample_note = ""
+    try:
+        mins_f = float(mins)
+        if mins_f < 450:
+            sample_note = "The sample size is low, so this profile should be validated with more minutes/video before making a final decision."
+        elif mins_f < 900:
+            sample_note = "The minutes sample is moderate, so the numbers are useful but still need video confirmation."
+        else:
+            sample_note = "The minutes sample is solid enough to treat the statistical profile with confidence."
+    except Exception:
+        pass
+
+    # Role-specific summary flavour
+    role_l = str(role or pos).lower()
+    if "wing" in role_l:
+        fit_line = "He looks most relevant as a wide player who can impact progression, 1v1 situations and chance creation."
+    elif "striker" in role_l or "forward" in role_l:
+        fit_line = "He should be judged mainly on box presence, shot volume, xG output and link-play value."
+    elif "midfielder" in role_l and "defensive" in role_l:
+        fit_line = "He profiles as a midfield screening option where ball-winning, security and progression are the key checks."
+    elif "midfielder" in role_l:
+        fit_line = "He profiles as a midfield option where progression, creation and work-rate balance are the key checks."
+    elif "back" in role_l:
+        fit_line = "He should be assessed on defensive reliability, duel strength and build-up contribution."
+    else:
+        fit_line = "His suitability should be assessed against the role requirements and the team's tactical needs."
+
+    if pd.isna(score):
+        final = "Watch More"
+    elif score >= 80:
+        final = "Highly Recommended"
+    elif score >= 65:
+        final = "Recommended / Good Option"
+    elif score >= 50:
+        final = "Watch More"
+    else:
+        final = "Not Recommended Yet / Risky"
+
+    header_bits = []
+    if team:
+        header_bits.append(f"Team: {team}")
+    if pos:
+        header_bits.append(f"Position: {pos}")
+    if age != "":
+        header_bits.append(f"Age: {age}")
+    if mins != "":
+        header_bits.append(f"Minutes: {mins}")
+    header = " • ".join(header_bits)
+
+    return f"""
+**Recommendation:** {final}  
+**Role Fit:** {role}  
+**Scouting Score:** {score_txt}  
+{header if header else ''}
+
+**Summary:**  
+{player_name} profiles as **{label}** for the selected role. {fit_line} His strongest indicators are {strength_txt}.
+
+**Strengths:**  
+{strength_txt}.
+
+**Weaknesses / Checks:**  
+{weakness_txt}.
+
+**Scout Note:**  
+{sample_note} {age_note}
+
+**Final Decision:**  
+{final}. Use this as a data-led recommendation, then confirm the key strengths and weaknesses with video scouting.
+""".strip()
