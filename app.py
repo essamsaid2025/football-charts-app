@@ -6,6 +6,7 @@ import joblib
 import streamlit as st
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 
 from PIL import Image, ImageDraw
 from matplotlib.backends.backend_pdf import PdfPages
@@ -277,6 +278,40 @@ st.markdown(
             color: #f8fafc !important;
             border: 1px solid #334155 !important;
         }
+
+
+        /* FINAL FIX: force Streamlit sidebar dark + readable controls */
+        section[data-testid="stSidebar"]{
+            background: linear-gradient(180deg,#050b16 0%,#081426 100%) !important;
+            border-right:1px solid #25344a !important;
+        }
+        section[data-testid="stSidebar"] > div,
+        section[data-testid="stSidebar"] [data-testid="stVerticalBlock"],
+        section[data-testid="stSidebar"] [data-testid="stRadio"],
+        section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]{
+            background: transparent !important;
+            color:#f8fafc !important;
+        }
+        section[data-testid="stSidebar"] *,
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] p,
+        section[data-testid="stSidebar"] span,
+        section[data-testid="stSidebar"] div{
+            color:#f8fafc !important;
+            opacity:1 !important;
+        }
+        section[data-testid="stSidebar"] input,
+        section[data-testid="stSidebar"] textarea,
+        section[data-testid="stSidebar"] div[data-baseweb="select"] > div{
+            background:#0b1728 !important;
+            color:#f8fafc !important;
+            border-color:#334155 !important;
+        }
+        div[role="radiogroup"] label p,
+        div[role="radiogroup"] label span{
+            color:#f8fafc !important;
+        }
+
     </style>
     """,
     unsafe_allow_html=True,
@@ -705,9 +740,14 @@ def make_click_pitch_image(theme_name, pitch_mode, pitch_width, display_w=900):
     def P(x, y):
         return _pitch_to_img(x, y, display_w, display_h, y_max)
 
+    def rect(p1, p2):
+        x1, y1 = p1
+        x2, y2 = p2
+        return [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
+
     lw = 3
     # outer pitch
-    draw.rectangle([P(0, 0), P(100, y_max)], outline=line, width=lw)
+    draw.rectangle(rect(P(0, 0), P(100, y_max)), outline=line, width=lw)
     # halfway
     draw.line([P(50, 0), P(50, y_max)], fill=line, width=lw)
     # center circle / spot
@@ -724,10 +764,10 @@ def make_click_pitch_image(theme_name, pitch_mode, pitch_width, display_w=900):
     six_w = y_max * 18.3 / 68.0
     mid = y_max / 2
     # left / right penalty boxes
-    draw.rectangle([P(0, mid - pen_w/2), P(pen_len, mid + pen_w/2)], outline=line, width=lw)
-    draw.rectangle([P(100-pen_len, mid - pen_w/2), P(100, mid + pen_w/2)], outline=line, width=lw)
-    draw.rectangle([P(0, mid - six_w/2), P(six_len, mid + six_w/2)], outline=line, width=lw)
-    draw.rectangle([P(100-six_len, mid - six_w/2), P(100, mid + six_w/2)], outline=line, width=lw)
+    draw.rectangle(rect(P(0, mid - pen_w/2), P(pen_len, mid + pen_w/2)), outline=line, width=lw)
+    draw.rectangle(rect(P(100-pen_len, mid - pen_w/2), P(100, mid + pen_w/2)), outline=line, width=lw)
+    draw.rectangle(rect(P(0, mid - six_w/2), P(six_len, mid + six_w/2)), outline=line, width=lw)
+    draw.rectangle(rect(P(100-six_len, mid - six_w/2), P(100, mid + six_w/2)), outline=line, width=lw)
     # penalty spots
     for sx in (11, 89):
         px, py = P(sx, mid)
@@ -1225,6 +1265,224 @@ def read_file_bytes(path):
 
 
 # =========================================================
+# PLAYER METRIC CHARTS - restored old chart options
+# =========================================================
+PLAYER_METRIC_MODES = {"Scatter Plot", "Bar Chart", "Percentile Bar", "MPL Pizza", "Athletic Pizza", "Old Simple Pizza"}
+
+
+def _metric_clean_df(df: pd.DataFrame) -> pd.DataFrame:
+    d = df.copy()
+    for c in d.columns:
+        s = clean_metric_series(d[c])
+        if s.notna().sum() > 0:
+            d[c] = s
+    return d
+
+
+def _default_player_col(df: pd.DataFrame):
+    lower = {str(c).strip().lower(): c for c in df.columns}
+    for k in ["player", "player name", "name"]:
+        if k in lower:
+            return lower[k]
+    return df.columns[0]
+
+
+def _metric_columns(df: pd.DataFrame, exclude_cols=None, min_valid=2):
+    exclude_cols = set(exclude_cols or [])
+    out = []
+    for c in df.columns:
+        if c in exclude_cols:
+            continue
+        s = clean_metric_series(df[c])
+        if s.notna().sum() >= min_valid:
+            out.append(c)
+    return out
+
+
+def _build_metric_table(df: pd.DataFrame, player_col: str, player_name: str, metrics: list[str], value_mode: str = "Percentile") -> pd.DataFrame:
+    d = df.copy()
+    row = d[d[player_col].astype(str) == str(player_name)]
+    if row.empty:
+        raise ValueError("Player not found.")
+    row = row.iloc[0]
+    rows = []
+    for m in metrics:
+        series = clean_metric_series(d[m])
+        val = pd.to_numeric(row[m], errors="coerce")
+        pct = _percentile_rank(series, val)
+        pct = 0 if pd.isna(pct) else float(pct)
+        val_num = 0 if pd.isna(val) else float(val)
+        rows.append({
+            "metric": str(m),
+            "value": round(val_num, 1),
+            "percentile": round(pct, 1),
+            "plot_value": round(pct if value_mode == "Percentile" else val_num, 1),
+        })
+    return pd.DataFrame(rows)
+
+
+def _save_fig_files(fig, base_name: str, tmp_dir: str):
+    out_dir = os.path.join(tmp_dir, "output")
+    os.makedirs(out_dir, exist_ok=True)
+    png_path = os.path.join(out_dir, f"{base_name}.png")
+    pdf_path = os.path.join(out_dir, f"{base_name}.pdf")
+    fig.savefig(png_path, dpi=350, bbox_inches="tight", pad_inches=0.25)
+    with PdfPages(pdf_path) as pdf:
+        pdf.savefig(fig, bbox_inches="tight", pad_inches=0.25)
+    return [(f"{base_name}.png", read_file_bytes(png_path), "image/png"), (f"{base_name}.pdf", read_file_bytes(pdf_path), "application/pdf")]
+
+
+def _scatter_chart(df: pd.DataFrame, x_metric: str, y_metric: str, label_col: str, highlight_value: str, title: str, bg: str, text: str, color: str, highlight: str):
+    d = df.copy()
+    d[x_metric] = clean_metric_series(d[x_metric])
+    d[y_metric] = clean_metric_series(d[y_metric])
+    d = d.dropna(subset=[x_metric, y_metric])
+    fig, ax = plt.subplots(figsize=(10, 6))
+    fig.patch.set_facecolor(bg)
+    ax.set_facecolor(bg)
+    ax.scatter(d[x_metric], d[y_metric], s=80, c=color, alpha=.65, edgecolors="white", linewidths=.7)
+    if highlight_value is not None:
+        h = d[d[label_col].astype(str) == str(highlight_value)]
+        if not h.empty:
+            ax.scatter(h[x_metric], h[y_metric], s=220, c=highlight, edgecolors="white", linewidths=1.6, zorder=5)
+            for _, r in h.iterrows():
+                ax.text(float(r[x_metric]), float(r[y_metric]), str(r[label_col]), color=text, fontsize=10, weight="bold", ha="left", va="bottom")
+    ax.set_title(title, color=text, fontsize=16, weight="bold")
+    ax.set_xlabel(x_metric, color=text); ax.set_ylabel(y_metric, color=text)
+    ax.tick_params(colors=text)
+    for sp in ax.spines.values(): sp.set_color(text)
+    ax.grid(alpha=.18)
+    return fig
+
+
+def _bar_chart(table: pd.DataFrame, title: str, value_col: str, bg: str, text: str, color: str, horizontal=True):
+    d = table.copy().iloc[::-1] if horizontal else table.copy()
+    fig, ax = plt.subplots(figsize=(10, max(4.5, len(d) * .45)))
+    fig.patch.set_facecolor(bg); ax.set_facecolor(bg)
+    if horizontal:
+        ax.barh(d["metric"], d[value_col], color=color, alpha=.9)
+        ax.set_xlim(0, max(100, float(pd.to_numeric(d[value_col], errors="coerce").max() or 100)))
+        for i, v in enumerate(d[value_col]): ax.text(float(v)+1, i, f"{float(v):.1f}", color=text, va="center", fontsize=9, weight="bold")
+    else:
+        ax.bar(d["metric"], d[value_col], color=color, alpha=.9)
+        ax.tick_params(axis="x", rotation=30)
+    ax.set_title(title, color=text, fontsize=16, weight="bold")
+    ax.tick_params(colors=text)
+    for sp in ax.spines.values(): sp.set_color(text)
+    ax.grid(axis="x" if horizontal else "y", alpha=.18)
+    return fig
+
+
+def _percentile_bar(table: pd.DataFrame, title: str, bg: str, text: str, good: str, mid: str, low: str):
+    d = table.copy().iloc[::-1]
+    vals = pd.to_numeric(d["percentile"], errors="coerce").fillna(0)
+    colors = [good if v >= 70 else mid if v >= 50 else low for v in vals]
+    fig, ax = plt.subplots(figsize=(10, max(4.5, len(d) * .45)))
+    fig.patch.set_facecolor(bg); ax.set_facecolor(bg)
+    ax.barh(d["metric"], vals, color=colors, alpha=.95)
+    ax.set_xlim(0, 100)
+    for i, v in enumerate(vals): ax.text(float(v)+1, i, f"{float(v):.1f}", color=text, va="center", fontsize=9, weight="bold")
+    ax.axvline(50, color=text, alpha=.25, lw=1)
+    ax.axvline(70, color=text, alpha=.25, lw=1)
+    ax.set_title(title, color=text, fontsize=16, weight="bold")
+    ax.tick_params(colors=text)
+    for sp in ax.spines.values(): sp.set_color(text)
+    ax.grid(axis="x", alpha=.18)
+    return fig
+
+
+def _category_colors(categories, attacking_color, possession_color, defending_color):
+    cmap = {"Attacking": attacking_color, "Possession": possession_color, "Defending": defending_color}
+    return [cmap.get(c, attacking_color) for c in categories]
+
+
+def _old_scale_colors(percentiles):
+    return [
+        "#1A78CF" if float(p) >= 85 else
+        "#2ECC71" if float(p) >= 70 else
+        "#FF9300" if float(p) >= 50 else
+        "#D70232"
+        for p in percentiles
+    ]
+
+
+def _render_player_metric_mode(mode, dfp, tmp_dir, header_img_obj, pizza_img_obj, default_title, default_subtitle):
+    st.session_state.data_info = {"rows": len(dfp), "cols": len(dfp.columns), "mode": mode}
+    k1, k2, k3 = st.columns(3)
+    with k1: st.markdown(f'<div class="small-kpi"><div class="label">Mode</div><div class="value">{mode}</div></div>', unsafe_allow_html=True)
+    with k2: st.markdown(f'<div class="small-kpi"><div class="label">Rows</div><div class="value">{len(dfp)}</div></div>', unsafe_allow_html=True)
+    with k3: st.markdown(f'<div class="small-kpi"><div class="label">Columns</div><div class="value">{len(dfp.columns)}</div></div>', unsafe_allow_html=True)
+    with st.expander("Preview data (first 25 rows)", expanded=False):
+        st.write("Columns:", list(dfp.columns)); st.dataframe(dfp.head(25), use_container_width=True)
+
+    dfm = _metric_clean_df(dfp)
+    player_col = st.selectbox("Player column", dfm.columns.tolist(), index=dfm.columns.tolist().index(_default_player_col(dfm)) if _default_player_col(dfm) in dfm.columns else 0, key=f"pm_player_col_{mode}")
+    meta_cols = {player_col}
+    for maybe in ["team", "squad", "position", "pos", "age", "minutes", "mins", "league", "season", "id"]:
+        for c in dfm.columns:
+            if str(c).strip().lower() == maybe:
+                meta_cols.add(c)
+    metric_cols = _metric_columns(dfm, meta_cols, min_valid=1)
+    if not metric_cols:
+        st.error("No numeric metric columns found."); st.stop()
+    players = sorted(dfm[player_col].dropna().astype(str).unique().tolist())
+    selected_player = st.selectbox("Choose player", players, key=f"pm_player_{mode}")
+
+    if mode == "Scatter Plot":
+        x_metric = st.selectbox("X-axis metric", metric_cols, index=0)
+        y_metric = st.selectbox("Y-axis metric", metric_cols, index=min(1, len(metric_cols)-1))
+        show_highlight = st.checkbox("Highlight selected player", value=True)
+        if st.button("Generate Scatter Plot", key="gen_scatter"):
+            fig = _scatter_chart(dfm, x_metric, y_metric, player_col, selected_player if show_highlight else None, default_title or f"{x_metric} vs {y_metric}", "#0E1117", "#FFFFFF", bar_success if 'bar_success' in globals() else "#38BDF8", "#FF9300")
+            st.session_state.preview_images = [fig_to_png_bytes(fig)]
+            st.session_state.download_files = _save_fig_files(fig, "scatter_plot", tmp_dir)
+            st.session_state.messages = [("success", "Scatter Plot generated successfully.")]
+    else:
+        default = metric_cols[:min(12, len(metric_cols))]
+        selected_metrics = st.multiselect("Choose metrics", metric_cols, default=default, key=f"pm_metrics_{mode}")
+        value_mode = st.radio("Use values or percentiles?", ["Percentile", "Raw Value"], horizontal=True, key=f"pm_value_{mode}") if mode == "Bar Chart" else "Percentile"
+        categories = []
+        if mode in ["MPL Pizza", "Athletic Pizza"] and selected_metrics:
+            st.markdown("Metric categories")
+            for m in selected_metrics:
+                categories.append(st.selectbox(str(m), ["Attacking", "Possession", "Defending"], key=f"cat_{mode}_{m}"))
+        horizontal = st.checkbox("Horizontal bars", value=True, key="bar_horizontal") if mode == "Bar Chart" else True
+        if st.button(f"Generate {mode}", disabled=not selected_metrics, key=f"gen_{mode}"):
+            table = _build_metric_table(dfm, player_col, selected_player, selected_metrics, value_mode=value_mode)
+            center_img = pizza_img_obj if pizza_img_obj is not None else header_img_obj
+            if mode == "Bar Chart":
+                fig = _bar_chart(table, default_title or selected_player, "plot_value", "#0E1117", "#FFFFFF", "#38BDF8", horizontal=horizontal)
+                base = "bar_chart"
+            elif mode == "Percentile Bar":
+                fig = _percentile_bar(table, default_title or f"{selected_player} Percentile Bar", "#0E1117", "#FFFFFF", "#2ECC71", "#FF9300", "#D70232")
+                base = "percentile_bar"
+            elif mode in ["MPL Pizza", "Athletic Pizza"]:
+                colors = _category_colors(categories, "#1A78CF", "#FF9300", "#D70232") if categories else _old_scale_colors(table["percentile"])
+                fig = pizza_chart(table[["metric", "value", "percentile"]], title=default_title or selected_player, subtitle=default_subtitle or "Percentile vs peers", slice_colors=colors, show_values_legend=False, center_image=center_img, center_img_scale=pizza_center_scale, footer_text="")
+                base = "mpl_pizza" if mode == "MPL Pizza" else "athletic_pizza"
+            else:
+                colors = _old_scale_colors(table["percentile"])
+                fig = pizza_chart(table[["metric", "value", "percentile"]], title=default_title or selected_player, subtitle=default_subtitle or "Percentile vs peers", slice_colors=colors, show_values_legend=False, center_image=center_img, center_img_scale=pizza_center_scale, footer_text="")
+                base = "old_simple_pizza"
+            st.session_state.preview_images = [fig_to_png_bytes(fig)]
+            st.session_state.download_files = _save_fig_files(fig, base, tmp_dir)
+            st.session_state.messages = [("success", f"{mode} generated successfully.")]
+
+    if st.session_state.messages:
+        for level, msg in st.session_state.messages:
+            getattr(st, level)(msg)
+    if st.session_state.preview_images:
+        st.subheader("Preview")
+        for img in st.session_state.preview_images:
+            st.image(img, use_container_width=True)
+        st.subheader("Downloads")
+        for fname, fbytes, mime in st.session_state.download_files:
+            st.download_button(f"⬇️ Download {fname}", data=fbytes, file_name=fname, mime=mime, key=f"dl_{mode}_{fname}")
+    else:
+        st.markdown("""<div class="preview-placeholder">Choose settings, then click Generate.</div>""", unsafe_allow_html=True)
+
+
+# =========================================================
 # LAYOUT
 # =========================================================
 left_col, right_col = st.columns([1.05, 1.55], gap="large")
@@ -1235,7 +1493,18 @@ with left_col:
 
     mode = st.radio(
         "Choose output type",
-        ["Match Charts", "Pizza Chart", "Shot Detail Card", "Defensive Actions Map"],
+        [
+            "Match Charts",
+            "Scatter Plot",
+            "Bar Chart",
+            "Percentile Bar",
+            "MPL Pizza",
+            "Athletic Pizza",
+            "Old Simple Pizza",
+            "Pizza Chart",
+            "Shot Detail Card",
+            "Defensive Actions Map",
+        ],
         horizontal=False,
     )
 
@@ -1566,6 +1835,12 @@ with right_col:
         path = os.path.join(tmp, uploaded.name)
         with open(path, "wb") as f:
             f.write(uploaded.getbuffer())
+
+        if mode in PLAYER_METRIC_MODES:
+            dfp = load_data(path)
+            _render_player_metric_mode(mode, dfp, tmp, header_img_obj, pizza_img_obj, report_title, report_subtitle)
+            st.markdown("</div>", unsafe_allow_html=True)
+            st.stop()
 
         if mode == "Pizza Chart":
             dfp = load_data(path)
