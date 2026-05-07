@@ -31,9 +31,9 @@ from charts import (
 
 
 try:
-    from streamlit_drawable_canvas import st_canvas
+    import plotly.graph_objects as go
 except Exception:
-    st_canvas = None
+    go = None
 
 from scouting_tools_v2 import (
     ROLE_TEMPLATES,
@@ -580,16 +580,193 @@ if center_img_file is not None:
 # =========================
 # INTERACTIVE TAGGING TOOL SECTION
 # =========================
+def _plotly_theme(theme_name):
+    return THEMES.get(theme_name, THEMES.get('The Athletic Dark', {}))
+
+
+def _add_pitch_shapes(fig, theme, y_max):
+    line = theme.get('pitch_lines', '#E6E6E6')
+    pitch_col = theme.get('pitch', '#1f5f3b')
+    fig.update_layout(
+        paper_bgcolor=theme.get('bg', '#0E1117'),
+        plot_bgcolor=pitch_col,
+        margin=dict(l=10, r=10, t=48, b=10),
+        height=620,
+        dragmode='select',
+        clickmode='event+select',
+        showlegend=True,
+        legend=dict(
+            orientation='h',
+            yanchor='bottom', y=-0.14,
+            xanchor='center', x=0.5,
+            font=dict(color=theme.get('text', '#FFFFFF')),
+            bgcolor='rgba(0,0,0,0)',
+        ),
+        font=dict(color=theme.get('text', '#FFFFFF')),
+    )
+    fig.update_xaxes(range=[-2, 102], showgrid=False, zeroline=False, visible=False, constrain='domain')
+    fig.update_yaxes(range=[-2, y_max + 2], showgrid=False, zeroline=False, visible=False, scaleanchor='x', scaleratio=1)
+
+    def add_line(x0, y0, x1, y1, width=2):
+        fig.add_shape(type='line', x0=x0, y0=y0, x1=x1, y1=y1, line=dict(color=line, width=width))
+
+    def add_rect(x0, y0, x1, y1, width=2):
+        fig.add_shape(type='rect', x0=x0, y0=y0, x1=x1, y1=y1, line=dict(color=line, width=width), fillcolor='rgba(0,0,0,0)')
+
+    # Outer + halfway
+    add_rect(0, 0, 100, y_max, 2)
+    add_line(50, 0, 50, y_max, 2)
+
+    # Penalty and six-yard boxes scaled by pitch width
+    box_w = y_max * (40.32 / 68.0)
+    six_w = y_max * (18.32 / 68.0)
+    pen_depth = 16.5 / 105.0 * 100.0
+    six_depth = 5.5 / 105.0 * 100.0
+    cy = y_max / 2.0
+    add_rect(0, cy - box_w/2, pen_depth, cy + box_w/2, 2)
+    add_rect(100 - pen_depth, cy - box_w/2, 100, cy + box_w/2, 2)
+    add_rect(0, cy - six_w/2, six_depth, cy + six_w/2, 2)
+    add_rect(100 - six_depth, cy - six_w/2, 100, cy + six_w/2, 2)
+
+    # Centre circle and spots
+    fig.add_shape(type='circle', x0=50-9.15/105*100, y0=cy-9.15/68*y_max, x1=50+9.15/105*100, y1=cy+9.15/68*y_max, line=dict(color=line, width=2), fillcolor='rgba(0,0,0,0)')
+    fig.add_trace(go.Scatter(x=[50, 11/105*100, 100-11/105*100], y=[cy, cy, cy], mode='markers', marker=dict(size=5, color=line), showlegend=False, hoverinfo='skip', selectedpoints=[]))
+
+    # Goals
+    goal_w = y_max * (7.32 / 68.0)
+    add_line(0, cy-goal_w/2, -1.2, cy-goal_w/2, 2)
+    add_line(0, cy+goal_w/2, -1.2, cy+goal_w/2, 2)
+    add_line(100, cy-goal_w/2, 101.2, cy-goal_w/2, 2)
+    add_line(100, cy+goal_w/2, 101.2, cy+goal_w/2, 2)
+
+
+def _event_colors(theme):
+    return {
+        'pass': '#00C2FF',
+        'carry': '#FF9300',
+        'dribble': '#A78BFA',
+        'cross': '#FFD400',
+        'shot': '#00FF6A',
+        'touch': '#FFFFFF',
+        'defensive action': '#FF4D4D',
+        'recovery': '#FF4D4D',
+        'candidate': theme.get('text', '#FFFFFF'),
+        'start': '#22C55E',
+        'end': '#EF4444',
+    }
+
+
+def make_plotly_tagging_pitch(df_events=None, theme_name='The Athletic Dark', pitch_mode='rect', pitch_width=64.0, candidate=None, start_point=None, end_point=None, title='Click pitch points'):
+    if go is None:
+        return None
+    theme = _plotly_theme(theme_name)
+    y_max = float(pitch_width if pitch_mode == 'rect' else 100.0)
+    fig = go.Figure()
+    _add_pitch_shapes(fig, theme, y_max)
+    colors = _event_colors(theme)
+
+    # Existing saved events
+    if df_events is not None and not df_events.empty:
+        d = df_events.copy()
+        for c in ['x', 'y', 'x2', 'y2']:
+            if c in d.columns:
+                d[c] = pd.to_numeric(d[c], errors='coerce')
+        line_events = ['pass', 'carry', 'dribble', 'cross']
+        for et in line_events:
+            sub = d[d['event_type'].astype(str).str.lower() == et].dropna(subset=['x', 'y', 'x2', 'y2'])
+            for _, r in sub.iterrows():
+                fig.add_trace(go.Scatter(
+                    x=[r['x'], r['x2']], y=[r['y'], r['y2']], mode='lines+markers',
+                    line=dict(color=colors.get(et, theme.get('text', '#FFFFFF')), width=4),
+                    marker=dict(size=8, color=colors.get(et, theme.get('text', '#FFFFFF'))),
+                    name=et.title(), showlegend=False,
+                    hovertemplate=f"{et.title()}<br>x=%{{x:.1f}}<br>y=%{{y:.1f}}<extra></extra>",
+                    selectedpoints=[]
+                ))
+                # arrow head approximation near end
+                fig.add_annotation(x=r['x2'], y=r['y2'], ax=r['x'], ay=r['y'], xref='x', yref='y', axref='x', ayref='y', showarrow=True, arrowhead=3, arrowsize=1.2, arrowwidth=2, arrowcolor=colors.get(et, '#FFFFFF'))
+        point_events = ['shot', 'touch', 'defensive action', 'recovery']
+        marker_map = {'shot': 'star', 'touch': 'circle', 'defensive action': 'square', 'recovery': 'diamond'}
+        for et in point_events:
+            sub = d[d['event_type'].astype(str).str.lower() == et].dropna(subset=['x', 'y'])
+            if len(sub):
+                fig.add_trace(go.Scatter(
+                    x=sub['x'], y=sub['y'], mode='markers', name=et.title(),
+                    marker=dict(size=14 if et == 'shot' else 11, symbol=marker_map.get(et, 'circle'), color=colors.get(et, theme.get('text', '#FFFFFF')), line=dict(color=theme.get('bg', '#0E1117'), width=1.5)),
+                    hovertemplate=et.title()+"<br>x=%{x:.1f}<br>y=%{y:.1f}<extra></extra>",
+                    selectedpoints=[]
+                ))
+
+    # Current selected points
+    if start_point:
+        fig.add_trace(go.Scatter(x=[start_point[0]], y=[start_point[1]], mode='markers+text', text=['START'], textposition='top center', marker=dict(size=16, color=colors['start'], line=dict(color='#FFFFFF', width=2)), name='Start', selectedpoints=[]))
+    if end_point:
+        fig.add_trace(go.Scatter(x=[end_point[0]], y=[end_point[1]], mode='markers+text', text=['END'], textposition='top center', marker=dict(size=16, color=colors['end'], line=dict(color='#FFFFFF', width=2)), name='End', selectedpoints=[]))
+    if start_point and end_point:
+        fig.add_trace(go.Scatter(x=[start_point[0], end_point[0]], y=[start_point[1], end_point[1]], mode='lines', line=dict(color=colors['start'], width=4, dash='dash'), name='Current action', selectedpoints=[]))
+    if candidate:
+        fig.add_trace(go.Scatter(x=[candidate[0]], y=[candidate[1]], mode='markers+text', text=['SELECTED'], textposition='bottom center', marker=dict(size=13, color=colors['candidate'], line=dict(color=colors['end'], width=2)), name='Selected point', selectedpoints=[]))
+
+    # Clickable grid layer: select one of these points to capture coordinates.
+    step = 2.0
+    xs = np.arange(0, 100 + 0.001, step)
+    ys = np.arange(0, y_max + 0.001, step)
+    gx, gy, cd = [], [], []
+    for x in xs:
+        for y in ys:
+            gx.append(round(float(x), 2)); gy.append(round(float(y), 2)); cd.append([round(float(x), 2), round(float(y), 2)])
+    fig.add_trace(go.Scatter(
+        x=gx, y=gy, mode='markers', name='Clickable pitch grid', customdata=cd,
+        marker=dict(size=12, color='rgba(255,255,255,0.02)', line=dict(width=0)),
+        hovertemplate='Click point<br>x=%{customdata[0]:.1f}<br>y=%{customdata[1]:.1f}<extra></extra>',
+        showlegend=False,
+    ))
+
+    fig.update_layout(title=dict(text=title, x=0.5, font=dict(color=theme.get('text', '#FFFFFF'), size=18)))
+    return fig
+
+
+def get_plotly_selected_point(selection_event):
+    try:
+        pts = selection_event.selection.points
+    except Exception:
+        try:
+            pts = selection_event.get('selection', {}).get('points', [])
+        except Exception:
+            pts = []
+    if not pts:
+        return None
+    p = pts[-1]
+    try:
+        cd = p.get('customdata') if isinstance(p, dict) else getattr(p, 'customdata', None)
+        if cd is not None and len(cd) >= 2:
+            return round(float(cd[0]), 2), round(float(cd[1]), 2)
+    except Exception:
+        pass
+    try:
+        x = p.get('x') if isinstance(p, dict) else getattr(p, 'x')
+        y = p.get('y') if isinstance(p, dict) else getattr(p, 'y')
+        return round(float(x), 2), round(float(y), 2)
+    except Exception:
+        return None
+
+
 if app_section == 'Tagging Tool':
     st.markdown("""
     <div class="app-header">
       <div class="app-title">🖱️ Interactive Tagging Tool</div>
-      <div class="app-subtitle">Draw passes / carries / shots on the pitch → save events → download CSV or generate a themed map</div>
+      <div class="app-subtitle">Click start/end points on the pitch → save events → download CSV or generate a themed map</div>
     </div>
     """, unsafe_allow_html=True)
 
     if 'tagged_events' not in st.session_state:
         st.session_state.tagged_events = []
+    if 'tag_start_point' not in st.session_state:
+        st.session_state.tag_start_point = None
+    if 'tag_end_point' not in st.session_state:
+        st.session_state.tag_end_point = None
+    if 'tag_candidate_point' not in st.session_state:
+        st.session_state.tag_candidate_point = None
 
     tag_left, tag_right = st.columns([1.0, 1.65], gap='large')
 
@@ -606,8 +783,62 @@ if app_section == 'Tagging Tool':
         team_name = st.text_input('Team', '')
         minute = st.number_input('Minute', min_value=0, max_value=130, value=0, step=1)
         note = st.text_area('Scout note', '', height=90)
-        stroke = st.color_picker('Drawing color', '#00C2FF')
-        st.caption('For pass/carry/dribble/cross: draw a line from start to end. For shot/touch/defensive action: click one point.')
+        st.caption('Pass / carry / dribble / cross = start + end. Shot / touch / defensive action = one point only.')
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.subheader('Selected Coordinates')
+        cand = st.session_state.tag_candidate_point
+        st.write('Selected point:', cand if cand else 'Click a point on the pitch')
+        line_events = ['pass', 'carry', 'dribble', 'cross']
+        if event_type in line_events:
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button('Use selected as START', disabled=(cand is None)):
+                    st.session_state.tag_start_point = cand
+                    st.rerun()
+            with c2:
+                if st.button('Use selected as END', disabled=(cand is None)):
+                    st.session_state.tag_end_point = cand
+                    st.rerun()
+            st.write('Start:', st.session_state.tag_start_point)
+            st.write('End:', st.session_state.tag_end_point)
+        else:
+            if st.button('Use selected as ACTION POINT', disabled=(cand is None)):
+                st.session_state.tag_start_point = cand
+                st.session_state.tag_end_point = None
+                st.rerun()
+            st.write('Action point:', st.session_state.tag_start_point)
+
+        save_disabled = False
+        if event_type in line_events:
+            save_disabled = st.session_state.tag_start_point is None or st.session_state.tag_end_point is None
+        else:
+            save_disabled = st.session_state.tag_start_point is None
+
+        if st.button('Save Event', disabled=save_disabled):
+            sp = st.session_state.tag_start_point
+            ep = st.session_state.tag_end_point
+            ev = {
+                'event_id': len(st.session_state.tagged_events) + 1,
+                'event_type': event_type.lower().strip(),
+                'player': player_name,
+                'team': team_name,
+                'minute': int(minute),
+                'x': sp[0],
+                'y': sp[1],
+                'x2': ep[0] if (event_type in line_events and ep) else np.nan,
+                'y2': ep[1] if (event_type in line_events and ep) else np.nan,
+                'outcome': outcome.lower().strip(),
+                'tag': action_tag,
+                'note': note,
+            }
+            st.session_state.tagged_events.append(ev)
+            st.session_state.tag_start_point = None
+            st.session_state.tag_end_point = None
+            st.session_state.tag_candidate_point = None
+            st.success('Event saved.')
+            st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="panel">', unsafe_allow_html=True)
@@ -615,56 +846,45 @@ if app_section == 'Tagging Tool':
         if st.button('Undo last saved event') and st.session_state.tagged_events:
             st.session_state.tagged_events = st.session_state.tagged_events[:-1]
             st.rerun()
+        if st.button('Clear current points'):
+            st.session_state.tag_start_point = None
+            st.session_state.tag_end_point = None
+            st.session_state.tag_candidate_point = None
+            st.rerun()
         if st.button('Clear all saved events'):
             st.session_state.tagged_events = []
+            st.session_state.tag_start_point = None
+            st.session_state.tag_end_point = None
+            st.session_state.tag_candidate_point = None
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
     with tag_right:
         st.markdown('<div class="preview">', unsafe_allow_html=True)
         st.subheader('Interactive Pitch')
-        width_px = 900
-        height_px = 576 if tag_pitch_mode == 'rect' else 700
-        bg_img = make_pitch_background_image(theme_name=theme_name, pitch_mode=tag_pitch_mode, pitch_width=tag_pitch_width, width_px=width_px, height_px=height_px)
-        drawing_mode = 'line' if event_type in ['pass', 'carry', 'dribble', 'cross'] else 'point'
+        if go is None:
+            st.error('Plotly is not installed. Add plotly to requirements.txt then redeploy.')
+            st.code('plotly')
+            st.stop()
 
-        if st_canvas is None:
-            st.error('streamlit-drawable-canvas is not installed. Add it to requirements.txt then redeploy.')
-            st.code('streamlit-drawable-canvas')
-            st.info('Fallback: you can still use the saved CSV/map after installing the package.')
-        else:
-            canvas_result = st_canvas(
-                fill_color='rgba(255, 255, 255, 0.0)',
-                stroke_width=4,
-                stroke_color=stroke,
-                background_image=bg_img,
-                update_streamlit=True,
-                height=height_px,
-                width=width_px,
-                drawing_mode=drawing_mode,
-                point_display_radius=6,
-                key=f'tag_canvas_{event_type}_{theme_name}_{tag_pitch_mode}_{tag_pitch_width}',
-            )
+        df_saved = pd.DataFrame(st.session_state.tagged_events) if st.session_state.tagged_events else pd.DataFrame()
+        fig_click = make_plotly_tagging_pitch(
+            df_saved,
+            theme_name=theme_name,
+            pitch_mode=tag_pitch_mode,
+            pitch_width=tag_pitch_width,
+            candidate=st.session_state.tag_candidate_point,
+            start_point=st.session_state.tag_start_point,
+            end_point=st.session_state.tag_end_point,
+            title='Click a pitch point, then assign it from the left panel'
+        )
+        selection = st.plotly_chart(fig_click, use_container_width=True, on_select='rerun', selection_mode='points', key='tagging_plotly_pitch')
+        selected_point = get_plotly_selected_point(selection)
+        if selected_point is not None and selected_point != st.session_state.tag_candidate_point:
+            st.session_state.tag_candidate_point = selected_point
+            st.rerun()
 
-            objects = []
-            if canvas_result.json_data and 'objects' in canvas_result.json_data:
-                objects = canvas_result.json_data['objects']
-
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button('Save last drawn action', disabled=(len(objects) == 0)):
-                    try:
-                        ev = canvas_object_to_event(
-                            objects[-1], event_type, player_name, team_name, int(minute), outcome, action_tag, note,
-                            width_px, height_px, tag_pitch_mode, tag_pitch_width
-                        )
-                        ev['event_id'] = len(st.session_state.tagged_events) + 1
-                        st.session_state.tagged_events.append(ev)
-                        st.success('Event saved.')
-                    except Exception as e:
-                        st.error(f'Could not save event: {e}')
-            with c2:
-                st.caption(f'Drawn objects on canvas: {len(objects)}')
+        st.caption('Tip: choose the closest visible/hover point on the pitch grid. The app stores coordinates on a 0–100 scale.')
 
         if st.session_state.tagged_events:
             df_tagged = pd.DataFrame(st.session_state.tagged_events)
@@ -678,7 +898,7 @@ if app_section == 'Tagging Tool':
                 st.image(tag_files[0][1], use_container_width=True)
                 show_downloads(tag_files)
         else:
-            st.info('Draw an action on the pitch, then click Save last drawn action.')
+            st.info('Click on the pitch, assign the point, then save the event.')
         st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
