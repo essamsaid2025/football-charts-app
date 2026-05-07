@@ -4,6 +4,9 @@ import tempfile
 
 import streamlit as st
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 from PIL import Image
 from matplotlib.backends.backend_pdf import PdfPages
 
@@ -22,8 +25,15 @@ from charts import (
     pizza_chart,
     shot_detail_card,
     defensive_regains_map,
+    make_pitch,
     THEMES,
 )
+
+
+try:
+    from streamlit_drawable_canvas import st_canvas
+except Exception:
+    st_canvas = None
 
 from scouting_tools import (
     ROLE_TEMPLATES,
@@ -35,6 +45,7 @@ from scouting_tools import (
     add_percentiles_and_score,
     player_profile,
     profile_text,
+    recommendation_text,
     similar_players,
     auto_dataset_insights,
     comparison_chart,
@@ -353,10 +364,169 @@ def show_downloads(files):
         st.download_button(f'⬇️ Download {fname}', data=data, file_name=fname, mime=mime, key=f'dl_{fname}')
 
 
+# =========================
+# TAGGING TOOL HELPERS
+# =========================
+def theme_value(theme_name, key, fallback):
+    try:
+        return THEMES.get(theme_name, THEMES.get('The Athletic Dark', {})).get(key, fallback)
+    except Exception:
+        return fallback
+
+
+def make_pitch_background_image(theme_name='The Athletic Dark', pitch_mode='rect', pitch_width=64.0, width_px=900, height_px=576):
+    """Create a pitch image using the same theme colors used in charts.py."""
+    theme = THEMES.get(theme_name, THEMES.get('The Athletic Dark', {}))
+    fig_w = 10
+    fig_h = fig_w * (height_px / max(width_px, 1))
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=120)
+    fig.patch.set_facecolor(theme.get('bg', '#0E1117'))
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=False)
+    pitch.draw(ax=ax)
+    ax.set_facecolor(theme.get('pitch', '#1f5f3b'))
+    y_max = pitch_width if pitch_mode == 'rect' else 100.0
+    ax.set_xlim(-1, 101)
+    ax.set_ylim(-1, y_max + 1)
+    ax.axis('off')
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=120, bbox_inches='tight', pad_inches=0)
+    plt.close(fig)
+    buf.seek(0)
+    img = Image.open(buf).convert('RGB').resize((width_px, height_px))
+    return img
+
+
+def _pixel_to_pitch(px, py, width_px, height_px, pitch_mode='rect', pitch_width=64.0):
+    y_max = pitch_width if pitch_mode == 'rect' else 100.0
+    x = max(0.0, min(100.0, float(px) / max(width_px, 1) * 100.0))
+    y = max(0.0, min(y_max, float(py) / max(height_px, 1) * y_max))
+    return round(x, 2), round(y, 2)
+
+
+def _fabric_line_points(obj):
+    left = float(obj.get('left', 0) or 0)
+    top = float(obj.get('top', 0) or 0)
+    width = float(obj.get('width', 0) or 0)
+    height = float(obj.get('height', 0) or 0)
+
+    # Most stable fallback for streamlit-drawable-canvas line objects.
+    x1, y1 = left, top
+    x2, y2 = left + width, top + height
+
+    # If fabric gives direct coordinates, try to preserve direction.
+    try:
+        ox1, oy1 = float(obj.get('x1')), float(obj.get('y1'))
+        ox2, oy2 = float(obj.get('x2')), float(obj.get('y2'))
+        if all(abs(v) < 2000 for v in [ox1, oy1, ox2, oy2]):
+            # Fabric often stores x1/x2 relative to line center; left/top is bbox top-left.
+            if min(ox1, ox2, oy1, oy2) < 0:
+                x1 = left + (ox1 - min(ox1, ox2))
+                x2 = left + (ox2 - min(ox1, ox2))
+                y1 = top + (oy1 - min(oy1, oy2))
+                y2 = top + (oy2 - min(oy1, oy2))
+    except Exception:
+        pass
+    return x1, y1, x2, y2
+
+
+def canvas_object_to_event(obj, event_type, player, team, minute, outcome, tag, note, width_px, height_px, pitch_mode, pitch_width):
+    typ = str(obj.get('type', '')).lower()
+    line_events = {'pass', 'carry', 'dribble', 'cross'}
+
+    if event_type.lower() in line_events or typ == 'line':
+        x1p, y1p, x2p, y2p = _fabric_line_points(obj)
+        x, y = _pixel_to_pitch(x1p, y1p, width_px, height_px, pitch_mode, pitch_width)
+        x2, y2 = _pixel_to_pitch(x2p, y2p, width_px, height_px, pitch_mode, pitch_width)
+    else:
+        left = float(obj.get('left', 0) or 0)
+        top = float(obj.get('top', 0) or 0)
+        radius = float(obj.get('radius', 0) or 0)
+        width = float(obj.get('width', 0) or 0)
+        height = float(obj.get('height', 0) or 0)
+        cx = left + (radius if radius else width / 2)
+        cy = top + (radius if radius else height / 2)
+        x, y = _pixel_to_pitch(cx, cy, width_px, height_px, pitch_mode, pitch_width)
+        x2, y2 = np.nan, np.nan
+
+    return {
+        'event_id': None,
+        'event_type': event_type.lower().strip(),
+        'player': player,
+        'team': team,
+        'minute': minute,
+        'x': x,
+        'y': y,
+        'x2': x2,
+        'y2': y2,
+        'outcome': outcome.lower().strip(),
+        'tag': tag,
+        'note': note,
+    }
+
+
+def tagged_events_map(df_events, theme_name='The Athletic Dark', pitch_mode='rect', pitch_width=64.0, title='Tagged Events Map'):
+    theme = THEMES.get(theme_name, THEMES.get('The Athletic Dark', {}))
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=False)
+    fig, ax = plt.subplots(figsize=(11, 7))
+    fig.patch.set_facecolor(theme.get('bg', '#0E1117'))
+    pitch.draw(ax=ax)
+    ax.set_facecolor(theme.get('pitch', '#1f5f3b'))
+    y_max = pitch_width if pitch_mode == 'rect' else 100.0
+
+    d = df_events.copy()
+    for c in ['x', 'y', 'x2', 'y2']:
+        if c in d.columns:
+            d[c] = pd.to_numeric(d[c], errors='coerce')
+
+    colors = {
+        'pass': '#00C2FF',
+        'carry': '#FF9300',
+        'dribble': '#A78BFA',
+        'cross': '#FFD400',
+        'shot': '#00FF6A',
+        'touch': '#FFFFFF',
+        'defensive action': '#FF4D4D',
+        'recovery': '#FF4D4D',
+    }
+    markers = {
+        'shot': '*',
+        'touch': 'o',
+        'defensive action': 's',
+        'recovery': 'D',
+    }
+    handles = []
+    line_events = ['pass', 'carry', 'dribble', 'cross']
+    for et in line_events:
+        sub = d[d['event_type'].astype(str).str.lower() == et].dropna(subset=['x', 'y', 'x2', 'y2'])
+        if len(sub):
+            pitch.arrows(sub['x'], sub['y'], sub['x2'], sub['y2'], ax=ax, width=2.2, headwidth=5, headlength=5,
+                         color=colors.get(et, theme.get('text', 'white')), alpha=0.9, zorder=4)
+            handles.append(Line2D([0], [0], color=colors.get(et), lw=3, label=et.title()))
+
+    for et in ['shot', 'touch', 'defensive action', 'recovery']:
+        sub = d[d['event_type'].astype(str).str.lower() == et].dropna(subset=['x', 'y'])
+        if len(sub):
+            pitch.scatter(sub['x'], sub['y'], ax=ax, s=160 if et == 'shot' else 95,
+                          marker=markers.get(et, 'o'), color=colors.get(et, theme.get('text', 'white')),
+                          edgecolors=theme.get('bg', '#0E1117'), linewidth=1.5, alpha=0.95, zorder=6)
+            handles.append(Line2D([0], [0], marker=markers.get(et, 'o'), color='none',
+                                  markerfacecolor=colors.get(et), markeredgecolor=theme.get('bg', '#0E1117'),
+                                  markersize=9, label=et.title()))
+
+    ax.set_title(title, color=theme.get('text', 'white'), fontsize=18, weight='bold')
+    ax.set_xlim(-2, 102)
+    ax.set_ylim(-2, y_max + 2)
+    if handles:
+        leg = ax.legend(handles=handles, loc='lower center', bbox_to_anchor=(0.5, -0.06), ncol=min(5, len(handles)), frameon=False)
+        for t in leg.get_texts():
+            t.set_color(theme.get('text', 'white'))
+    return fig
+
+
 with st.sidebar:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.subheader('App Section')
-    app_section = st.radio('Choose App Section', ['Charts Generator', 'Player Scouting'], index=0)
+    app_section = st.radio('Choose App Section', ['Charts Generator', 'Player Scouting', 'Tagging Tool'], index=0)
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="panel">', unsafe_allow_html=True)
@@ -405,6 +575,112 @@ if center_img_file is not None:
         center_img = Image.open(center_img_file).convert('RGBA')
     except Exception:
         center_img = None
+
+
+# =========================
+# INTERACTIVE TAGGING TOOL SECTION
+# =========================
+if app_section == 'Tagging Tool':
+    st.markdown("""
+    <div class="app-header">
+      <div class="app-title">🖱️ Interactive Tagging Tool</div>
+      <div class="app-subtitle">Draw passes / carries / shots on the pitch → save events → download CSV or generate a themed map</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if 'tagged_events' not in st.session_state:
+        st.session_state.tagged_events = []
+
+    tag_left, tag_right = st.columns([1.0, 1.65], gap='large')
+
+    with tag_left:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.subheader('Tagging Settings')
+        tag_pitch_mode_ui = st.selectbox('Pitch shape', ['Rectangular', 'Square'], key='tag_pitch_mode_ui')
+        tag_pitch_mode = 'rect' if tag_pitch_mode_ui == 'Rectangular' else 'square'
+        tag_pitch_width = st.slider('Rect pitch width', 50.0, 80.0, 64.0, 1.0, key='tag_pitch_width')
+        event_type = st.selectbox('Event type', ['pass', 'carry', 'dribble', 'cross', 'shot', 'touch', 'defensive action', 'recovery'])
+        outcome = st.selectbox('Outcome', ['successful', 'unsuccessful', 'goal', 'ontarget', 'off target', 'blocked', 'neutral'])
+        action_tag = st.selectbox('Action tag', ['progressive', 'line breaking', 'into final third', 'into box', 'key pass', 'chance created', 'under pressure', 'turnover', 'recovery', 'duel', 'dangerous action', 'other'])
+        player_name = st.text_input('Player', '')
+        team_name = st.text_input('Team', '')
+        minute = st.number_input('Minute', min_value=0, max_value=130, value=0, step=1)
+        note = st.text_area('Scout note', '', height=90)
+        stroke = st.color_picker('Drawing color', '#00C2FF')
+        st.caption('For pass/carry/dribble/cross: draw a line from start to end. For shot/touch/defensive action: click one point.')
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.subheader('Actions')
+        if st.button('Undo last saved event') and st.session_state.tagged_events:
+            st.session_state.tagged_events = st.session_state.tagged_events[:-1]
+            st.rerun()
+        if st.button('Clear all saved events'):
+            st.session_state.tagged_events = []
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with tag_right:
+        st.markdown('<div class="preview">', unsafe_allow_html=True)
+        st.subheader('Interactive Pitch')
+        width_px = 900
+        height_px = 576 if tag_pitch_mode == 'rect' else 700
+        bg_img = make_pitch_background_image(theme_name=theme_name, pitch_mode=tag_pitch_mode, pitch_width=tag_pitch_width, width_px=width_px, height_px=height_px)
+        drawing_mode = 'line' if event_type in ['pass', 'carry', 'dribble', 'cross'] else 'point'
+
+        if st_canvas is None:
+            st.error('streamlit-drawable-canvas is not installed. Add it to requirements.txt then redeploy.')
+            st.code('streamlit-drawable-canvas')
+            st.info('Fallback: you can still use the saved CSV/map after installing the package.')
+        else:
+            canvas_result = st_canvas(
+                fill_color='rgba(255, 255, 255, 0.0)',
+                stroke_width=4,
+                stroke_color=stroke,
+                background_image=bg_img,
+                update_streamlit=True,
+                height=height_px,
+                width=width_px,
+                drawing_mode=drawing_mode,
+                point_display_radius=6,
+                key=f'tag_canvas_{event_type}_{theme_name}_{tag_pitch_mode}_{tag_pitch_width}',
+            )
+
+            objects = []
+            if canvas_result.json_data and 'objects' in canvas_result.json_data:
+                objects = canvas_result.json_data['objects']
+
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button('Save last drawn action', disabled=(len(objects) == 0)):
+                    try:
+                        ev = canvas_object_to_event(
+                            objects[-1], event_type, player_name, team_name, int(minute), outcome, action_tag, note,
+                            width_px, height_px, tag_pitch_mode, tag_pitch_width
+                        )
+                        ev['event_id'] = len(st.session_state.tagged_events) + 1
+                        st.session_state.tagged_events.append(ev)
+                        st.success('Event saved.')
+                    except Exception as e:
+                        st.error(f'Could not save event: {e}')
+            with c2:
+                st.caption(f'Drawn objects on canvas: {len(objects)}')
+
+        if st.session_state.tagged_events:
+            df_tagged = pd.DataFrame(st.session_state.tagged_events)
+            st.subheader('Saved Events')
+            st.dataframe(df_tagged, use_container_width=True)
+            st.download_button('⬇️ Download Tagged Events CSV', data=df_tagged.to_csv(index=False).encode('utf-8-sig'), file_name='tagged_events.csv', mime='text/csv')
+
+            if st.button('Generate Map From Tagged Events'):
+                fig_tag = tagged_events_map(df_tagged, theme_name=theme_name, pitch_mode=tag_pitch_mode, pitch_width=tag_pitch_width, title=title or 'Tagged Events Map')
+                tag_files = save_outputs(fig_tag, 'tagged_events_map')
+                st.image(tag_files[0][1], use_container_width=True)
+                show_downloads(tag_files)
+        else:
+            st.info('Draw an action on the pitch, then click Save last drawn action.')
+        st.markdown('</div>', unsafe_allow_html=True)
+    st.stop()
 
 # =========================
 # PLAYER SCOUTING SECTION
@@ -537,6 +813,16 @@ if app_section == 'Player Scouting':
             st.subheader('Player Role Profile')
             prof = player_profile(df_scored, player_col, selected_player, selected_metrics, top_n=5)
             st.info(profile_text(selected_player, prof))
+
+            st.subheader('Recommendation Text Generator')
+            try:
+                rec_txt = recommendation_text(
+                    df_scored, player_col=player_col, player_name=selected_player, metrics=selected_metrics,
+                    role=role, team_col=team_col, position_col=position_col, age_col=age_col, minutes_col=minutes_col
+                )
+                st.markdown(rec_txt)
+            except Exception as e:
+                st.warning(f'Recommendation text error: {e}')
             player_rows = df_scored[df_scored[player_col].astype(str) == str(selected_player)].copy()
             show_cols = [c for c in [player_col, team_col, position_col, age_col, minutes_col, 'Scouting Score'] if c and c in df_scored.columns]
             st.dataframe(player_rows[show_cols + selected_metrics].head(1), use_container_width=True)
