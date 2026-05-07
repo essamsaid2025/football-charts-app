@@ -7,7 +7,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-from PIL import Image
+from PIL import Image, ImageDraw
 from matplotlib.backends.backend_pdf import PdfPages
 
 from charts import (
@@ -64,10 +64,13 @@ except Exception:
 
 try:
     import plotly.graph_objects as go
-    from streamlit_plotly_events import plotly_events
 except Exception:
     go = None
-    plotly_events = None
+
+try:
+    from streamlit_image_coordinates import streamlit_image_coordinates
+except Exception:
+    streamlit_image_coordinates = None
 
 
 st.set_page_config(
@@ -236,6 +239,43 @@ st.markdown(
             border-radius: 14px !important;
             border: 1px solid #243041 !important;
             background: rgba(15,23,42,0.55) !important;
+        }
+
+
+        /* Dark sidebar fix */
+        section[data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #050b16 0%, #081426 100%) !important;
+            border-right: 1px solid #243041 !important;
+        }
+        section[data-testid="stSidebar"] * {
+            color: #f8fafc !important;
+        }
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] p,
+        section[data-testid="stSidebar"] span,
+        section[data-testid="stSidebar"] div {
+            color: #f8fafc !important;
+            opacity: 1 !important;
+        }
+        section[data-testid="stSidebar"] div[role="radiogroup"] label {
+            background: rgba(15,23,42,0.72) !important;
+            border-radius: 12px !important;
+            padding: 6px 8px !important;
+            margin-bottom: 6px !important;
+        }
+        section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
+            background: rgba(30,41,59,0.95) !important;
+        }
+        section[data-testid="stSidebar"] input,
+        section[data-testid="stSidebar"] textarea {
+            background: #0f172a !important;
+            color: #f8fafc !important;
+            border: 1px solid #334155 !important;
+        }
+        section[data-testid="stSidebar"] div[data-baseweb="select"] > div {
+            background: #0f172a !important;
+            color: #f8fafc !important;
+            border: 1px solid #334155 !important;
         }
     </style>
     """,
@@ -627,6 +667,107 @@ def _event_color(event_type: str) -> str:
     return colors.get(str(event_type).lower(), "#FFFFFF")
 
 
+
+def _pitch_to_img(x, y, w, h, y_max):
+    return int(round((float(x) / 100.0) * w)), int(round(h - (float(y) / float(y_max)) * h))
+
+
+def _draw_arrow(draw, start, end, color, width=5):
+    import math
+    x1, y1 = start
+    x2, y2 = end
+    draw.line([start, end], fill=color, width=width)
+    ang = math.atan2(y2 - y1, x2 - x1)
+    size = 15
+    a1 = ang + math.pi * 0.82
+    a2 = ang - math.pi * 0.82
+    p1 = (x2 + size * math.cos(a1), y2 + size * math.sin(a1))
+    p2 = (x2 + size * math.cos(a2), y2 + size * math.sin(a2))
+    draw.polygon([(x2, y2), p1, p2], fill=color)
+
+
+def _draw_point(draw, x, y, w, h, y_max, fill, outline="#FFFFFF", label=None, r=9):
+    px, py = _pitch_to_img(x, y, w, h, y_max)
+    draw.ellipse([px-r, py-r, px+r, py+r], fill=fill, outline=outline, width=3)
+    if label:
+        draw.text((px + 10, py - 18), str(label), fill=outline)
+
+
+def make_click_pitch_image(theme_name, pitch_mode, pitch_width, display_w=900):
+    theme = _tag_theme(theme_name)
+    y_max = _tag_y_max(pitch_mode, pitch_width)
+    display_h = int(round(display_w * y_max / 100.0))
+    bg = theme.get("pitch", "#1f5f3b")
+    line = theme.get("pitch_lines", "#E6E6E6")
+    img = Image.new("RGB", (display_w, display_h), bg)
+    draw = ImageDraw.Draw(img)
+
+    def P(x, y):
+        return _pitch_to_img(x, y, display_w, display_h, y_max)
+
+    lw = 3
+    # outer pitch
+    draw.rectangle([P(0, 0), P(100, y_max)], outline=line, width=lw)
+    # halfway
+    draw.line([P(50, 0), P(50, y_max)], fill=line, width=lw)
+    # center circle / spot
+    cx, cy = P(50, y_max / 2)
+    rx = int(display_w * 8.7 / 100)
+    ry = int(display_h * 8.7 / y_max)
+    draw.ellipse([cx-rx, cy-ry, cx+rx, cy+ry], outline=line, width=lw)
+    draw.ellipse([cx-3, cy-3, cx+3, cy+3], fill=line)
+
+    # boxes approximate on 100 x y_max pitch
+    pen_len = 15.8
+    six_len = 5.3
+    pen_w = y_max * 40.3 / 68.0
+    six_w = y_max * 18.3 / 68.0
+    mid = y_max / 2
+    # left / right penalty boxes
+    draw.rectangle([P(0, mid - pen_w/2), P(pen_len, mid + pen_w/2)], outline=line, width=lw)
+    draw.rectangle([P(100-pen_len, mid - pen_w/2), P(100, mid + pen_w/2)], outline=line, width=lw)
+    draw.rectangle([P(0, mid - six_w/2), P(six_len, mid + six_w/2)], outline=line, width=lw)
+    draw.rectangle([P(100-six_len, mid - six_w/2), P(100, mid + six_w/2)], outline=line, width=lw)
+    # penalty spots
+    for sx in (11, 89):
+        px, py = P(sx, mid)
+        draw.ellipse([px-3, py-3, px+3, py+3], fill=line)
+
+    # saved events
+    if st.session_state.get("tag_events"):
+        d = pd.DataFrame(st.session_state.tag_events)
+        for _, r in d.iterrows():
+            try:
+                et = str(r.get("event_type", "")).lower()
+                col = _event_color(et)
+                x, y = float(r.get("x", 0)), float(r.get("y", 0))
+                x2, y2 = r.get("x2"), r.get("y2")
+                if et in ["pass", "carry", "dribble", "cross"] and pd.notna(x2) and pd.notna(y2):
+                    _draw_arrow(draw, P(x, y), P(float(x2), float(y2)), col, width=5)
+                    _draw_point(draw, x, y, display_w, display_h, y_max, col, r=6)
+                else:
+                    _draw_point(draw, x, y, display_w, display_h, y_max, col, r=9)
+            except Exception:
+                pass
+
+    # current selected points
+    if st.session_state.get("tag_start"):
+        sx, sy = st.session_state.tag_start
+        _draw_point(draw, sx, sy, display_w, display_h, y_max, "#22C55E", label="START", r=10)
+    if st.session_state.get("tag_end"):
+        ex, ey = st.session_state.tag_end
+        _draw_point(draw, ex, ey, display_w, display_h, y_max, "#EF4444", label="END", r=10)
+    if st.session_state.get("tag_start") and st.session_state.get("tag_end"):
+        sx, sy = st.session_state.tag_start
+        ex, ey = st.session_state.tag_end
+        _draw_arrow(draw, P(sx, sy), P(ex, ey), "#22C55E", width=4)
+    if st.session_state.get("tag_last_click"):
+        cx, cy = st.session_state.tag_last_click
+        _draw_point(draw, cx, cy, display_w, display_h, y_max, "#FFFFFF", outline="#EF4444", label="CLICK", r=9)
+
+    return img, display_w, display_h, y_max
+
+
 def make_click_pitch(theme_name, pitch_mode, pitch_width):
     theme = _tag_theme(theme_name)
     y_max = _tag_y_max(pitch_mode, pitch_width)
@@ -723,10 +864,10 @@ def run_tagging_tool():
         unsafe_allow_html=True,
     )
 
-    if go is None or plotly_events is None:
+    if streamlit_image_coordinates is None:
         st.error("Missing dependency for click tagging.")
         st.info("Add this to requirements.txt then reboot the app:")
-        st.code("plotly\nstreamlit-plotly-events")
+        st.code("streamlit-image-coordinates")
         st.stop()
 
     control_col, pitch_col = st.columns([1.0, 1.65], gap="large")
@@ -810,24 +951,21 @@ def run_tagging_tool():
 
     with pitch_col:
         st.markdown('<div class="preview-shell">', unsafe_allow_html=True)
-        fig = make_click_pitch(tag_theme, tag_pitch_mode, tag_pitch_width)
-        clicked = plotly_events(
-            fig,
-            click_event=True,
-            hover_event=False,
-            select_event=False,
-            override_height=650,
-            key=f"tag_click_pitch_{st.session_state.tag_click_counter}",
+        pitch_img, img_w, img_h, y_max = make_click_pitch_image(tag_theme, tag_pitch_mode, tag_pitch_width, display_w=950)
+        coords = streamlit_image_coordinates(
+            pitch_img,
+            key=f"tag_image_pitch_{tag_theme}_{tag_pitch_mode}_{tag_pitch_width}_{st.session_state.tag_click_counter}",
         )
-        if clicked:
-            p = clicked[-1]
+        if coords and coords.get("x") is not None and coords.get("y") is not None:
             try:
-                x = round(float(p.get("x")), 2)
-                y = round(float(p.get("y")), 2)
-                if 0 <= x <= 100 and 0 <= y <= _tag_y_max(tag_pitch_mode, tag_pitch_width):
-                    st.session_state.tag_last_click = (x, y)
-                    st.session_state.tag_click_counter += 1
-                    st.rerun()
+                x = round((float(coords.get("x")) / float(img_w)) * 100.0, 2)
+                y = round(y_max - ((float(coords.get("y")) / float(img_h)) * y_max), 2)
+                if 0 <= x <= 100 and 0 <= y <= y_max:
+                    new_click = (x, y)
+                    if st.session_state.tag_last_click != new_click:
+                        st.session_state.tag_last_click = new_click
+                        st.session_state.tag_click_counter += 1
+                        st.rerun()
             except Exception:
                 pass
 
