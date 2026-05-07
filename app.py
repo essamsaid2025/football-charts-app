@@ -35,7 +35,7 @@ try:
 except Exception:
     st_canvas = None
 
-from scouting_tools import (
+from scouting_tools_v2 import (
     ROLE_TEMPLATES,
     standard_columns,
     numeric_metrics as scouting_numeric_metrics,
