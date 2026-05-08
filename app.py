@@ -363,11 +363,37 @@ def run_player_scouting_module():
         return pd.to_numeric(series.astype(str).str.replace("%", "", regex=False).str.replace(",", "", regex=False), errors="coerce")
 
     def _pct_rank(s, higher=True):
+        # True percentile vs the selected peer group:
+        # percentile = % players below + half of tied players.
+        # This prevents tiny/invalid groups from making everyone 100.
         x = pd.to_numeric(s, errors="coerce")
-        pct = x.rank(pct=True, method="average") * 100
-        if not higher:
-            pct = 100 - pct
-        return pct.clip(0, 100)
+        valid = x.dropna()
+        if len(valid) == 0:
+            return pd.Series(np.nan, index=x.index)
+        out = pd.Series(np.nan, index=x.index, dtype=float)
+        denom = float(len(valid))
+        vals = valid.to_numpy(dtype=float)
+        for idx, v in x.dropna().items():
+            base = ((vals < float(v)).sum() + 0.5 * (vals == float(v)).sum()) / denom * 100.0
+            out.loc[idx] = base if higher else (100.0 - base)
+        return out.clip(0, 100)
+
+    def _is_numeric_like_col(df0, col):
+        if not col or col not in df0.columns:
+            return False
+        ser = pd.to_numeric(df0[col].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False), errors='coerce')
+        return ser.notna().mean() >= 0.70
+
+    def _valid_position_col(df0, col):
+        # A real position column should be categorical, not values like 7.95 / 0.36 / 73.9.
+        if not col or col not in df0.columns:
+            return None
+        if _is_numeric_like_col(df0, col):
+            return None
+        nunique = df0[col].dropna().astype(str).nunique()
+        if nunique == 0 or nunique > max(30, len(df0) * 0.45):
+            return None
+        return col
 
     def _make_scored(df_in, metrics, lower_better, group_col=None, minutes_col=None, minutes_floor=900, reliability=True, weights=None):
         out = df_in.copy()
@@ -465,8 +491,11 @@ def run_player_scouting_module():
         all_cols = [None] + df_raw.columns.tolist()
         player_col = st.selectbox("Player column", all_cols, index=all_cols.index(cols["player"]) if cols["player"] in all_cols else 0, key="scout_player_col")
         team_col = st.selectbox("Team column", all_cols, index=all_cols.index(cols["team"]) if cols["team"] in all_cols else 0, key="scout_team_col")
-        position_col = st.selectbox("Position column", all_cols, index=all_cols.index(cols["position"]) if cols["position"] in all_cols else 0, key="scout_position_col")
+        position_col_raw = st.selectbox("Position column", all_cols, index=all_cols.index(cols["position"]) if cols["position"] in all_cols else 0, key="scout_position_col_v3")
         age_col = st.selectbox("Age column", all_cols, index=all_cols.index(cols["age"]) if cols["age"] in all_cols else 0, key="scout_age_col")
+        position_col = _valid_position_col(df_raw, position_col_raw)
+        if position_col_raw and position_col is None:
+            st.warning(f"'{position_col_raw}' looks numeric/not a real position column, so I ignored it for same-position percentiles.")
         minutes_col = st.selectbox("Minutes column", all_cols, index=all_cols.index(cols["minutes"]) if cols["minutes"] in all_cols else 0, key="scout_minutes_col")
         value_col = st.selectbox("Market value column", all_cols, index=all_cols.index(cols["market_value"]) if cols["market_value"] in all_cols else 0, key="scout_value_col")
 
@@ -526,6 +555,13 @@ def run_player_scouting_module():
                 weights[m] = st.number_input(str(m), min_value=0.1, max_value=3.0, value=1.0, step=0.1, key=f"weight_{m}")
 
     group_col = position_col if compare_scope == "Same position only" and position_col else None
+    if compare_scope == "Same position only" and not group_col:
+        st.info("No valid position column detected, so percentiles are calculated against the filtered players.")
+    if group_col:
+        group_sizes = df_filtered.groupby(group_col, dropna=False).size()
+        too_small = group_sizes[group_sizes < 5]
+        if len(too_small):
+            st.warning("Some position groups have fewer than 5 players; small groups can make percentiles unstable. Use 'Filtered players' for a bigger peer group.")
     df_scored = _make_scored(df_filtered, custom_metrics, lower_better, group_col=group_col, minutes_col=minutes_col, minutes_floor=reliability_floor, reliability=use_reliability, weights=weights)
     score_col = "Adjusted Score" if use_reliability else "Scouting Score"
 
