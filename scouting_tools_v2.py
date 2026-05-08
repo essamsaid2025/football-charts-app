@@ -231,10 +231,16 @@ def infer_role_from_position(pos: str) -> Optional[str]:
 
 def percentile_series(s: pd.Series, higher_is_better: bool = True) -> pd.Series:
     x = pd.to_numeric(s, errors="coerce")
-    pct = x.rank(pct=True) * 100
-    if not higher_is_better:
-        pct = 100 - pct
-    return pct
+    valid = x.dropna()
+    if len(valid) == 0:
+        return pd.Series(np.nan, index=x.index)
+    vals = valid.to_numpy(dtype=float)
+    denom = float(len(vals))
+    out = pd.Series(np.nan, index=x.index, dtype=float)
+    for idx, v in x.dropna().items():
+        base = ((vals < float(v)).sum() + 0.5 * (vals == float(v)).sum()) / denom * 100.0
+        out.loc[idx] = base if higher_is_better else (100.0 - base)
+    return out.clip(0, 100)
 
 
 def is_negative_metric(metric: str) -> bool:
