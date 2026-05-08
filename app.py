@@ -321,50 +321,127 @@ st.markdown(
 # =========================================================
 # SCOUTING MODULE
 # =========================================================
+
 def run_player_scouting_module():
     if ROLE_TEMPLATES is None:
-        st.error("scouting_tools.py is missing. Upload scouting_tools.py beside app.py in the same GitHub repo.")
+        st.error("scouting_tools_v2.py is missing. Upload scouting_tools_v2.py beside app.py in the same GitHub repo.")
         st.stop()
 
     st.markdown(
         """
         <div class="app-header">
             <div class="app-title">🧠 Player Scouting</div>
-            <div class="app-subtitle">Role profiles • Position templates • Player comparison • Auto insights generator</div>
+            <div class="app-subtitle">Clean scoring • Role templates • Percentiles • Similar players • Shortlist • Data quality checks</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
+    def _clean_txt(x):
+        return str(x).strip().lower().replace("_", " ").replace("-", " ")
+
+    def _infer_role_from_pos(pos):
+        p = _clean_txt(pos)
+        pos_map = {
+            "gk": "Goalkeeper", "goalkeeper": "Goalkeeper",
+            "cb": "Centre Back", "rcb": "Centre Back", "lcb": "Centre Back", "centre back": "Centre Back", "center back": "Centre Back",
+            "rb": "Full Back / Wing Back", "lb": "Full Back / Wing Back", "rwb": "Full Back / Wing Back", "lwb": "Full Back / Wing Back", "full back": "Full Back / Wing Back",
+            "dm": "Defensive Midfielder", "cdm": "Defensive Midfielder", "defensive midfielder": "Defensive Midfielder",
+            "cm": "Central Midfielder", "mc": "Central Midfielder", "central midfielder": "Central Midfielder",
+            "am": "Attacking Midfielder", "cam": "Attacking Midfielder", "attacking midfielder": "Attacking Midfielder",
+            "rw": "Winger", "lw": "Winger", "winger": "Winger", "wide midfielder": "Winger",
+            "st": "Striker", "cf": "Striker", "striker": "Striker", "centre forward": "Striker", "center forward": "Striker",
+        }
+        if p in pos_map:
+            return pos_map[p]
+        for k, v in pos_map.items():
+            if k in p:
+                return v
+        return "Winger" if "Winger" in ROLE_TEMPLATES else list(ROLE_TEMPLATES.keys())[0]
+
+    def _safe_numeric(series):
+        return pd.to_numeric(series.astype(str).str.replace("%", "", regex=False).str.replace(",", "", regex=False), errors="coerce")
+
+    def _pct_rank(s, higher=True):
+        x = pd.to_numeric(s, errors="coerce")
+        pct = x.rank(pct=True, method="average") * 100
+        if not higher:
+            pct = 100 - pct
+        return pct.clip(0, 100)
+
+    def _make_scored(df_in, metrics, lower_better, group_col=None, minutes_col=None, minutes_floor=900, reliability=True, weights=None):
+        out = df_in.copy()
+        pct_cols = []
+        weights = weights or {}
+        for m in metrics:
+            if m not in out.columns:
+                continue
+            out[m] = _safe_numeric(out[m])
+            pc = f"pct__{m}"
+            higher = m not in lower_better
+            if group_col and group_col in out.columns:
+                out[pc] = out.groupby(group_col, dropna=False)[m].transform(lambda x: _pct_rank(x, higher))
+            else:
+                out[pc] = _pct_rank(out[m], higher)
+            pct_cols.append(pc)
+        if not pct_cols:
+            out["Scouting Score"] = np.nan
+            out["Reliability"] = np.nan
+            out["Adjusted Score"] = np.nan
+            return out
+        w = np.array([float(weights.get(c.replace("pct__", ""), 1.0)) for c in pct_cols], dtype=float)
+        w = np.where(np.isfinite(w), w, 1.0)
+        mat = out[pct_cols].astype(float)
+        out["Scouting Score"] = mat.mul(w, axis=1).sum(axis=1) / mat.notna().mul(w, axis=1).sum(axis=1).replace(0, np.nan)
+        out["Scouting Score"] = out["Scouting Score"].round(1)
+        if reliability and minutes_col and minutes_col in out.columns:
+            mins = pd.to_numeric(out[minutes_col], errors="coerce").fillna(0)
+            out["Reliability"] = (mins / float(max(minutes_floor, 1))).clip(0, 1).round(2)
+            out["Adjusted Score"] = (out["Scouting Score"] * (0.65 + 0.35 * out["Reliability"])).round(1)
+        else:
+            out["Reliability"] = 1.0
+            out["Adjusted Score"] = out["Scouting Score"]
+        return out
+
+    def _label(score):
+        if pd.isna(score): return "Not enough data"
+        if score >= 82: return "Elite / Priority"
+        if score >= 70: return "Strong option"
+        if score >= 58: return "Good watchlist"
+        if score >= 45: return "Average / needs video"
+        return "Risky"
+
+    def _profile_from_row(df_scored, player_name, metrics, score_col="Adjusted Score", top_n=6):
+        row = df_scored[df_scored[player_col].astype(str) == str(player_name)]
+        if row.empty:
+            return {}, pd.DataFrame(), pd.DataFrame()
+        r = row.iloc[0]
+        pairs = []
+        for m in metrics:
+            pc = f"pct__{m}"
+            if pc in df_scored.columns and pd.notna(r.get(pc)):
+                pairs.append({"Metric": m, "Raw Value": r.get(m, np.nan), "Percentile": round(float(r.get(pc)), 1), "Direction": "Lower is better" if m in lower_better else "Higher is better"})
+        detail = pd.DataFrame(pairs).sort_values("Percentile", ascending=False)
+        strengths = detail.head(top_n).copy()
+        concerns = detail.tail(top_n).sort_values("Percentile").copy()
+        info = {
+            "score": r.get(score_col, np.nan),
+            "raw_score": r.get("Scouting Score", np.nan),
+            "reliability": r.get("Reliability", np.nan),
+            "label": _label(r.get(score_col, np.nan)),
+        }
+        return info, strengths, concerns
+
     with st.sidebar:
         st.markdown("### 📁 Scouting Data")
-        uploaded_scouting = st.file_uploader(
-            "Upload player scouting file",
-            type=["csv", "xlsx", "xls"],
-            key="scouting_file_uploader",
-        )
-        st.download_button(
-            "⬇️ Download Scouting Template",
-            data=make_template_csv(),
-            file_name="scouting_template.csv",
-            mime="text/csv",
-            key="download_scouting_template",
-        )
-
+        uploaded_scouting = st.file_uploader("Upload player scouting file", type=["csv", "xlsx", "xls"], key="scouting_file_uploader")
+        st.download_button("⬇️ Download Scouting Template", data=make_template_csv(), file_name="scouting_template.csv", mime="text/csv", key="download_scouting_template")
         st.markdown("---")
         st.markdown("### ⚙️ Scouting Settings")
-        min_minutes_global = st.number_input(
-            "Default minimum minutes",
-            min_value=0,
-            value=300,
-            step=50,
-            key="scouting_min_minutes_global",
-        )
-        compare_by_position = st.checkbox(
-            "Compare percentiles within same position",
-            value=True,
-            key="scouting_compare_by_position",
-        )
+        min_minutes_global = st.number_input("Default minimum minutes", min_value=0, value=300, step=50, key="scouting_min_minutes_global")
+        compare_scope = st.radio("Percentile comparison scope", ["Filtered players", "Same position only"], index=1, key="scouting_compare_scope")
+        use_reliability = st.checkbox("Use minutes reliability adjustment", value=True, key="scouting_reliability")
+        reliability_floor = st.number_input("Reliable sample = minutes", min_value=1, value=900, step=50, key="scouting_reliability_floor")
 
     if uploaded_scouting is None:
         st.info("Upload a player scouting file to start. You can use the scouting template from the sidebar.")
@@ -375,7 +452,6 @@ def run_player_scouting_module():
     except Exception as e:
         st.error(f"Could not read file: {e}")
         st.stop()
-
     if df_raw.empty:
         st.error("The uploaded file is empty.")
         st.stop()
@@ -404,17 +480,9 @@ def run_player_scouting_module():
 
     f1, f2, f3, f4 = st.columns(4)
     with f1:
-        if position_col:
-            positions = sorted(df[position_col].dropna().astype(str).unique().tolist())
-            selected_positions = st.multiselect("Filter positions", positions, default=[], key="scout_filter_positions")
-        else:
-            selected_positions = []
+        selected_positions = st.multiselect("Filter positions", sorted(df[position_col].dropna().astype(str).unique().tolist()), default=[], key="scout_filter_positions") if position_col else []
     with f2:
-        if team_col:
-            teams = sorted(df[team_col].dropna().astype(str).unique().tolist())
-            selected_teams = st.multiselect("Filter teams", teams, default=[], key="scout_filter_teams")
-        else:
-            selected_teams = []
+        selected_teams = st.multiselect("Filter teams", sorted(df[team_col].dropna().astype(str).unique().tolist()), default=[], key="scout_filter_teams") if team_col else []
     with f3:
         min_minutes = st.number_input("Min minutes", min_value=0, value=int(min_minutes_global), step=50, key="scout_min_minutes")
     with f4:
@@ -429,34 +497,44 @@ def run_player_scouting_module():
         df_filtered = df_filtered[pd.to_numeric(df_filtered[minutes_col], errors="coerce").fillna(0) >= min_minutes].copy()
     if max_age > 0 and age_col:
         df_filtered = df_filtered[pd.to_numeric(df_filtered[age_col], errors="coerce") <= max_age].copy()
-
     if df_filtered.empty:
         st.warning("No players match current filters.")
         st.stop()
 
     role_options = list(ROLE_TEMPLATES.keys())
-    role = st.selectbox(
-        "🎯 Choose role / position template",
-        role_options,
-        index=role_options.index("Winger") if "Winger" in role_options else 0,
-        key="scout_role_template",
-    )
+    auto_role = "Winger"
+    if position_col and len(df_filtered[position_col].dropna()):
+        auto_role = _infer_role_from_pos(df_filtered[position_col].dropna().astype(str).mode().iloc[0])
+    role = st.selectbox("🎯 Choose role / position template", role_options, index=role_options.index(auto_role) if auto_role in role_options else 0, key="scout_role_template")
     matched_metrics, missing_template_metrics, metric_mapping = match_template_metrics(df_filtered, role)
 
-    default_metrics = matched_metrics[:12] if matched_metrics else metric_cols[:8]
-    custom_metrics = st.multiselect(
-        "Metrics used for score/comparison",
-        metric_cols,
-        default=default_metrics,
-        key="scout_custom_metrics",
-    )
-
+    default_metrics = matched_metrics[:14] if matched_metrics else metric_cols[:10]
+    custom_metrics = st.multiselect("Metrics used for score/comparison", metric_cols, default=default_metrics, key="scout_custom_metrics")
     if not custom_metrics:
         st.error("Choose at least one numeric metric.")
         st.stop()
 
-    group_col = position_col if compare_by_position and position_col else None
-    df_scored = add_percentiles_and_score(df_filtered, custom_metrics, group_col=group_col)
+    guessed_negative = [m for m in custom_metrics if any(w in _clean_txt(m) for w in ["conceded", "foul", "error", "mistake", "turnover", "dispossessed", "card", "lost"])]
+    lower_better = st.multiselect("Lower is better metrics", custom_metrics, default=guessed_negative, help="Important: turnovers, fouls, errors, goals conceded etc should be lower-is-better.", key="scout_lower_better")
+
+    with st.expander("Metric weights (optional)", expanded=False):
+        st.caption("1.0 = normal. Raise important role metrics to 1.5/2.0. Set weak/noisy metrics to 0.5.")
+        weights = {}
+        weight_cols = st.columns(3)
+        for i, m in enumerate(custom_metrics):
+            with weight_cols[i % 3]:
+                weights[m] = st.number_input(str(m), min_value=0.1, max_value=3.0, value=1.0, step=0.1, key=f"weight_{m}")
+
+    group_col = position_col if compare_scope == "Same position only" and position_col else None
+    df_scored = _make_scored(df_filtered, custom_metrics, lower_better, group_col=group_col, minutes_col=minutes_col, minutes_floor=reliability_floor, reliability=use_reliability, weights=weights)
+    score_col = "Adjusted Score" if use_reliability else "Scouting Score"
+
+    # Basic quality flags
+    metric_coverage = df_scored[custom_metrics].notna().mean(axis=1).round(2)
+    df_scored["Metric Coverage"] = metric_coverage
+    if value_col and value_col in df_scored.columns:
+        val = pd.to_numeric(df_scored[value_col], errors="coerce")
+        df_scored["Value Score"] = (df_scored[score_col] / np.log10(val.clip(lower=1) + 10)).round(2)
 
     k1, k2, k3, k4 = st.columns(4)
     with k1:
@@ -464,53 +542,62 @@ def run_player_scouting_module():
     with k2:
         st.markdown(f'<div class="small-kpi"><div class="label">Metrics</div><div class="value">{len(custom_metrics)}</div></div>', unsafe_allow_html=True)
     with k3:
-        avg_score = df_scored["Scouting Score"].mean()
-        st.markdown(f'<div class="small-kpi"><div class="label">Avg Score</div><div class="value">{avg_score:.1f}</div></div>', unsafe_allow_html=True)
+        avg_score = df_scored[score_col].mean()
+        st.markdown(f'<div class="small-kpi"><div class="label">Avg {score_col}</div><div class="value">{avg_score:.1f}</div></div>', unsafe_allow_html=True)
     with k4:
-        top_name = df_scored.sort_values("Scouting Score", ascending=False).iloc[0][player_col]
+        top_name = df_scored.sort_values(score_col, ascending=False).iloc[0][player_col]
         st.markdown(f'<div class="small-kpi"><div class="label">Top Player</div><div class="value" style="font-size:1rem;">{top_name}</div></div>', unsafe_allow_html=True)
 
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🧬 Player Profile", "⚔️ Compare", "🏆 Ranking", "💡 Insights", "⭐ Shortlist", "📋 Data Check"])
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🧬 Role Profile", "⚔️ Player Comparison", "💡 Auto Insights", "⭐ Shortlist", "📋 Template Check"])
+    players = sorted(df_scored[player_col].dropna().astype(str).unique().tolist())
 
     with tab1:
-        players = sorted(df_scored[player_col].dropna().astype(str).unique().tolist())
         selected_player = st.selectbox("Choose player", players, key="scouting_profile_player")
-        prof = player_profile(df_scored, player_col, selected_player, custom_metrics, top_n=5)
-
-        c1, c2 = st.columns([0.9, 1.4])
+        info, strengths_df, concerns_df = _profile_from_row(df_scored, selected_player, custom_metrics, score_col=score_col, top_n=6)
+        row = df_scored[df_scored[player_col].astype(str) == str(selected_player)].iloc[0]
+        c1, c2 = st.columns([0.95, 1.45])
         with c1:
-            score = prof.get("score")
-            label = prof.get("label", "")
+            score = info.get("score", np.nan)
             st.markdown(f"""
             <div class="panel-card">
               <div class="panel-title">{selected_player}</div>
               <div class="panel-note">Role: {role}</div>
-              <div style="font-size:2rem;font-weight:900;color:white;">{'NA' if pd.isna(score) else f'{score:.1f}/100'}</div>
-              <div style="font-size:1.05rem;font-weight:800;color:white;">{label}</div>
+              <div style="font-size:2rem;font-weight:900;color:white;">{'NA' if pd.isna(score) else f'{float(score):.1f}/100'}</div>
+              <div style="font-size:1.05rem;font-weight:800;color:white;">{info.get('label','')}</div>
+              <div class="panel-note">Raw score: {row.get('Scouting Score', np.nan)} | Reliability: {row.get('Reliability', np.nan)}</div>
             </div>
             """, unsafe_allow_html=True)
-            st.text_area("Auto profile text", profile_text(selected_player, prof), height=160, key="scout_profile_text")
-
+            rec = ""
+            if recommendation_text is not None:
+                try:
+                    rec = recommendation_text(df_scored, player_col, selected_player, custom_metrics, role=role, team_col=team_col, position_col=position_col, age_col=age_col, minutes_col=minutes_col)
+                except Exception:
+                    rec = ""
+            if not rec:
+                top_txt = ", ".join([f"{r['Metric']} ({r['Percentile']:.0f}th)" for _, r in strengths_df.head(3).iterrows()])
+                weak_txt = ", ".join([f"{r['Metric']} ({r['Percentile']:.0f}th)" for _, r in concerns_df.head(3).iterrows()])
+                rec = f"{selected_player}: {info.get('label','')} with {score_col} {'NA' if pd.isna(score) else round(float(score),1)}. Strengths: {top_txt}. Watch-outs: {weak_txt}."
+            st.text_area("Scout recommendation", rec, height=210, key="scout_recommendation_text")
         with c2:
             st.subheader("Strengths")
-            strengths_df = pd.DataFrame(prof.get("strengths", []), columns=["Metric", "Percentile"])
             st.dataframe(strengths_df, use_container_width=True, hide_index=True)
             st.subheader("Weaknesses / Watch-outs")
-            weaknesses_df = pd.DataFrame(prof.get("weaknesses", []), columns=["Metric", "Percentile"])
-            st.dataframe(weaknesses_df, use_container_width=True, hide_index=True)
+            st.dataframe(concerns_df, use_container_width=True, hide_index=True)
 
         st.subheader("Similar Players")
-        sim = similar_players(df_scored, player_col, selected_player, custom_metrics, top_n=7)
-        show_cols = [player_col]
-        for c in [team_col, position_col, age_col, minutes_col, "Scouting Score", "Similarity Distance"]:
-            if c and c in sim.columns and c not in show_cols:
-                show_cols.append(c)
-        st.dataframe(sim[show_cols], use_container_width=True, hide_index=True)
+        try:
+            sim = similar_players(df_scored, player_col, selected_player, custom_metrics, top_n=8)
+            show_cols = [player_col]
+            for c in [team_col, position_col, age_col, minutes_col, score_col, "Similarity Distance"]:
+                if c and c in sim.columns and c not in show_cols:
+                    show_cols.append(c)
+            st.dataframe(sim[show_cols], use_container_width=True, hide_index=True)
+        except Exception as e:
+            st.info(f"Similar players unavailable: {e}")
 
     with tab2:
-        players = sorted(df_scored[player_col].dropna().astype(str).unique().tolist())
         c1, c2, c3 = st.columns([1, 1, 1.2])
         with c1:
             p1 = st.selectbox("Player A", players, index=0, key="scout_compare_p1")
@@ -519,49 +606,49 @@ def run_player_scouting_module():
             p2 = st.selectbox("Player B", players, index=default_idx, key="scout_compare_p2")
         with c3:
             chart_type = st.radio("Chart", ["Bar", "Radar"], horizontal=True, key="scout_compare_chart")
-
         compare_metrics = st.multiselect("Comparison metrics", custom_metrics, default=custom_metrics[:8], key="scout_compare_metrics")
         if p1 == p2:
             st.warning("Choose two different players.")
         elif compare_metrics:
             try:
-                if chart_type == "Bar":
-                    fig = comparison_chart(df_scored, player_col, p1, p2, compare_metrics, use_percentiles=True)
-                else:
-                    fig = radar_chart(df_scored, player_col, p1, p2, compare_metrics)
+                fig = comparison_chart(df_scored, player_col, p1, p2, compare_metrics, use_percentiles=True) if chart_type == "Bar" else radar_chart(df_scored, player_col, p1, p2, compare_metrics)
                 st.pyplot(fig, use_container_width=True)
             except Exception as e:
                 st.error(str(e))
-
             rows = df_scored[df_scored[player_col].astype(str).isin([str(p1), str(p2)])].copy()
             table_cols = [player_col]
-            for c in [team_col, position_col, age_col, minutes_col, "Scouting Score"] + compare_metrics:
+            for c in [team_col, position_col, age_col, minutes_col, "Scouting Score", "Adjusted Score", "Reliability"] + compare_metrics:
                 if c and c in rows.columns and c not in table_cols:
                     table_cols.append(c)
             st.dataframe(rows[table_cols], use_container_width=True, hide_index=True)
 
     with tab3:
+        st.subheader("Top Ranked Players")
+        top_cols = [player_col]
+        for c in [team_col, position_col, age_col, minutes_col, value_col, "Scouting Score", "Adjusted Score", "Reliability", "Metric Coverage", "Value Score"]:
+            if c and c in df_scored.columns and c not in top_cols:
+                top_cols.append(c)
+        st.dataframe(df_scored.sort_values(score_col, ascending=False)[top_cols].head(100), use_container_width=True, hide_index=True)
+        st.download_button("⬇️ Export scored players CSV", data=df_scored.to_csv(index=False).encode("utf-8-sig"), file_name="scored_players.csv", mime="text/csv", key="download_scored_players")
+
+    with tab4:
         st.subheader("Dataset Insights")
         insights = auto_dataset_insights(df_scored, player_col, custom_metrics, team_col=team_col, age_col=age_col, minutes_col=minutes_col)
+        if value_col and "Value Score" in df_scored.columns:
+            best_value = df_scored.sort_values("Value Score", ascending=False).head(5)
+            names = ", ".join([f"{r[player_col]} ({r['Value Score']})" for _, r in best_value.iterrows() if pd.notna(r.get("Value Score"))])
+            if names:
+                insights.insert(1, f"Best value targets by score/value ratio: {names}.")
         if insights:
             for i, ins in enumerate(insights, start=1):
                 st.markdown(f"**{i}.** {ins}")
         else:
             st.info("Not enough data to generate insights.")
 
-        st.subheader("Top Ranked Players")
-        top_cols = [player_col]
-        for c in [team_col, position_col, age_col, minutes_col, value_col, "Scouting Score"]:
-            if c and c in df_scored.columns and c not in top_cols:
-                top_cols.append(c)
-        st.dataframe(df_scored.sort_values("Scouting Score", ascending=False)[top_cols].head(25), use_container_width=True, hide_index=True)
-
-    with tab4:
+    with tab5:
         st.subheader("Shortlist Builder")
         if "shortlist" not in st.session_state:
             st.session_state.shortlist = []
-
-        players = sorted(df_scored[player_col].dropna().astype(str).unique().tolist())
         c1, c2, c3 = st.columns([1, 1, 1.3])
         with c1:
             add_player = st.selectbox("Player", players, key="shortlist_player")
@@ -569,52 +656,39 @@ def run_player_scouting_module():
             status = st.selectbox("Status", ["Watch", "Follow", "Recommend", "Reject"], key="shortlist_status")
         with c3:
             note = st.text_input("Scout note", value="", key="shortlist_note")
-
         if st.button("Add to shortlist", key="add_to_shortlist"):
             row = df_scored[df_scored[player_col].astype(str) == str(add_player)].iloc[0]
-            item = {
-                "Player": add_player,
-                "Team": row.get(team_col, "") if team_col else "",
-                "Position": row.get(position_col, "") if position_col else "",
-                "Age": row.get(age_col, "") if age_col else "",
-                "Minutes": row.get(minutes_col, "") if minutes_col else "",
-                "Scouting Score": row.get("Scouting Score", ""),
-                "Status": status,
-                "Note": note,
-            }
+            item = {"Player": add_player, "Score": row.get(score_col, ""), "Status": status, "Note": note}
+            for c, label in [(team_col, "Team"), (position_col, "Position"), (age_col, "Age"), (minutes_col, "Minutes")]:
+                item[label] = row.get(c, "") if c else ""
             st.session_state.shortlist.append(item)
             st.success("Added to shortlist.")
-
         shortlist_df = pd.DataFrame(st.session_state.shortlist)
         if not shortlist_df.empty:
             st.dataframe(shortlist_df, use_container_width=True, hide_index=True)
-            st.download_button(
-                "⬇️ Export shortlist CSV",
-                data=shortlist_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name="scouting_shortlist.csv",
-                mime="text/csv",
-                key="download_shortlist_csv",
-            )
+            st.download_button("⬇️ Export shortlist CSV", data=shortlist_df.to_csv(index=False).encode("utf-8-sig"), file_name="scouting_shortlist.csv", mime="text/csv", key="download_shortlist_csv")
         else:
             st.info("No players in shortlist yet.")
 
-    with tab5:
-        st.subheader("Position Template Check")
-        st.write("Matched metrics in your file:")
+    with tab6:
+        st.subheader("Template Match Check")
         if metric_mapping:
             st.dataframe(pd.DataFrame([{"Template Metric": k, "File Column": v} for k, v in metric_mapping.items()]), use_container_width=True, hide_index=True)
         else:
             st.warning("No template metrics matched your file columns. Rename columns or choose custom metrics manually.")
-
-        st.write("Missing recommended metrics:")
         if missing_template_metrics:
+            st.write("Missing recommended metrics:")
             st.dataframe(pd.DataFrame({"Missing Metric": missing_template_metrics}), use_container_width=True, hide_index=True)
         else:
             st.success("All recommended template metrics were found.")
-
+        st.subheader("Metric Data Quality")
+        quality_rows = []
+        for m in custom_metrics:
+            s = pd.to_numeric(df_filtered[m], errors="coerce") if m in df_filtered.columns else pd.Series(dtype=float)
+            quality_rows.append({"Metric": m, "Valid Values": int(s.notna().sum()), "Missing": int(s.isna().sum()), "Mean": round(float(s.mean()), 2) if s.notna().any() else np.nan, "Lower Better": m in lower_better})
+        st.dataframe(pd.DataFrame(quality_rows), use_container_width=True, hide_index=True)
         st.subheader("Raw Data Preview")
         st.dataframe(df_raw.head(50), use_container_width=True)
-
 
 
 # =========================================================
@@ -624,6 +698,7 @@ def _tag_theme(theme_name: str) -> dict:
     return THEMES.get(theme_name, THEMES.get("The Athletic Dark", {}))
 
 
+
 def _init_tag_state():
     defaults = {
         "tag_events": [],
@@ -631,6 +706,8 @@ def _init_tag_state():
         "tag_end": None,
         "tag_last_click": None,
         "tag_click_counter": 0,
+        "tag_last_processed_click": None,
+        "tag_flash": "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -639,53 +716,6 @@ def _init_tag_state():
 
 def _tag_y_max(pitch_mode: str, pitch_width: float) -> float:
     return float(pitch_width if pitch_mode == "rect" else 100.0)
-
-
-def _add_plotly_pitch_shapes(fig, theme: dict, y_max: float):
-    line = theme.get("pitch_lines", "#E6E6E6")
-    pitch_col = theme.get("pitch", "#1f5f3b")
-    fig.update_layout(
-        paper_bgcolor=theme.get("bg", "#0E1117"),
-        plot_bgcolor=pitch_col,
-        margin=dict(l=10, r=10, t=45, b=10),
-        height=650,
-        dragmode=False,
-        clickmode="event+select",
-        showlegend=False,
-        font=dict(color=theme.get("text", "#FFFFFF")),
-    )
-    fig.update_xaxes(range=[-2, 102], showgrid=False, zeroline=False, visible=False, fixedrange=True)
-    fig.update_yaxes(range=[-2, y_max + 2], showgrid=False, zeroline=False, visible=False, fixedrange=True, scaleanchor="x", scaleratio=1)
-
-    def add_line(x0, y0, x1, y1, width=2):
-        fig.add_shape(type="line", x0=x0, y0=y0, x1=x1, y1=y1, line=dict(color=line, width=width), layer="below")
-
-    def add_rect(x0, y0, x1, y1, width=2):
-        fig.add_shape(type="rect", x0=x0, y0=y0, x1=x1, y1=y1, line=dict(color=line, width=width), fillcolor="rgba(0,0,0,0)", layer="below")
-
-    cy = y_max / 2.0
-    add_rect(0, 0, 100, y_max, 2)
-    add_line(50, 0, 50, y_max, 2)
-
-    box_w = y_max * (40.32 / 68.0)
-    six_w = y_max * (18.32 / 68.0)
-    pen_depth = 16.5 / 105.0 * 100.0
-    six_depth = 5.5 / 105.0 * 100.0
-    add_rect(0, cy - box_w / 2, pen_depth, cy + box_w / 2, 2)
-    add_rect(100 - pen_depth, cy - box_w / 2, 100, cy + box_w / 2, 2)
-    add_rect(0, cy - six_w / 2, six_depth, cy + six_w / 2, 2)
-    add_rect(100 - six_depth, cy - six_w / 2, 100, cy + six_w / 2, 2)
-
-    rad_x = 9.15 / 105.0 * 100.0
-    rad_y = 9.15 / 68.0 * y_max
-    fig.add_shape(type="circle", x0=50-rad_x, y0=cy-rad_y, x1=50+rad_x, y1=cy+rad_y, line=dict(color=line, width=2), fillcolor="rgba(0,0,0,0)", layer="below")
-    fig.add_trace(go.Scatter(x=[50, 11/105*100, 100-11/105*100], y=[cy, cy, cy], mode="markers", marker=dict(size=5, color=line), hoverinfo="skip"))
-
-    goal_w = y_max * (7.32 / 68.0)
-    add_line(0, cy-goal_w/2, -1.2, cy-goal_w/2, 2)
-    add_line(0, cy+goal_w/2, -1.2, cy+goal_w/2, 2)
-    add_line(100, cy-goal_w/2, 101.2, cy-goal_w/2, 2)
-    add_line(100, cy+goal_w/2, 101.2, cy+goal_w/2, 2)
 
 
 def _event_color(event_type: str) -> str:
@@ -702,9 +732,20 @@ def _event_color(event_type: str) -> str:
     return colors.get(str(event_type).lower(), "#FFFFFF")
 
 
+def _pitch_to_img(x, y, w, h, y_max, pad=18):
+    inner_w = max(1, w - 2 * pad)
+    inner_h = max(1, h - 2 * pad)
+    px = pad + int(round((float(x) / 100.0) * inner_w))
+    py = pad + int(round(inner_h - (float(y) / float(y_max)) * inner_h))
+    return px, py
 
-def _pitch_to_img(x, y, w, h, y_max):
-    return int(round((float(x) / 100.0) * w)), int(round(h - (float(y) / float(y_max)) * h))
+
+def _img_to_pitch(px, py, w, h, y_max, pad=18):
+    inner_w = max(1, w - 2 * pad)
+    inner_h = max(1, h - 2 * pad)
+    x = ((float(px) - pad) / inner_w) * 100.0
+    y = y_max - (((float(py) - pad) / inner_h) * y_max)
+    return round(x, 2), round(y, 2)
 
 
 def _draw_arrow(draw, start, end, color, width=5):
@@ -721,24 +762,25 @@ def _draw_arrow(draw, start, end, color, width=5):
     draw.polygon([(x2, y2), p1, p2], fill=color)
 
 
-def _draw_point(draw, x, y, w, h, y_max, fill, outline="#FFFFFF", label=None, r=9):
-    px, py = _pitch_to_img(x, y, w, h, y_max)
+def _draw_point(draw, x, y, w, h, y_max, fill, outline="#FFFFFF", label=None, r=9, pad=18):
+    px, py = _pitch_to_img(x, y, w, h, y_max, pad=pad)
     draw.ellipse([px-r, py-r, px+r, py+r], fill=fill, outline=outline, width=3)
     if label:
         draw.text((px + 10, py - 18), str(label), fill=outline)
 
 
-def make_click_pitch_image(theme_name, pitch_mode, pitch_width, display_w=900):
+def make_click_pitch_image(theme_name, pitch_mode, pitch_width, display_w=760):
     theme = _tag_theme(theme_name)
     y_max = _tag_y_max(pitch_mode, pitch_width)
-    display_h = int(round(display_w * y_max / 100.0))
+    pad = 22
+    display_h = int(round((display_w - 2 * pad) * y_max / 100.0)) + 2 * pad
     bg = theme.get("pitch", "#1f5f3b")
     line = theme.get("pitch_lines", "#E6E6E6")
     img = Image.new("RGB", (display_w, display_h), bg)
     draw = ImageDraw.Draw(img)
 
     def P(x, y):
-        return _pitch_to_img(x, y, display_w, display_h, y_max)
+        return _pitch_to_img(x, y, display_w, display_h, y_max, pad=pad)
 
     def rect(p1, p2):
         x1, y1 = p1
@@ -746,34 +788,34 @@ def make_click_pitch_image(theme_name, pitch_mode, pitch_width, display_w=900):
         return [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
 
     lw = 3
-    # outer pitch
     draw.rectangle(rect(P(0, 0), P(100, y_max)), outline=line, width=lw)
-    # halfway
     draw.line([P(50, 0), P(50, y_max)], fill=line, width=lw)
-    # center circle / spot
     cx, cy = P(50, y_max / 2)
-    rx = int(display_w * 8.7 / 100)
-    ry = int(display_h * 8.7 / y_max)
+    rx = int((display_w - 2 * pad) * 9.15 / 105.0)
+    ry = int((display_h - 2 * pad) * 9.15 / 68.0)
     draw.ellipse([cx-rx, cy-ry, cx+rx, cy+ry], outline=line, width=lw)
     draw.ellipse([cx-3, cy-3, cx+3, cy+3], fill=line)
 
-    # boxes approximate on 100 x y_max pitch
-    pen_len = 15.8
-    six_len = 5.3
-    pen_w = y_max * 40.3 / 68.0
-    six_w = y_max * 18.3 / 68.0
+    pen_len = 16.5 / 105.0 * 100.0
+    six_len = 5.5 / 105.0 * 100.0
+    pen_w = y_max * 40.32 / 68.0
+    six_w = y_max * 18.32 / 68.0
     mid = y_max / 2
-    # left / right penalty boxes
     draw.rectangle(rect(P(0, mid - pen_w/2), P(pen_len, mid + pen_w/2)), outline=line, width=lw)
     draw.rectangle(rect(P(100-pen_len, mid - pen_w/2), P(100, mid + pen_w/2)), outline=line, width=lw)
     draw.rectangle(rect(P(0, mid - six_w/2), P(six_len, mid + six_w/2)), outline=line, width=lw)
     draw.rectangle(rect(P(100-six_len, mid - six_w/2), P(100, mid + six_w/2)), outline=line, width=lw)
-    # penalty spots
-    for sx in (11, 89):
+    for sx in (11 / 105.0 * 100.0, 100 - 11 / 105.0 * 100.0):
         px, py = P(sx, mid)
         draw.ellipse([px-3, py-3, px+3, py+3], fill=line)
 
-    # saved events
+    # goals
+    goal_w = y_max * (7.32 / 68.0)
+    draw.line([P(0, mid-goal_w/2), (P(0, mid-goal_w/2)[0]-10, P(0, mid-goal_w/2)[1])], fill=line, width=lw)
+    draw.line([P(0, mid+goal_w/2), (P(0, mid+goal_w/2)[0]-10, P(0, mid+goal_w/2)[1])], fill=line, width=lw)
+    draw.line([P(100, mid-goal_w/2), (P(100, mid-goal_w/2)[0]+10, P(100, mid-goal_w/2)[1])], fill=line, width=lw)
+    draw.line([P(100, mid+goal_w/2), (P(100, mid+goal_w/2)[0]+10, P(100, mid+goal_w/2)[1])], fill=line, width=lw)
+
     if st.session_state.get("tag_events"):
         d = pd.DataFrame(st.session_state.tag_events)
         for _, r in d.iterrows():
@@ -784,78 +826,20 @@ def make_click_pitch_image(theme_name, pitch_mode, pitch_width, display_w=900):
                 x2, y2 = r.get("x2"), r.get("y2")
                 if et in ["pass", "carry", "dribble", "cross"] and pd.notna(x2) and pd.notna(y2):
                     _draw_arrow(draw, P(x, y), P(float(x2), float(y2)), col, width=5)
-                    _draw_point(draw, x, y, display_w, display_h, y_max, col, r=6)
+                    _draw_point(draw, x, y, display_w, display_h, y_max, col, r=6, pad=pad)
                 else:
-                    _draw_point(draw, x, y, display_w, display_h, y_max, col, r=9)
+                    _draw_point(draw, x, y, display_w, display_h, y_max, col, r=9, pad=pad)
             except Exception:
                 pass
 
-    # current selected points
     if st.session_state.get("tag_start"):
         sx, sy = st.session_state.tag_start
-        _draw_point(draw, sx, sy, display_w, display_h, y_max, "#22C55E", label="START", r=10)
-    if st.session_state.get("tag_end"):
-        ex, ey = st.session_state.tag_end
-        _draw_point(draw, ex, ey, display_w, display_h, y_max, "#EF4444", label="END", r=10)
-    if st.session_state.get("tag_start") and st.session_state.get("tag_end"):
-        sx, sy = st.session_state.tag_start
-        ex, ey = st.session_state.tag_end
-        _draw_arrow(draw, P(sx, sy), P(ex, ey), "#22C55E", width=4)
+        _draw_point(draw, sx, sy, display_w, display_h, y_max, "#22C55E", label="START", r=10, pad=pad)
     if st.session_state.get("tag_last_click"):
         cx, cy = st.session_state.tag_last_click
-        _draw_point(draw, cx, cy, display_w, display_h, y_max, "#FFFFFF", outline="#EF4444", label="CLICK", r=9)
+        _draw_point(draw, cx, cy, display_w, display_h, y_max, "#FFFFFF", outline="#EF4444", label="LAST", r=8, pad=pad)
 
-    return img, display_w, display_h, y_max
-
-
-def make_click_pitch(theme_name, pitch_mode, pitch_width):
-    theme = _tag_theme(theme_name)
-    y_max = _tag_y_max(pitch_mode, pitch_width)
-    fig = go.Figure()
-    _add_plotly_pitch_shapes(fig, theme, y_max)
-
-    # saved events
-    if st.session_state.tag_events:
-        d = pd.DataFrame(st.session_state.tag_events)
-        for _, r in d.iterrows():
-            et = str(r.get("event_type", "")).lower()
-            col = _event_color(et)
-            x, y = float(r.get("x", 0)), float(r.get("y", 0))
-            x2, y2 = r.get("x2"), r.get("y2")
-            if et in ["pass", "carry", "dribble", "cross"] and pd.notna(x2) and pd.notna(y2):
-                fig.add_trace(go.Scatter(x=[x, float(x2)], y=[y, float(y2)], mode="lines+markers", line=dict(color=col, width=4), marker=dict(size=8, color=col), hoverinfo="skip"))
-                fig.add_annotation(x=float(x2), y=float(y2), ax=x, ay=y, xref="x", yref="y", axref="x", ayref="y", showarrow=True, arrowhead=3, arrowwidth=2, arrowcolor=col)
-            else:
-                sym = "star" if et == "shot" else "square" if "defensive" in et else "circle"
-                fig.add_trace(go.Scatter(x=[x], y=[y], mode="markers", marker=dict(size=15, symbol=sym, color=col, line=dict(color=theme.get("bg", "#000"), width=1.5)), hoverinfo="skip"))
-
-    # current chosen points
-    if st.session_state.tag_start:
-        sx, sy = st.session_state.tag_start
-        fig.add_trace(go.Scatter(x=[sx], y=[sy], mode="markers+text", text=["START"], textposition="top center", marker=dict(size=17, color="#22C55E", line=dict(color="#FFFFFF", width=2)), hoverinfo="skip"))
-    if st.session_state.tag_end:
-        ex, ey = st.session_state.tag_end
-        fig.add_trace(go.Scatter(x=[ex], y=[ey], mode="markers+text", text=["END"], textposition="top center", marker=dict(size=17, color="#EF4444", line=dict(color="#FFFFFF", width=2)), hoverinfo="skip"))
-    if st.session_state.tag_start and st.session_state.tag_end:
-        sx, sy = st.session_state.tag_start
-        ex, ey = st.session_state.tag_end
-        fig.add_trace(go.Scatter(x=[sx, ex], y=[sy, ey], mode="lines", line=dict(color="#22C55E", width=4, dash="dash"), hoverinfo="skip"))
-    if st.session_state.tag_last_click:
-        cx, cy = st.session_state.tag_last_click
-        fig.add_trace(go.Scatter(x=[cx], y=[cy], mode="markers+text", text=["CLICK"], textposition="bottom center", marker=dict(size=15, color="#FFFFFF", line=dict(color="#EF4444", width=2)), hoverinfo="skip"))
-
-    # IMPORTANT: visible-enough click grid. This is what captures the click.
-    xs = np.arange(0, 100.01, 1.0)
-    ys = np.arange(0, y_max + 0.01, 1.0)
-    gx, gy = np.meshgrid(xs, ys)
-    fig.add_trace(go.Scatter(
-        x=gx.ravel(), y=gy.ravel(), mode="markers", name="Click layer",
-        marker=dict(size=9, color="rgba(255,255,255,0.001)", line=dict(width=0)),
-        hovertemplate="x=%{x:.1f}<br>y=%{y:.1f}<extra></extra>",
-        showlegend=False,
-    ))
-    fig.update_layout(title=dict(text="Click anywhere on the pitch", x=0.5, font=dict(color=theme.get("text", "#FFFFFF"), size=18)))
-    return fig
+    return img, display_w, display_h, y_max, pad
 
 
 def _events_dataframe():
@@ -863,6 +847,29 @@ def _events_dataframe():
     if not st.session_state.tag_events:
         return pd.DataFrame(columns=cols)
     return pd.DataFrame(st.session_state.tag_events).reindex(columns=cols)
+
+
+def _save_tagged_event(event_type, outcome, player, team, minute, action_tag, note, start, end=None):
+    new_id = len(st.session_state.tag_events) + 1
+    item = {
+        "event_id": new_id,
+        "event_type": event_type,
+        "player": player,
+        "team": team,
+        "minute": int(minute),
+        "x": round(float(start[0]), 2),
+        "y": round(float(start[1]), 2),
+        "x2": round(float(end[0]), 2) if end else np.nan,
+        "y2": round(float(end[1]), 2) if end else np.nan,
+        "outcome": outcome,
+        "tag": action_tag,
+        "note": note,
+    }
+    st.session_state.tag_events.append(item)
+    st.session_state.tag_start = None
+    st.session_state.tag_end = None
+    st.session_state.tag_last_click = None
+    st.session_state.tag_flash = f"Saved {event_type} #{new_id}"
 
 
 def _save_tagged_map(df_events: pd.DataFrame, theme_name: str, pitch_mode: str, pitch_width: float, title: str):
@@ -873,7 +880,6 @@ def _save_tagged_map(df_events: pd.DataFrame, theme_name: str, pitch_mode: str, 
     pitch.draw(ax=ax)
     ax.set_facecolor(theme.get("pitch", "#1f5f3b"))
     y_max = _tag_y_max(pitch_mode, pitch_width)
-
     for _, r in df_events.iterrows():
         et = str(r.get("event_type", "")).lower()
         col = _event_color(et)
@@ -885,7 +891,6 @@ def _save_tagged_map(df_events: pd.DataFrame, theme_name: str, pitch_mode: str, 
         else:
             marker = "*" if et == "shot" else "s" if "defensive" in et else "o"
             pitch.scatter([x], [y], ax=ax, s=140, marker=marker, color=col, edgecolors="white", linewidth=1.5, zorder=4)
-
     ax.set_title(title or "Tagged Events Map", color=theme.get("text", "white"), fontsize=18, weight="bold")
     ax.set_xlim(-2, 102)
     ax.set_ylim(-2, y_max + 2)
@@ -898,7 +903,7 @@ def run_tagging_tool():
         """
         <div class="app-header">
             <div class="app-title">🖱️ Interactive Tagging Tool</div>
-            <div class="app-subtitle">Click the pitch, set Start / End, save events, export CSV, or generate a themed map.</div>
+            <div class="app-subtitle">Auto mode: pass/carry/cross = first click Start, second click End and save. Shot/touch/defensive = one click and save.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -910,14 +915,16 @@ def run_tagging_tool():
         st.code("streamlit-image-coordinates")
         st.stop()
 
-    control_col, pitch_col = st.columns([1.0, 1.65], gap="large")
+    control_col, pitch_col = st.columns([0.85, 2.15], gap="large")
     with control_col:
         st.markdown('<div class="panel-card">', unsafe_allow_html=True)
         st.subheader("Tag Settings")
         tag_theme = st.selectbox("Theme", list(THEMES.keys()), index=list(THEMES.keys()).index("The Athletic Dark") if "The Athletic Dark" in THEMES else 0, key="tag_theme")
         tag_pitch_mode_ui = st.selectbox("Pitch shape", ["Rectangular", "Square"], index=0, key="tag_pitch_mode_ui")
         tag_pitch_mode = "rect" if tag_pitch_mode_ui == "Rectangular" else "square"
-        tag_pitch_width = st.slider("Pitch width", 50.0, 80.0, 64.0, 1.0, key="tag_pitch_width") if tag_pitch_mode == "rect" else 100.0
+        tag_pitch_width = st.slider("Pitch width", 50.0, 80.0, 68.0, 1.0, key="tag_pitch_width") if tag_pitch_mode == "rect" else 100.0
+        display_w = st.slider("Pitch display size", 620, 920, 760, 20, key="tag_display_w")
+        auto_save = st.toggle("Auto-save clicks", value=True, key="tag_auto_save")
         event_type = st.selectbox("Event type", ["pass", "carry", "dribble", "cross", "shot", "touch", "defensive action", "recovery"], key="tag_event_type")
         outcome = st.selectbox("Outcome", ["successful", "unsuccessful", "key pass", "assist", "goal", "ontarget", "off target", "blocked", "touch"], key="tag_outcome")
         player = st.text_input("Player", key="tag_player")
@@ -925,60 +932,45 @@ def run_tagging_tool():
         minute = st.number_input("Minute", min_value=0, max_value=130, value=0, step=1, key="tag_minute")
         action_tag = st.selectbox("Action tag", ["", "progressive", "line breaking", "into final third", "into box", "key pass", "chance created", "under pressure", "turnover", "recovery", "duel", "dangerous action"], key="tag_action_tag")
         note = st.text_area("Note", height=70, key="tag_note")
-
-        st.markdown("### Selected click")
-        if st.session_state.tag_last_click:
-            st.success(f"Clicked: x={st.session_state.tag_last_click[0]:.1f}, y={st.session_state.tag_last_click[1]:.1f}")
-        else:
-            st.info("Click on the pitch first.")
-
-        c1, c2 = st.columns(2)
         needs_end = event_type in ["pass", "carry", "dribble", "cross"]
-        with c1:
-            if st.button("Use click as START", disabled=st.session_state.tag_last_click is None):
-                st.session_state.tag_start = st.session_state.tag_last_click
-                if not needs_end:
-                    st.session_state.tag_end = None
-                st.rerun()
-        with c2:
-            if st.button("Use click as END", disabled=(st.session_state.tag_last_click is None or not needs_end)):
-                st.session_state.tag_end = st.session_state.tag_last_click
-                st.rerun()
-
-        if st.button("Save Event"):
-            start = st.session_state.tag_start
-            end = st.session_state.tag_end
-            if start is None:
-                st.warning("Choose START first.")
-            elif needs_end and end is None:
-                st.warning("This event needs END point too.")
+        if st.session_state.tag_flash:
+            st.success(st.session_state.tag_flash)
+            st.session_state.tag_flash = ""
+        if auto_save:
+            if needs_end and st.session_state.tag_start:
+                st.info(f"Start saved at x={st.session_state.tag_start[0]:.1f}, y={st.session_state.tag_start[1]:.1f}. Click END now.")
+            elif needs_end:
+                st.info("Click START point. Next click will be END and save automatically.")
             else:
-                new_id = len(st.session_state.tag_events) + 1
-                item = {
-                    "event_id": new_id,
-                    "event_type": event_type,
-                    "player": player,
-                    "team": team,
-                    "minute": int(minute),
-                    "x": round(float(start[0]), 2),
-                    "y": round(float(start[1]), 2),
-                    "x2": round(float(end[0]), 2) if end else np.nan,
-                    "y2": round(float(end[1]), 2) if end else np.nan,
-                    "outcome": outcome,
-                    "tag": action_tag,
-                    "note": note,
-                }
-                st.session_state.tag_events.append(item)
-                st.session_state.tag_start = None
-                st.session_state.tag_end = None
-                st.session_state.tag_last_click = None
-                st.success("Event saved.")
-                st.rerun()
-
+                st.info("Click any point to save this event immediately.")
+        else:
+            st.info("Manual mode: click a point, then use START/END/Save buttons.")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Set START", disabled=st.session_state.tag_last_click is None):
+                    st.session_state.tag_start = st.session_state.tag_last_click
+                    if not needs_end:
+                        st.session_state.tag_end = None
+                    st.rerun()
+            with c2:
+                if st.button("Set END", disabled=(st.session_state.tag_last_click is None or not needs_end)):
+                    st.session_state.tag_end = st.session_state.tag_last_click
+                    st.rerun()
+            if st.button("Save Event"):
+                start = st.session_state.tag_start
+                end = st.session_state.tag_end
+                if start is None:
+                    st.warning("Choose START first.")
+                elif needs_end and end is None:
+                    st.warning("This event needs END point too.")
+                else:
+                    _save_tagged_event(event_type, outcome, player, team, minute, action_tag, note, start, end)
+                    st.rerun()
         c3, c4 = st.columns(2)
         with c3:
             if st.button("Undo Last") and st.session_state.tag_events:
                 st.session_state.tag_events.pop()
+                st.session_state.tag_start = None
                 st.rerun()
         with c4:
             if st.button("Clear All"):
@@ -986,24 +978,35 @@ def run_tagging_tool():
                 st.session_state.tag_start = None
                 st.session_state.tag_end = None
                 st.session_state.tag_last_click = None
+                st.session_state.tag_last_processed_click = None
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
     with pitch_col:
         st.markdown('<div class="preview-shell">', unsafe_allow_html=True)
-        pitch_img, img_w, img_h, y_max = make_click_pitch_image(tag_theme, tag_pitch_mode, tag_pitch_width, display_w=950)
+        pitch_img, img_w, img_h, y_max, pad = make_click_pitch_image(tag_theme, tag_pitch_mode, tag_pitch_width, display_w=display_w)
         coords = streamlit_image_coordinates(
             pitch_img,
-            key=f"tag_image_pitch_{tag_theme}_{tag_pitch_mode}_{tag_pitch_width}_{st.session_state.tag_click_counter}",
+            key=f"tag_image_pitch_{tag_theme}_{tag_pitch_mode}_{tag_pitch_width}_{display_w}_{st.session_state.tag_click_counter}",
         )
         if coords and coords.get("x") is not None and coords.get("y") is not None:
             try:
-                x = round((float(coords.get("x")) / float(img_w)) * 100.0, 2)
-                y = round(y_max - ((float(coords.get("y")) / float(img_h)) * y_max), 2)
+                x, y = _img_to_pitch(coords.get("x"), coords.get("y"), img_w, img_h, y_max, pad=pad)
                 if 0 <= x <= 100 and 0 <= y <= y_max:
                     new_click = (x, y)
-                    if st.session_state.tag_last_click != new_click:
+                    raw_click = (int(coords.get("x")), int(coords.get("y")), st.session_state.tag_click_counter)
+                    if st.session_state.tag_last_processed_click != raw_click:
                         st.session_state.tag_last_click = new_click
+                        st.session_state.tag_last_processed_click = raw_click
+                        if auto_save:
+                            if needs_end:
+                                if st.session_state.tag_start is None:
+                                    st.session_state.tag_start = new_click
+                                    st.session_state.tag_flash = f"Start set: x={x:.1f}, y={y:.1f}"
+                                else:
+                                    _save_tagged_event(event_type, outcome, player, team, minute, action_tag, note, st.session_state.tag_start, new_click)
+                            else:
+                                _save_tagged_event(event_type, outcome, player, team, minute, action_tag, note, new_click, None)
                         st.session_state.tag_click_counter += 1
                         st.rerun()
             except Exception:
@@ -1013,7 +1016,6 @@ def run_tagging_tool():
         st.subheader("Tagged Events")
         st.dataframe(df_events, use_container_width=True, hide_index=True)
         st.download_button("⬇️ Download Tagged Events CSV", data=df_events.to_csv(index=False).encode("utf-8-sig"), file_name="tagged_events.csv", mime="text/csv", disabled=df_events.empty)
-
         if st.button("Generate Map From Tagged Events", disabled=df_events.empty):
             map_fig = _save_tagged_map(df_events, tag_theme, tag_pitch_mode, tag_pitch_width, "Tagged Events Map")
             png = io.BytesIO()
