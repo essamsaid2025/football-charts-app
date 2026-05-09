@@ -312,6 +312,26 @@ st.markdown(
             color:#f8fafc !important;
         }
 
+        /* Tagging sidebar slider readability fix */
+        section[data-testid="stSidebar"] [data-testid="stSlider"] *,
+        section[data-testid="stSidebar"] [data-testid="stSlider"] label,
+        section[data-testid="stSidebar"] [data-testid="stSlider"] p,
+        section[data-testid="stSidebar"] [data-testid="stSlider"] span {
+            color:#f8fafc !important;
+            opacity:1 !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stSlider"] div[data-baseweb="slider"] {
+            background: transparent !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stSlider"] div[role="slider"] {
+            background:#38bdf8 !important;
+            border:2px solid #f8fafc !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stSlider"] input {
+            background:#0b1728 !important;
+            color:#f8fafc !important;
+        }
+
     </style>
     """,
     unsafe_allow_html=True,
@@ -363,37 +383,11 @@ def run_player_scouting_module():
         return pd.to_numeric(series.astype(str).str.replace("%", "", regex=False).str.replace(",", "", regex=False), errors="coerce")
 
     def _pct_rank(s, higher=True):
-        # True percentile vs the selected peer group:
-        # percentile = % players below + half of tied players.
-        # This prevents tiny/invalid groups from making everyone 100.
         x = pd.to_numeric(s, errors="coerce")
-        valid = x.dropna()
-        if len(valid) == 0:
-            return pd.Series(np.nan, index=x.index)
-        out = pd.Series(np.nan, index=x.index, dtype=float)
-        denom = float(len(valid))
-        vals = valid.to_numpy(dtype=float)
-        for idx, v in x.dropna().items():
-            base = ((vals < float(v)).sum() + 0.5 * (vals == float(v)).sum()) / denom * 100.0
-            out.loc[idx] = base if higher else (100.0 - base)
-        return out.clip(0, 100)
-
-    def _is_numeric_like_col(df0, col):
-        if not col or col not in df0.columns:
-            return False
-        ser = pd.to_numeric(df0[col].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False), errors='coerce')
-        return ser.notna().mean() >= 0.70
-
-    def _valid_position_col(df0, col):
-        # A real position column should be categorical, not values like 7.95 / 0.36 / 73.9.
-        if not col or col not in df0.columns:
-            return None
-        if _is_numeric_like_col(df0, col):
-            return None
-        nunique = df0[col].dropna().astype(str).nunique()
-        if nunique == 0 or nunique > max(30, len(df0) * 0.45):
-            return None
-        return col
+        pct = x.rank(pct=True, method="average") * 100
+        if not higher:
+            pct = 100 - pct
+        return pct.clip(0, 100)
 
     def _make_scored(df_in, metrics, lower_better, group_col=None, minutes_col=None, minutes_floor=900, reliability=True, weights=None):
         out = df_in.copy()
@@ -491,11 +485,8 @@ def run_player_scouting_module():
         all_cols = [None] + df_raw.columns.tolist()
         player_col = st.selectbox("Player column", all_cols, index=all_cols.index(cols["player"]) if cols["player"] in all_cols else 0, key="scout_player_col")
         team_col = st.selectbox("Team column", all_cols, index=all_cols.index(cols["team"]) if cols["team"] in all_cols else 0, key="scout_team_col")
-        position_col_raw = st.selectbox("Position column", all_cols, index=all_cols.index(cols["position"]) if cols["position"] in all_cols else 0, key="scout_position_col_v3")
+        position_col = st.selectbox("Position column", all_cols, index=all_cols.index(cols["position"]) if cols["position"] in all_cols else 0, key="scout_position_col")
         age_col = st.selectbox("Age column", all_cols, index=all_cols.index(cols["age"]) if cols["age"] in all_cols else 0, key="scout_age_col")
-        position_col = _valid_position_col(df_raw, position_col_raw)
-        if position_col_raw and position_col is None:
-            st.warning(f"'{position_col_raw}' looks numeric/not a real position column, so I ignored it for same-position percentiles.")
         minutes_col = st.selectbox("Minutes column", all_cols, index=all_cols.index(cols["minutes"]) if cols["minutes"] in all_cols else 0, key="scout_minutes_col")
         value_col = st.selectbox("Market value column", all_cols, index=all_cols.index(cols["market_value"]) if cols["market_value"] in all_cols else 0, key="scout_value_col")
 
@@ -555,13 +546,6 @@ def run_player_scouting_module():
                 weights[m] = st.number_input(str(m), min_value=0.1, max_value=3.0, value=1.0, step=0.1, key=f"weight_{m}")
 
     group_col = position_col if compare_scope == "Same position only" and position_col else None
-    if compare_scope == "Same position only" and not group_col:
-        st.info("No valid position column detected, so percentiles are calculated against the filtered players.")
-    if group_col:
-        group_sizes = df_filtered.groupby(group_col, dropna=False).size()
-        too_small = group_sizes[group_sizes < 5]
-        if len(too_small):
-            st.warning("Some position groups have fewer than 5 players; small groups can make percentiles unstable. Use 'Filtered players' for a bigger peer group.")
     df_scored = _make_scored(df_filtered, custom_metrics, lower_better, group_col=group_col, minutes_col=minutes_col, minutes_floor=reliability_floor, reliability=use_reliability, weights=weights)
     score_col = "Adjusted Score" if use_reliability else "Scouting Score"
 
@@ -730,8 +714,31 @@ def run_player_scouting_module():
 # =========================================================
 # PLOTLY CLICK TAGGING TOOL
 # =========================================================
+# Tagging-only themes. This does not change the Charts Generator logic.
+TAGGING_THEMES = dict(THEMES)
+TAGGING_THEMES["Opta Analyst Light"] = {
+    "bg": "#ECECEC",
+    "panel": "#F5F5F5",
+    "panel_2": "#E9E9E9",
+    "pitch": "#ECECEC",
+    "pitch_stripe": None,
+    "text": "#201C2B",
+    "muted": "#7A7584",
+    "lines": "#A7A7A7",
+    "goal": "#8F8F8F",
+    "pitch_lines": "#9F9F9F",
+    "accent": "#6D28D9",
+    "accent_2": "#8B5CF6",
+    "danger": "#D64045",
+    "warning": "#B0B0B0",
+    "success": "#22A06B",
+    "legend_bg": "#F5F5F5",
+    "legend_border": "#B8B8B8",
+    "legend_text": "#201C2B",
+}
+
 def _tag_theme(theme_name: str) -> dict:
-    return THEMES.get(theme_name, THEMES.get("The Athletic Dark", {}))
+    return TAGGING_THEMES.get(theme_name, TAGGING_THEMES.get("The Athletic Dark", {}))
 
 
 
@@ -798,14 +805,41 @@ def _draw_arrow(draw, start, end, color, width=5):
     draw.polygon([(x2, y2), p1, p2], fill=color)
 
 
-def _draw_point(draw, x, y, w, h, y_max, fill, outline="#FFFFFF", label=None, r=9, pad=18):
+def _draw_point(draw, x, y, w, h, y_max, fill, outline="#FFFFFF", label=None, r=9, pad=18, marker="o"):
     px, py = _pitch_to_img(x, y, w, h, y_max, pad=pad)
-    draw.ellipse([px-r, py-r, px+r, py+r], fill=fill, outline=outline, width=3)
+    mk = str(marker or "o").lower()
+
+    if mk in ["s", "square"]:
+        draw.rectangle([px-r, py-r, px+r, py+r], fill=fill, outline=outline, width=3)
+    elif mk in ["d", "diamond"]:
+        draw.polygon([(px, py-r), (px+r, py), (px, py+r), (px-r, py)], fill=fill, outline=outline)
+        draw.line([(px, py-r), (px+r, py), (px, py+r), (px-r, py), (px, py-r)], fill=outline, width=3)
+    elif mk in ["^", "triangle up"]:
+        draw.polygon([(px, py-r), (px+r, py+r), (px-r, py+r)], fill=fill, outline=outline)
+        draw.line([(px, py-r), (px+r, py+r), (px-r, py+r), (px, py-r)], fill=outline, width=3)
+    elif mk in ["v", "triangle down"]:
+        draw.polygon([(px-r, py-r), (px+r, py-r), (px, py+r)], fill=fill, outline=outline)
+        draw.line([(px-r, py-r), (px+r, py-r), (px, py+r), (px-r, py-r)], fill=outline, width=3)
+    elif mk in ["*", "star"]:
+        draw.line([px-r, py, px+r, py], fill=outline, width=3)
+        draw.line([px, py-r, px, py+r], fill=outline, width=3)
+        draw.line([px-r, py-r, px+r, py+r], fill=outline, width=3)
+        draw.line([px-r, py+r, px+r, py-r], fill=outline, width=3)
+        draw.ellipse([px-r//2, py-r//2, px+r//2, py+r//2], fill=fill, outline=outline, width=2)
+    elif mk in ["x"]:
+        draw.line([px-r, py-r, px+r, py+r], fill=fill, width=4)
+        draw.line([px-r, py+r, px+r, py-r], fill=fill, width=4)
+    elif mk in ["+", "p"]:
+        draw.line([px-r, py, px+r, py], fill=fill, width=4)
+        draw.line([px, py-r, px, py+r], fill=fill, width=4)
+    else:
+        draw.ellipse([px-r, py-r, px+r, py+r], fill=fill, outline=outline, width=3)
+
     if label:
         draw.text((px + 10, py - 18), str(label), fill=outline)
 
 
-def make_click_pitch_image(theme_name, pitch_mode, pitch_width, display_w=760):
+def make_click_pitch_image(theme_name, pitch_mode, pitch_width, display_w=760, start_marker="o", start_color=None, start_edge="#FFFFFF", start_size=7):
     theme = _tag_theme(theme_name)
     y_max = _tag_y_max(pitch_mode, pitch_width)
     pad = 22
@@ -862,7 +896,7 @@ def make_click_pitch_image(theme_name, pitch_mode, pitch_width, display_w=760):
                 x2, y2 = r.get("x2"), r.get("y2")
                 if et in ["pass", "carry", "dribble", "cross"] and pd.notna(x2) and pd.notna(y2):
                     _draw_arrow(draw, P(x, y), P(float(x2), float(y2)), col, width=5)
-                    _draw_point(draw, x, y, display_w, display_h, y_max, col, r=6, pad=pad)
+                    _draw_point(draw, x, y, display_w, display_h, y_max, start_color or col, outline=start_edge, r=int(start_size), pad=pad, marker=start_marker)
                 else:
                     _draw_point(draw, x, y, display_w, display_h, y_max, col, r=9, pad=pad)
             except Exception:
@@ -870,7 +904,7 @@ def make_click_pitch_image(theme_name, pitch_mode, pitch_width, display_w=760):
 
     if st.session_state.get("tag_start"):
         sx, sy = st.session_state.tag_start
-        _draw_point(draw, sx, sy, display_w, display_h, y_max, "#22C55E", label="START", r=10, pad=pad)
+        _draw_point(draw, sx, sy, display_w, display_h, y_max, start_color or "#22C55E", outline=start_edge, label="START", r=int(start_size)+3, pad=pad, marker=start_marker)
     if st.session_state.get("tag_last_click"):
         cx, cy = st.session_state.tag_last_click
         _draw_point(draw, cx, cy, display_w, display_h, y_max, "#FFFFFF", outline="#EF4444", label="LAST", r=8, pad=pad)
@@ -908,7 +942,7 @@ def _save_tagged_event(event_type, outcome, player, team, minute, action_tag, no
     st.session_state.tag_flash = f"Saved {event_type} #{new_id}"
 
 
-def _save_tagged_map(df_events: pd.DataFrame, theme_name: str, pitch_mode: str, pitch_width: float, title: str):
+def _save_tagged_map(df_events: pd.DataFrame, theme_name: str, pitch_mode: str, pitch_width: float, title: str, start_marker="o", start_color=None, start_edge="#FFFFFF", start_size=70):
     theme = _tag_theme(theme_name)
     pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=False)
     fig, ax = plt.subplots(figsize=(11, 7))
@@ -923,7 +957,7 @@ def _save_tagged_map(df_events: pd.DataFrame, theme_name: str, pitch_mode: str, 
         x2, y2 = r.get("x2"), r.get("y2")
         if et in ["pass", "carry", "dribble", "cross"] and pd.notna(x2) and pd.notna(y2):
             pitch.arrows([x], [y], [float(x2)], [float(y2)], ax=ax, color=col, width=2.4, headwidth=6, headlength=6, alpha=.9)
-            pitch.scatter([x], [y], ax=ax, s=70, color=col, edgecolors="white", linewidth=1.2, zorder=4)
+            pitch.scatter([x], [y], ax=ax, s=start_size, marker=start_marker or "o", color=start_color or col, edgecolors=start_edge, linewidth=1.2, zorder=4)
         else:
             marker = "*" if et == "shot" else "s" if "defensive" in et else "o"
             pitch.scatter([x], [y], ax=ax, s=140, marker=marker, color=col, edgecolors="white", linewidth=1.5, zorder=4)
@@ -938,8 +972,8 @@ def run_tagging_tool():
     st.markdown(
         """
         <div class="app-header">
-            <div class="app-title">🖱️ Interactive Tagging Tool</div>
-            <div class="app-subtitle">Auto mode: pass/carry/cross = first click Start, second click End and save. Shot/touch/defensive = one click and save.</div>
+            <div class="app-title">🖱️ Interactive Tagging Tool — V5 CONFIRMED</div>
+            <div class="app-subtitle">V5 CONFIRMED: Opta Analyst Light + start point shape/color/size controls.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -955,11 +989,32 @@ def run_tagging_tool():
     with control_col:
         st.markdown('<div class="panel-card">', unsafe_allow_html=True)
         st.subheader("Tag Settings")
-        tag_theme = st.selectbox("Theme", list(THEMES.keys()), index=list(THEMES.keys()).index("The Athletic Dark") if "The Athletic Dark" in THEMES else 0, key="tag_theme")
+        tag_theme = st.selectbox("Theme", list(TAGGING_THEMES.keys()), index=list(TAGGING_THEMES.keys()).index("Opta Analyst Light") if "Opta Analyst Light" in TAGGING_THEMES else 0, key="tag_theme")
         tag_pitch_mode_ui = st.selectbox("Pitch shape", ["Rectangular", "Square"], index=0, key="tag_pitch_mode_ui")
         tag_pitch_mode = "rect" if tag_pitch_mode_ui == "Rectangular" else "square"
         tag_pitch_width = st.slider("Pitch width", 50.0, 80.0, 68.0, 1.0, key="tag_pitch_width") if tag_pitch_mode == "rect" else 100.0
         display_w = st.slider("Pitch display size", 620, 920, 760, 20, key="tag_display_w")
+
+        st.markdown("### 🎯 Arrow start point")
+        st.caption("✅ V5 CONFIRMED — لو شايف السطر ده يبقى التعديل شغال 100%")
+        tag_marker_options = {
+            "Circle": "o",
+            "Square": "s",
+            "Diamond": "D",
+            "Triangle Up": "^",
+            "Triangle Down": "v",
+            "Star": "*",
+            "X": "x",
+            "Plus": "+",
+            "Pentagon": "p",
+            "Hexagon": "h",
+        }
+        tag_start_marker_label = st.selectbox("Start point shape", list(tag_marker_options.keys()), index=0, key="tag_start_marker_label")
+        tag_start_marker = tag_marker_options[tag_start_marker_label]
+        tag_start_color = st.color_picker("Start point color", "#6D28D9", key="tag_start_color")
+        tag_start_edge = st.color_picker("Start point edge color", "#FFFFFF", key="tag_start_edge")
+        tag_start_size = st.slider("Start point size", 5, 22, 9, 1, key="tag_start_size")
+
         auto_save = st.toggle("Auto-save clicks", value=True, key="tag_auto_save")
         event_type = st.selectbox("Event type", ["pass", "carry", "dribble", "cross", "shot", "touch", "defensive action", "recovery"], key="tag_event_type")
         outcome = st.selectbox("Outcome", ["successful", "unsuccessful", "key pass", "assist", "goal", "ontarget", "off target", "blocked", "touch"], key="tag_outcome")
@@ -1020,7 +1075,7 @@ def run_tagging_tool():
 
     with pitch_col:
         st.markdown('<div class="preview-shell">', unsafe_allow_html=True)
-        pitch_img, img_w, img_h, y_max, pad = make_click_pitch_image(tag_theme, tag_pitch_mode, tag_pitch_width, display_w=display_w)
+        pitch_img, img_w, img_h, y_max, pad = make_click_pitch_image(tag_theme, tag_pitch_mode, tag_pitch_width, display_w=display_w, start_marker=tag_start_marker, start_color=tag_start_color, start_edge=tag_start_edge, start_size=tag_start_size)
         coords = streamlit_image_coordinates(
             pitch_img,
             key=f"tag_image_pitch_{tag_theme}_{tag_pitch_mode}_{tag_pitch_width}_{display_w}_{st.session_state.tag_click_counter}",
@@ -1053,7 +1108,7 @@ def run_tagging_tool():
         st.dataframe(df_events, use_container_width=True, hide_index=True)
         st.download_button("⬇️ Download Tagged Events CSV", data=df_events.to_csv(index=False).encode("utf-8-sig"), file_name="tagged_events.csv", mime="text/csv", disabled=df_events.empty)
         if st.button("Generate Map From Tagged Events", disabled=df_events.empty):
-            map_fig = _save_tagged_map(df_events, tag_theme, tag_pitch_mode, tag_pitch_width, "Tagged Events Map")
+            map_fig = _save_tagged_map(df_events, tag_theme, tag_pitch_mode, tag_pitch_width, "Tagged Events Map", start_marker=tag_start_marker, start_color=tag_start_color, start_edge=tag_start_edge, start_size=tag_start_size * 12)
             png = io.BytesIO()
             map_fig.savefig(png, format="png", dpi=300, bbox_inches="tight", pad_inches=.25)
             png.seek(0)
@@ -1063,6 +1118,8 @@ def run_tagging_tool():
 
 
 with st.sidebar:
+    st.success("APP FILE VERSION: TAGGING V5 CONFIRMED")
+    st.caption("لو مش شايف الرسالة دي يبقى Streamlit مش بيقرأ app.py الجديد")
     app_section = st.radio(
         "Choose App Section",
         ["Charts Generator", "Player Scouting", "Tagging Tool"],
