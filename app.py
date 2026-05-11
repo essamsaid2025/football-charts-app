@@ -16,6 +16,8 @@ from charts import (
     prepare_df_for_charts,
     build_report_from_prepared_df,
     pizza_chart,
+    mpl_pizza_dark,
+    athletic_pizza,
     shot_detail_card,
     defensive_regains_map,
     THEMES,
@@ -1594,10 +1596,33 @@ def _render_player_metric_mode(mode, dfp, tmp_dir, header_img_obj, pizza_img_obj
             elif mode == "Percentile Bar":
                 fig = _percentile_bar(table, default_title or f"{selected_player} Percentile Bar", "#0E1117", "#FFFFFF", "#2ECC71", "#FF9300", "#D70232")
                 base = "percentile_bar"
-            elif mode in ["MPL Pizza", "Athletic Pizza"]:
-                colors = _category_colors(categories, "#1A78CF", "#FF9300", "#D70232") if categories else _old_scale_colors(table["percentile"])
-                fig = pizza_chart(table[["metric", "value", "percentile"]], title=default_title or selected_player, subtitle=default_subtitle or "Percentile vs peers", slice_colors=colors, show_values_legend=False, center_image=center_img, center_img_scale=pizza_center_scale, footer_text="")
-                base = "mpl_pizza" if mode == "MPL Pizza" else "athletic_pizza"
+            elif mode == "MPL Pizza":
+                # Uses the dedicated MPLSoccer dark pizza style only in Charts Generator.
+                fig = mpl_pizza_dark(
+                    table[["metric", "value", "percentile"]],
+                    title=default_title or selected_player,
+                    subtitle=default_subtitle or "Percentile Rank vs peers",
+                    categories=categories,
+                    attacking_color="#1A78CF",
+                    possession_color="#FF9300",
+                    defending_color="#D70232",
+                    center_image=center_img,
+                    center_img_scale=pizza_center_scale,
+                    footer_text="data: uploaded file",
+                )
+                base = "mpl_pizza"
+            elif mode == "Athletic Pizza":
+                # Uses the dedicated Athletic-style light pizza.
+                fig = athletic_pizza(
+                    table[["metric", "value", "percentile"]],
+                    title=default_title or selected_player,
+                    subtitle=default_subtitle or "Attacking defensive, possession and progression percentiles",
+                    categories=categories,
+                    attacking_color="#4B78B9",
+                    possession_color="#F0C987",
+                    defending_color="#9E374B",
+                )
+                base = "athletic_pizza"
             else:
                 colors = _old_scale_colors(table["percentile"])
                 fig = pizza_chart(table[["metric", "value", "percentile"]], title=default_title or selected_player, subtitle=default_subtitle or "Percentile vs peers", slice_colors=colors, show_values_legend=False, center_image=center_img, center_img_scale=pizza_center_scale, footer_text="")
