@@ -2178,64 +2178,173 @@ def percentile_bar_chart(metric_table: pd.DataFrame, title: str = 'Percentile Ba
     return fig
 
 
+
+def _fmt_one_decimal(v):
+    try:
+        return f"{float(v):.1f}"
+    except Exception:
+        return str(v)
+
+
+def _pizza_label(txt: str, max_len: int = 16) -> str:
+    """Wrap long metric names so the pizza labels stay readable."""
+    txt = str(txt).strip()
+    if len(txt) <= max_len:
+        return txt
+    words = txt.split()
+    lines, cur = [], ""
+    for w in words:
+        if not cur:
+            cur = w
+        elif len(cur) + 1 + len(w) <= max_len:
+            cur += " " + w
+        else:
+            lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return "\n".join(lines[:3])
+
+
+def _add_center_image_on_pizza(fig, center_image=None, center_img_scale: float = 0.14, y_center: float = 0.50):
+    if center_image is None:
+        return
+    try:
+        img = center_image.convert('RGBA') if hasattr(center_image, 'convert') else center_image
+        s = max(0.08, min(0.24, float(center_img_scale)))
+        ax_img = fig.add_axes([0.5 - s / 2, y_center - s / 2, s, s], zorder=50)
+        ax_img.imshow(np.asarray(img))
+        ax_img.axis('off')
+        circle = plt.Circle((0.5, 0.5), 0.5, transform=ax_img.transAxes, facecolor='none', edgecolor='none')
+        ax_img.add_patch(circle)
+        ax_img.set_clip_path(circle)
+    except Exception:
+        pass
+
+
 def mpl_pizza_dark(metric_table: pd.DataFrame, title: str = '', subtitle: str = '', categories: Optional[List[str]] = None,
                    attacking_color: str = '#1A78CF', possession_color: str = '#FF9300', defending_color: str = '#D70232',
                    center_image=None, center_img_scale: float = 0.14, footer_text: str = '',
                    bg_color: str = '#222222'):
+    """Dark MPLSoccer pizza close to the classic FootballSlices style."""
     d = metric_table.copy()
-    params = d['metric'].astype(str).str.replace(' ', '\n').tolist()
-    values = pd.to_numeric(d['percentile'], errors='coerce').fillna(0).clip(0,100).tolist()
+    raw_params = d['metric'].astype(str).tolist()
+    params = [_pizza_label(m, 18) for m in raw_params]
+    values = pd.to_numeric(d['percentile'], errors='coerce').fillna(0).clip(0, 100).round(1).tolist()
+
     if categories is None or len(categories) != len(values):
         categories = ['Attacking'] * len(values)
+
     slice_colors = add_metric_category_colors(categories, attacking_color, possession_color, defending_color, '#777777')
-    text_colors = ['#000000' if c.lower() not in ['#d70232', '#8b0000'] else '#F2F2F2' for c in slice_colors]
-    baker = PyPizza(params=params, background_color=bg_color, straight_line_color='#000000', straight_line_lw=1,
-                    last_circle_color='#000000', last_circle_lw=1, other_circle_lw=0, inner_circle_size=20)
-    fig, ax = baker.make_pizza(values, figsize=(8,8.5), color_blank_space='same', slice_colors=slice_colors,
-                               value_colors=text_colors, value_bck_colors=slice_colors, blank_alpha=0.4,
-                               kwargs_slices=dict(edgecolor='#000000', zorder=2, linewidth=1),
-                               kwargs_params=dict(color='#F2F2F2', fontsize=10, va='center'),
-                               kwargs_values=dict(color='#F2F2F2', fontsize=10, zorder=3,
-                                                  bbox=dict(edgecolor='#000000', facecolor='cornflowerblue', boxstyle='round,pad=0.2', lw=1)))
+    value_colors = ['#000000'] * len(values)
+
+    baker = PyPizza(
+        params=params,
+        background_color=bg_color,
+        straight_line_color='#05080D',
+        straight_line_lw=1.4,
+        last_circle_color='#E6E6E6',
+        last_circle_lw=1.6,
+        other_circle_color='#3A424D',
+        other_circle_ls='--',
+        other_circle_lw=1.3,
+        inner_circle_size=18,
+    )
+
+    fig, ax = baker.make_pizza(
+        values,
+        figsize=(10, 10),
+        color_blank_space='same',
+        slice_colors=slice_colors,
+        value_bck_colors=slice_colors,
+        value_colors=value_colors,
+        blank_alpha=0.35,
+        kwargs_slices=dict(edgecolor='#05080D', linewidth=1.25, zorder=2),
+        kwargs_params=dict(color='#F4F4F5', fontsize=10.5, va='center'),
+        kwargs_values=dict(
+            color='#000000',
+            fontsize=10,
+            zorder=3,
+            fontweight='normal',
+            bbox=dict(edgecolor='#05080D', boxstyle='round,pad=0.22', lw=1.1),
+        ),
+    )
+
     fig.patch.set_facecolor(bg_color)
-    fig.text(0.515, 0.975, title, size=16, ha='center', color='#F2F2F2', weight='bold')
-    fig.text(0.515, 0.955, subtitle, size=12, ha='center', color='#F2F2F2')
-    fig.text(0.34, 0.93, 'Attacking        Possession       Defending', size=13, weight='bold', color='#F2F2F2')
-    fig.patches.extend([
-        plt.Rectangle((0.31,0.9225),0.025,0.021, fill=True, color=attacking_color, transform=fig.transFigure, figure=fig),
-        plt.Rectangle((0.462,0.9225),0.025,0.021, fill=True, color=possession_color, transform=fig.transFigure, figure=fig),
-        plt.Rectangle((0.632,0.9225),0.025,0.021, fill=True, color=defending_color, transform=fig.transFigure, figure=fig),
-    ])
+    fig.text(0.5, 0.985, title or '', ha='center', va='top', color='#F4F4F5', fontsize=20, weight='bold', family='serif')
+    if subtitle:
+        fig.text(0.5, 0.958, subtitle, ha='center', va='top', color='#E5E7EB', fontsize=12.5, family='serif')
+
+    # Legend like the reference image
+    legend_y = 0.925 if subtitle else 0.946
+    items = [('Attacking', attacking_color), ('Possession', possession_color), ('Defending', defending_color)]
+    x0 = 0.32
+    for i, (lab, col) in enumerate(items):
+        x = x0 + i * 0.16
+        fig.patches.append(plt.Rectangle((x, legend_y - 0.012), 0.022, 0.022, transform=fig.transFigure, color=col, figure=fig))
+        fig.text(x + 0.026, legend_y, lab, ha='left', va='center', color='#F4F4F5', fontsize=12, weight='bold')
+
+    _add_center_image_on_pizza(fig, center_image=center_image, center_img_scale=center_img_scale, y_center=0.50)
+
     if footer_text:
-        fig.text(0.99, 0.02, footer_text, size=8, color='#F2F2F2', ha='right')
-    if center_image is not None:
-        try:
-            img = center_image.convert('RGBA') if hasattr(center_image, 'convert') else center_image
-            s = max(0.08, min(0.22, float(center_img_scale)))
-            ax_img = fig.add_axes([0.5 - s/2, 0.485 - s/2, s, s], zorder=50)
-            ax_img.imshow(np.asarray(img)); ax_img.axis('off')
-        except Exception:
-            pass
+        fig.text(0.98, 0.025, footer_text, size=8, color='#F4F4F5', ha='right')
     return fig
 
 
 def athletic_pizza(metric_table: pd.DataFrame, title: str = '', subtitle: str = '', categories: Optional[List[str]] = None,
                    attacking_color: str = '#4B78B9', possession_color: str = '#F0C987', defending_color: str = '#9E374B',
                    bg_color: str = '#F4F4EF', text_color: str = '#1B1B1B'):
+    """Light Athletic-style pizza with readable labels and values."""
+    import matplotlib.patheffects as pe
+
     d = metric_table.copy()
-    params = d['metric'].astype(str).str.replace(' ', '\n').tolist()
-    values = pd.to_numeric(d['percentile'], errors='coerce').fillna(0).clip(0,100).tolist()
-    if categories is None or len(categories) != len(values): categories = ['Attacking'] * len(values)
-    slice_colors = add_metric_category_colors(categories, attacking_color, possession_color, defending_color, '#A9B7B7')
-    baker = PyPizza(params=params, background_color=bg_color, straight_line_color=text_color, straight_line_lw=1.5,
-                    last_circle_color=text_color, last_circle_lw=1.5, other_circle_color='#DFDFD8', other_circle_ls='--',
-                    other_circle_lw=1, inner_circle_size=12)
-    fig, ax = baker.make_pizza(values, figsize=(9,10), slice_colors=slice_colors, blank_alpha=.18,
-                               kwargs_slices=dict(edgecolor=text_color, linewidth=1.1),
-                               kwargs_params=dict(color=text_color, fontsize=12, fontweight='bold'),
-                               kwargs_values=dict(color='white', fontsize=14, fontweight='bold'))
+    params = [_pizza_label(m, 13) for m in d['metric'].astype(str).tolist()]
+    values = pd.to_numeric(d['percentile'], errors='coerce').fillna(0).clip(0, 100).round(1).tolist()
+
+    if categories is None or len(categories) != len(values):
+        categories = ['Attacking'] * len(values)
+
+    # Muted Athletic-style palette, category controlled from app
+    slice_colors = add_metric_category_colors(categories, attacking_color, possession_color, defending_color, '#AFC4C3')
+
+    baker = PyPizza(
+        params=params,
+        background_color=bg_color,
+        straight_line_color=text_color,
+        straight_line_lw=1.35,
+        last_circle_color=text_color,
+        last_circle_lw=1.35,
+        other_circle_color='#DDDAD1',
+        other_circle_ls='--',
+        other_circle_lw=1.0,
+        inner_circle_size=13,
+    )
+
+    fig, ax = baker.make_pizza(
+        values,
+        figsize=(9.2, 10.2),
+        slice_colors=slice_colors,
+        blank_alpha=.22,
+        kwargs_slices=dict(edgecolor=text_color, linewidth=1.0),
+        kwargs_params=dict(color=text_color, fontsize=11, fontweight='bold'),
+        kwargs_values=dict(color='white', fontsize=12, fontweight='bold'),
+    )
+
     fig.patch.set_facecolor(bg_color)
-    fig.text(0.06, .965, title, ha='left', va='top', color=text_color, fontsize=26, weight='bold', family='serif')
-    fig.text(0.06, .91, subtitle, ha='left', va='top', color='#8F8F8F', fontsize=15, weight='bold', family='serif')
-    fig.text(0.06, .045, '*Percentiles compared with selected file peers\n•Metrics adjusted manually by your selected data', ha='left', va='bottom', color='#8F8F8F', fontsize=10, style='italic')
+    fig.text(0.06, .972, title or '', ha='left', va='top', color=text_color, fontsize=25, weight='bold', family='serif')
+    if subtitle:
+        fig.text(0.06, .918, subtitle, ha='left', va='top', color='#8F8F8F', fontsize=14, weight='bold', family='serif')
+
+    # Add a small colored category sentence similar to The Athletic reference
+    fig.text(0.06, .888, 'Attacking', ha='left', va='top', color=attacking_color, fontsize=13, weight='bold', family='serif')
+    fig.text(0.165, .888, 'defensive,', ha='left', va='top', color=defending_color, fontsize=13, weight='bold', family='serif')
+    fig.text(0.29, .888, 'possession and progression percentiles', ha='left', va='top', color='#8F8F8F', fontsize=13, weight='bold', family='serif')
+
+    fig.text(0.06, .045, '*Percentiles compared with selected file peers\n•Metrics adjusted manually by your selected data',
+             ha='left', va='bottom', color='#8F8F8F', fontsize=10, style='italic')
+
+    # Make white values readable on every slice/background
+    for txt in ax.texts:
+        if txt.get_text().replace('.', '', 1).isdigit():
+            txt.set_path_effects([pe.withStroke(linewidth=1.4, foreground='#1B1B1B')])
     return fig
