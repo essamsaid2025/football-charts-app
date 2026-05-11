@@ -14,20 +14,6 @@ from matplotlib.patches import Patch
 from mplsoccer import Pitch, VerticalPitch, PyPizza
 
 
-# ----------------------------
-# Number formatting helper
-# ----------------------------
-def format_value(v, decimals: int = 1, strip_zero: bool = False) -> str:
-    """Return clean chart labels such as 84.3 instead of long decimals."""
-    try:
-        out = f"{float(v):.{decimals}f}"
-        if strip_zero:
-            out = out.rstrip("0").rstrip(".")
-        return out
-    except Exception:
-        return str(v)
-
-
 # ✅ Helper: YES only (NO/empty = False)
 def _yes_only(s: pd.Series) -> pd.Series:
     if s is None:
@@ -1481,8 +1467,8 @@ def pizza_chart(
         raise ValueError("Pizza input لازم يحتوي أعمدة: metric, value, percentile")
 
     params = dfp["metric"].astype(str).tolist()
-    values = pd.to_numeric(dfp["percentile"], errors="coerce").fillna(0).round(1).tolist()
-    value_text = pd.to_numeric(dfp["value"], errors="coerce").map(lambda x: format_value(x, 1)).tolist()
+    values = pd.to_numeric(dfp["percentile"], errors="coerce").fillna(0).tolist()
+    value_text = dfp["value"].astype(str).tolist()
 
     if slice_colors is None or len(slice_colors) != len(values):
         slice_colors = ["#1f77b4"] * len(values)
@@ -2111,14 +2097,9 @@ def build_player_metric_table(df: pd.DataFrame, player_col: str, player_name: st
     for m in metrics:
         val = pd.to_numeric(r[m], errors='coerce')
         pct = percentile_rank(d[m], val)
-        rows.append({
-            'metric': str(m),
-            'value': np.nan if pd.isna(val) else round(float(val), 1),
-            'percentile': 0.0 if pd.isna(pct) else round(float(pct), 1),
-        })
+        rows.append({'metric': str(m), 'value': val, 'percentile': 0 if pd.isna(pct) else pct})
     out = pd.DataFrame(rows)
     out['plot_value'] = out['percentile'] if str(value_mode).lower().startswith('percent') else out['value']
-    out['plot_value'] = pd.to_numeric(out['plot_value'], errors='coerce').round(1)
     return out
 
 
@@ -2163,13 +2144,13 @@ def generic_bar_chart(metric_table: pd.DataFrame, title: str = 'Bar Chart', valu
         ax.set_xlabel(value_col, color=text_color)
         if show_values:
             for i, v in enumerate(d[value_col]):
-                ax.text(float(v) + max(1, float(d[value_col].max())*0.01), i, format_value(v, 1), va='center', color=text_color, fontsize=9, weight='bold')
+                ax.text(float(v) + max(1, float(d[value_col].max())*0.01), i, f'{v:.1f}', va='center', color=text_color, fontsize=9, weight='bold')
     else:
         ax.bar(d['metric'], d[value_col], color=bar_color)
         ax.tick_params(axis='x', rotation=35)
         if show_values:
             for i, v in enumerate(d[value_col]):
-                ax.text(i, float(v), format_value(v, 1), ha='center', va='bottom', color=text_color, fontsize=9, weight='bold')
+                ax.text(i, float(v), f'{v:.1f}', ha='center', va='bottom', color=text_color, fontsize=9, weight='bold')
     ax.set_title(title, color=text_color, fontsize=18, weight='bold')
     ax.tick_params(colors=text_color)
     for sp in ax.spines.values(): sp.set_color(text_color); sp.set_alpha(.25)
@@ -2189,7 +2170,7 @@ def percentile_bar_chart(metric_table: pd.DataFrame, title: str = 'Percentile Ba
     ax.set_xlim(0, 100)
     ax.axvline(50, color=text_color, alpha=.18, ls='--')
     for i, v in enumerate(d['percentile']):
-        ax.text(min(98, float(v)+1.0), i, format_value(v, 1), va='center', color=text_color, fontsize=10, weight='bold')
+        ax.text(min(98, float(v)+1.0), i, f'{v:.0f}', va='center', color=text_color, fontsize=10, weight='bold')
     ax.set_title(title, color=text_color, fontsize=18, weight='bold')
     ax.set_xlabel('Percentile', color=text_color)
     ax.tick_params(colors=text_color)
@@ -2203,7 +2184,7 @@ def mpl_pizza_dark(metric_table: pd.DataFrame, title: str = '', subtitle: str = 
                    bg_color: str = '#222222'):
     d = metric_table.copy()
     params = d['metric'].astype(str).str.replace(' ', '\n').tolist()
-    values = pd.to_numeric(d['percentile'], errors='coerce').fillna(0).clip(0,100).round(1).tolist()
+    values = pd.to_numeric(d['percentile'], errors='coerce').fillna(0).clip(0,100).tolist()
     if categories is None or len(categories) != len(values):
         categories = ['Attacking'] * len(values)
     slice_colors = add_metric_category_colors(categories, attacking_color, possession_color, defending_color, '#777777')
@@ -2243,7 +2224,7 @@ def athletic_pizza(metric_table: pd.DataFrame, title: str = '', subtitle: str = 
                    bg_color: str = '#F4F4EF', text_color: str = '#1B1B1B'):
     d = metric_table.copy()
     params = d['metric'].astype(str).str.replace(' ', '\n').tolist()
-    values = pd.to_numeric(d['percentile'], errors='coerce').fillna(0).clip(0,100).round(1).tolist()
+    values = pd.to_numeric(d['percentile'], errors='coerce').fillna(0).clip(0,100).tolist()
     if categories is None or len(categories) != len(values): categories = ['Attacking'] * len(values)
     slice_colors = add_metric_category_colors(categories, attacking_color, possession_color, defending_color, '#A9B7B7')
     baker = PyPizza(params=params, background_color=bg_color, straight_line_color=text_color, straight_line_lw=1.5,
