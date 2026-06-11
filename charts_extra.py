@@ -50,10 +50,40 @@ def _add_leg(ax, handles, theme: dict, loc: str = "lower center"):
         t.set_color(theme.get("text", "white"))
 
 
+def _set_pitch_bounds(ax, pitch_mode: str = "rect", pitch_width: float = 68.0, vertical_pitch: bool = False):
+    y_max = pitch_width if pitch_mode == "rect" else 100.0
+    if vertical_pitch:
+        ax.set_xlim(-2, y_max + 2)
+        ax.set_ylim(-2, 102)
+    else:
+        ax.set_xlim(-2, 102)
+        ax.set_ylim(-2, y_max + 2)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # EXTRA THEMES
 # ─────────────────────────────────────────────────────────────────────────────
 EXTRA_THEMES: Dict[str, dict] = {
+    "Opta Analyst Light": {
+        "bg": "#F3F3F4", "panel": "#ECEDEF", "pitch": "#F3F3F4",
+        "pitch_lines": "#9B9B9B", "pitch_stripe": None,
+        "text": "#151326", "muted": "#77727F", "lines": "#D4D4D7", "goal": "#4A4A4A",
+    },
+    "Opta Analyst Pink": {
+        "bg": "#F4F2F4", "panel": "#EEE9EE", "pitch": "#F4F2F4",
+        "pitch_lines": "#9B9B9B", "pitch_stripe": None,
+        "text": "#171329", "muted": "#807985", "lines": "#D7D2D7", "goal": "#4A4A4A",
+    },
+    "The Athletic FC Cream": {
+        "bg": "#F7F3EA", "panel": "#EFE8DB", "pitch": "#376B49",
+        "pitch_lines": "#FDFBF4", "pitch_stripe": "#3F7551",
+        "text": "#161616", "muted": "#6F6A61", "lines": "#CCC1AD", "goal": "#222222",
+    },
+    "The Athletic FC Paper": {
+        "bg": "#FBFAF6", "panel": "#F0EEE6", "pitch": "#FBFAF6",
+        "pitch_lines": "#8E8E88", "pitch_stripe": None,
+        "text": "#222222", "muted": "#62615C", "lines": "#D9D5C9", "goal": "#2B2B2B",
+    },
     "Opta Light": {
         "bg": "#F0F0F0", "panel": "#E8E8E8", "pitch": "#F0F0F0",
         "pitch_lines": "#888888", "pitch_stripe": None,
@@ -286,6 +316,7 @@ def goal_mouth_map(
     logo_w: float = 0.12, logo_h: float = 0.10,
     footer_left: str = "",
     footer_right: str = "",
+    active_legend_items: Optional[List[str]] = None,
 ):
     """
     CannonStats-style goal mouth map.
@@ -386,14 +417,18 @@ def goal_mouth_map(
     ax_l.set_xlim(0, 1)
     ax_l.set_ylim(0, 1)
 
-    ax_l.text(0.14, 0.88, "Shot Outcome:", fontsize=12, weight="700",
-              color=text_col, ha="center", va="top")
-    ax_l.scatter([0.06], [0.38], s=350, color=save_color, edgecolors=save_edge, linewidth=2.5, zorder=5)
-    ax_l.text(0.09, 0.38, "Save", fontsize=11, color=text_col, va="center")
-    ax_l.scatter([0.18], [0.38], s=550, color=goal_color, edgecolors=goal_edge, linewidth=0, zorder=5)
-    ax_l.text(0.21, 0.38, "Goal", fontsize=11, color=text_col, va="center")
+    active = set(active_legend_items or ["Save", "Goal", "Post-Shot xG Value"])
+    if {"Save", "Goal"} & active:
+        ax_l.text(0.14, 0.88, "Shot Outcome:", fontsize=12, weight="700",
+                  color=text_col, ha="center", va="top")
+    if "Save" in active:
+        ax_l.scatter([0.06], [0.38], s=350, color=save_color, edgecolors=save_edge, linewidth=2.5, zorder=5)
+        ax_l.text(0.09, 0.38, "Save", fontsize=11, color=text_col, va="center")
+    if "Goal" in active:
+        ax_l.scatter([0.18], [0.38], s=550, color=goal_color, edgecolors=goal_edge, linewidth=0, zorder=5)
+        ax_l.text(0.21, 0.38, "Goal", fontsize=11, color=text_col, va="center")
 
-    if size_by_xg:
+    if size_by_xg and "Post-Shot xG Value" in active:
         ax_l.text(0.65, 0.88, "Post-Shot xG Value:", fontsize=12, weight="700",
                   color=text_col, ha="center", va="top")
         for xgv, xgx in zip([0.03, 0.08, 0.18, 0.35, 0.65], np.linspace(0.52, 0.80, 5)):
@@ -408,6 +443,119 @@ def goal_mouth_map(
 
     overlay_image_on_fig(fig, logo_img, x=logo_x, y=logo_y, w=logo_w, h=logo_h,
                          circle_crop=True, border_lw=2.0)
+    return fig
+
+
+def goal_shot_report_map(
+    df: pd.DataFrame,
+    title: str = "Shot Report",
+    subtitle: str = "Goals and shots on target",
+    theme_name: str = "Opta Analyst Light",
+    pitch_mode: str = "rect",
+    pitch_width: float = 68.0,
+    goal_color: str = "#D94D61",
+    save_color: str = "#FFFFFF",
+    goal_edge: str = "#B73C4F",
+    save_edge: str = "#11113A",
+    dot_size: int = 130,
+    logo_img=None,
+    logo_x: float = 0.84, logo_y: float = 0.88,
+    logo_w: float = 0.12, logo_h: float = 0.10,
+    active_legend_items: Optional[List[str]] = None,
+):
+    """Opta/CannonStats-inspired report with goal-location half pitch and goal-face inset."""
+    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
+    bg = theme.get("bg", "#F3F3F4")
+    text_col = theme.get("text", "#151326")
+    muted_col = theme.get("muted", "#77727F")
+    line_col = theme.get("pitch_lines", "#9B9B9B")
+    y_max = float(pitch_width if pitch_mode == "rect" else 100.0)
+    active = set(active_legend_items or ["Pitch goals", "Goal", "Save", "xG size"])
+
+    d = df.copy()
+    d["outcome"] = d.get("outcome", "").astype(str).str.lower()
+    shots = d[d["event_type"].astype(str).str.lower().eq("shot")].copy() if "event_type" in d.columns else d.copy()
+    goals = shots[shots["outcome"].eq("goal")].copy()
+    on_target = shots[shots["outcome"].isin(["goal", "ontarget", "save", "saved"])].copy()
+
+    fig = plt.figure(figsize=(14, 9), facecolor=bg)
+    fig.text(0.04, 0.955, title, fontsize=34, weight="900", color=text_col, va="top")
+    fig.text(0.04, 0.895, subtitle, fontsize=14, color=muted_col, va="top")
+
+    ax_pitch = fig.add_axes([0.04, 0.12, 0.54, 0.70])
+    ax_goal = fig.add_axes([0.64, 0.26, 0.30, 0.34])
+    ax_stats = fig.add_axes([0.64, 0.63, 0.30, 0.20])
+    ax_leg = fig.add_axes([0.64, 0.09, 0.30, 0.12])
+    for ax in [ax_pitch, ax_goal, ax_stats, ax_leg]:
+        ax.set_facecolor(bg)
+        ax.axis("off")
+
+    ax_pitch.set_xlim(48, 103)
+    ax_pitch.set_ylim(-2, y_max + 2)
+    lw = 1.7
+    mid = y_max / 2.0
+    def _rect(ax, x0, y0, x1, y1):
+        ax.plot([x0, x1, x1, x0, x0], [y0, y0, y1, y1, y0], color=line_col, lw=lw)
+    _rect(ax_pitch, 50, 0, 100, y_max)
+    pa_w = y_max * 40.32 / 68.0; pa_l = 16.5 / 105.0 * 100.0
+    sa_w = y_max * 18.32 / 68.0; sa_l = 5.5 / 105.0 * 100.0
+    _rect(ax_pitch, 100 - pa_l, mid - pa_w / 2, 100, mid + pa_w / 2)
+    _rect(ax_pitch, 100 - sa_l, mid - sa_w / 2, 100, mid + sa_w / 2)
+    goal_w = y_max * 7.32 / 68.0
+    ax_pitch.plot([100, 103, 103, 100], [mid - goal_w/2, mid - goal_w/2, mid + goal_w/2, mid + goal_w/2], color=line_col, lw=lw)
+    ax_pitch.plot(100 - 11 / 105 * 100, mid, "o", color=line_col, ms=3)
+    if "Pitch goals" in active and not goals.empty:
+        ax_pitch.scatter(goals["x"], goals["y"], s=dot_size, color=goal_color,
+                         edgecolors=goal_edge, linewidth=1.1, alpha=0.92, zorder=5)
+
+    ax_stats.set_xlim(0, 1); ax_stats.set_ylim(0, 1)
+    g = int((shots["outcome"] == "goal").sum())
+    sot = int(shots["outcome"].isin(["goal", "ontarget", "save", "saved"]).sum())
+    xg = pd.to_numeric(shots.get("xg", pd.Series(0, index=shots.index)), errors="coerce").fillna(0).sum()
+    for i, (lab, val) in enumerate([("Goals", g), ("Shots on Target", sot), ("xG", f"{xg:.2f}")]):
+        x = [0.06, 0.50, 0.88][i]
+        ax_stats.text(x, 0.78, str(val), ha="center", va="center", fontsize=25, weight="900", color=text_col)
+        ax_stats.text(x, 0.35, lab, ha="center", va="center", fontsize=10, weight="700", color=muted_col)
+
+    ax_goal.set_xlim(0, 1); ax_goal.set_ylim(0, 1)
+    ax_goal.add_patch(FancyBboxPatch((0.02, 0.02), 0.96, 0.86, boxstyle="square,pad=0", linewidth=0, facecolor="#858585", zorder=1))
+    ax_goal.add_patch(FancyBboxPatch((0.08, 0.08), 0.84, 0.72, boxstyle="square,pad=0", linewidth=1.8, edgecolor="#666666", facecolor=bg, zorder=2))
+    if not on_target.empty:
+        y_vals = pd.to_numeric(on_target.get("y", y_max/2), errors="coerce").fillna(y_max/2)
+        gx_norm = 0.08 + (y_vals / y_max).clip(0, 1) * 0.84
+        z_col = next((c for c in ["z", "height", "shot_height", "goal_height"] if c in on_target.columns), None)
+        if z_col:
+            gy_norm = 0.08 + (pd.to_numeric(on_target[z_col], errors="coerce").fillna(1.2) / 2.44).clip(0, 1) * 0.72
+        else:
+            gy_norm = pd.Series(np.linspace(0.24, 0.64, len(on_target)), index=on_target.index)
+        for i, (_, r) in enumerate(on_target.iterrows()):
+            is_goal = str(r.get("outcome", "")).lower() == "goal"
+            label = "Goal" if is_goal else "Save"
+            if label not in active:
+                continue
+            xgv = pd.to_numeric(pd.Series([r.get("xg", 0.12)]), errors="coerce").fillna(0.12).iloc[0]
+            sz = 120 + float(xgv) * 1600 if "xG size" in active else 360
+            ax_goal.scatter([float(gx_norm.iloc[i])], [float(gy_norm.iloc[i])],
+                            s=sz, color=goal_color if is_goal else save_color,
+                            edgecolors=goal_edge if is_goal else save_edge,
+                            linewidth=2.0, alpha=0.94, zorder=5)
+
+    ax_leg.set_xlim(0, 1); ax_leg.set_ylim(0, 1)
+    x0 = 0.04
+    if "Save" in active:
+        ax_leg.scatter([x0], [0.55], s=220, color=save_color, edgecolors=save_edge, linewidth=2)
+        ax_leg.text(x0 + 0.07, 0.55, "Save", color=text_col, va="center", fontsize=10)
+        x0 += 0.28
+    if "Goal" in active:
+        ax_leg.scatter([x0], [0.55], s=300, color=goal_color, edgecolors=goal_edge, linewidth=1)
+        ax_leg.text(x0 + 0.07, 0.55, "Goal", color=text_col, va="center", fontsize=10)
+        x0 += 0.28
+    if "xG size" in active:
+        for j, s in enumerate([60, 140, 260]):
+            ax_leg.scatter([x0 + j * 0.08], [0.55], s=s, facecolors="none", edgecolors=text_col, linewidth=1)
+        ax_leg.text(x0 + 0.26, 0.55, "xG size", color=text_col, va="center", fontsize=10)
+
+    overlay_image_on_fig(fig, logo_img, x=logo_x, y=logo_y, w=logo_w, h=logo_h, circle_crop=True, border_lw=1.5)
     return fig
 
 
@@ -447,7 +595,9 @@ def vertical_event_map(
         stripe=bool(stripe),
         stripe_color=stripe or pc,
     )
-    fig, ax = vp.draw(figsize=(8, 12))
+    fig_w = 8.0
+    fig_h = max(10.5, fig_w * (100.0 / max(float(pitch_width), 1.0)) * 0.96)
+    fig, ax = vp.draw(figsize=(fig_w, fig_h), constrained_layout=False)
     fig.patch.set_facecolor(theme["bg"])
     ax.set_facecolor(pc)
 
@@ -516,7 +666,7 @@ def vertical_event_map(
 
     ax.set_title(title, color=text_col, fontsize=16, weight="bold", pad=14)
     overlay_image_on_fig(fig, overlay_img, x=img_x, y=img_y, w=img_w, h=img_h)
-    fig.tight_layout(pad=1.5)
+    fig.subplots_adjust(left=0.06, right=0.94, top=0.94, bottom=0.08)
     return fig
 
 
@@ -564,9 +714,7 @@ def progressive_carries_map(
                           color=carry_color, edgecolors="white",
                           linewidth=0.8, zorder=5)
 
-    y_max = pitch_width if pitch_mode == "rect" else 100.0
-    ax.set_xlim(-2, 102)
-    ax.set_ylim(-2, y_max + 2)
+    _set_pitch_bounds(ax, pitch_mode, pitch_width, vertical_pitch)
     ax.set_title(title, color=theme["text"], fontsize=16, weight="bold")
 
     handles = [Line2D([0], [0], color=carry_color, lw=2, label="Progressive carry",
@@ -612,7 +760,6 @@ def pressure_map(
             d[c] = pd.to_numeric(d[c], errors="coerce")
     d = d.dropna(subset=["x", "y"])
 
-    y_max = pitch_width if pitch_mode == "rect" else 100.0
     if not d.empty:
         try:
             pitch.kdeplot(d["x"], d["y"], ax=ax, fill=True,
@@ -621,8 +768,7 @@ def pressure_map(
             pitch.scatter(d["x"], d["y"], ax=ax, s=40, alpha=0.5,
                           color="#FF4060", edgecolors="none")
 
-    ax.set_xlim(-2, 102)
-    ax.set_ylim(-2, y_max + 2)
+    _set_pitch_bounds(ax, pitch_mode, pitch_width, vertical_pitch)
     ax.set_title(title, color=theme["text"], fontsize=16, weight="bold")
     overlay_image_on_fig(fig, overlay_img, x=img_x, y=img_y, w=img_w, h=img_h)
     return fig
