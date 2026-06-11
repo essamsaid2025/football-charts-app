@@ -785,6 +785,22 @@ def _draw_pitch(ax, pitch: Pitch, theme: dict):
     ax.set_facecolor(theme["pitch"])
 
 
+def _pitch_figsize(vertical_pitch: bool = False, pitch_width: float = 64.0) -> Tuple[float, float]:
+    if not vertical_pitch:
+        return (7.6, 4.8)
+    return (7.2, max(9.5, 7.2 * (100.0 / max(float(pitch_width), 1.0)) * 0.96))
+
+
+def _set_pitch_bounds(ax, pitch_mode: str = "rect", pitch_width: float = 64.0, vertical_pitch: bool = False):
+    y_max = pitch_width if pitch_mode == "rect" else 100.0
+    if vertical_pitch:
+        ax.set_xlim(-2, y_max + 2)
+        ax.set_ylim(-2, 102)
+    else:
+        ax.set_xlim(-2, 102)
+        ax.set_ylim(-2, y_max + 2)
+
+
 def _add_legend(ax, handles, theme: dict, loc: str = "lower center"):
     if not handles:
         return
@@ -905,7 +921,7 @@ def outcome_bar(df: pd.DataFrame, bar_colors: Optional[dict] = None, theme_name:
 def start_location_heatmap(df: pd.DataFrame, pitch_mode: str = "rect", pitch_width: float = 64.0, theme_name: str = "The Athletic Dark", vertical_pitch: bool = False):
     theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
     pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
-    fig, ax = plt.subplots(figsize=(7.6, 4.8))
+    fig, ax = plt.subplots(figsize=_pitch_figsize(vertical_pitch, pitch_width))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
 
@@ -915,8 +931,7 @@ def start_location_heatmap(df: pd.DataFrame, pitch_mode: str = "rect", pitch_wid
         pitch.scatter(df["x"], df["y"], ax=ax, s=25, alpha=0.6)
 
     ax.set_title("Start Locations Heatmap", color=theme["text"])
-    ax.set_xlim(-2, 102)
-    ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
+    _set_pitch_bounds(ax, pitch_mode, pitch_width, vertical_pitch)
 
     handles = [Patch(facecolor=theme.get("muted", "#A0A7B4"), label="Density / Events")]
     _add_legend(ax, handles, theme, loc="upper center")
@@ -951,7 +966,7 @@ def touch_map(
     d["y"] = pd.to_numeric(d["y"], errors="coerce")
     d = d.dropna(subset=["x", "y"]).copy()
 
-    fig, ax = plt.subplots(figsize=(12, 7.2))
+    fig, ax = plt.subplots(figsize=(7.2, 10.8) if vertical_pitch else (12, 7.2))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
 
@@ -969,8 +984,7 @@ def touch_map(
         )
 
     ax.set_title("Touch Map", color=theme["text"], fontsize=18, weight="bold")
-    ax.set_xlim(-2, 102)
-    ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
+    _set_pitch_bounds(ax, pitch_mode, pitch_width, vertical_pitch)
 
     handles = []
     if not _is_no_marker(marker):
@@ -998,15 +1012,14 @@ def _bool_mask(col, index: pd.Index) -> pd.Series:
 
 def _empty_pass_map_figure(pitch_mode: str, pitch_width: float, theme: dict, title: str, msg: str, vertical_pitch: bool = False):
     pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
-    fig, ax = plt.subplots(figsize=(7.6, 4.8))
+    fig, ax = plt.subplots(figsize=_pitch_figsize(vertical_pitch, pitch_width))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
 
     ax.set_title(title, color=theme["text"])
     ax.text(0.5, 0.5, msg, transform=ax.transAxes, ha="center", va="center",
             fontsize=13, color=theme.get("text", "white"), wrap=True)
-    ax.set_xlim(-2, 102)
-    ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
+    _set_pitch_bounds(ax, pitch_mode, pitch_width, vertical_pitch)
     return fig
 
 
@@ -1088,7 +1101,7 @@ def pass_map(
         )
 
     pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
-    fig, ax = plt.subplots(figsize=(7.6, 4.8))
+    fig, ax = plt.subplots(figsize=_pitch_figsize(vertical_pitch, pitch_width))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
 
@@ -1131,8 +1144,7 @@ def pass_map(
         title += f"  |  missing x2/y2: {missing_end_n}"
 
     ax.set_title(title, color=theme["text"])
-    ax.set_xlim(-2, 102)
-    ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
+    _set_pitch_bounds(ax, pitch_mode, pitch_width, vertical_pitch)
 
     handles = []
     for t in PASS_ORDER:
@@ -1165,7 +1177,7 @@ def shot_map(
 
     s = df[df["event_type"] == "shot"].copy()
     pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
-    fig, ax = plt.subplots(figsize=(7.6, 4.8))
+    fig, ax = plt.subplots(figsize=_pitch_figsize(vertical_pitch, pitch_width))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
 
@@ -1199,8 +1211,7 @@ def shot_map(
 
     xg_src = str(df["xg_source"].iloc[0]) if ("xg_source" in df.columns and len(df)) else ""
     ax.set_title(("Shot Map — xG: %s" % xg_src).strip(), color=theme["text"])
-    ax.set_xlim(-2, 102)
-    ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
+    _set_pitch_bounds(ax, pitch_mode, pitch_width, vertical_pitch)
 
     handles = []
     for t in SHOT_ORDER:
@@ -1232,7 +1243,7 @@ def defensive_actions_map(
 
     d = df[df["event_type"] == "defensive"].copy()
     pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=vertical_pitch)
-    fig, ax = plt.subplots(figsize=(7.6, 4.8))
+    fig, ax = plt.subplots(figsize=_pitch_figsize(vertical_pitch, pitch_width))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
 
@@ -1292,8 +1303,7 @@ def defensive_actions_map(
             )
 
     ax.set_title("Defensive Actions Map", color=theme["text"])
-    ax.set_xlim(-2, 102)
-    ax.set_ylim(-2, pitch_width + 2 if pitch_mode == "rect" else 102)
+    _set_pitch_bounds(ax, pitch_mode, pitch_width, vertical_pitch)
     _add_legend(ax, legend_handles, theme, loc="upper center")
     return fig
 
