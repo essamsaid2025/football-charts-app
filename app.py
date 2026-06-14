@@ -942,14 +942,24 @@ if section == "🛡️ Defensive Charts":
                     if dv:
                         fig, ax, vp = make_full_vertical_pitch(S["pm"], S["pw"], THEMES[S["tn"]])
                         d2 = df[df["event_type"]=="defensive"].copy() if "event_type" in df.columns else df.copy()
+                        from charts import _yes_only
                         for act in all_acts:
                             if act not in d2.columns or act not in leg_cfg["active"]: continue
-                            from charts import _yes_only
-                            sub = d2[_yes_only(d2[act])]
-                            if sub.empty: continue
-                            vp.scatter(sub["x"], sub["y"], ax=ax, s=100,
-                                       color=dc.get(act,"#AAAAAA"), edgecolors="white",
-                                       linewidth=1.2, marker=dm.get(act,"o") or "o", zorder=5)
+                            mask = _yes_only(d2[act])
+                            subset = d2[mask]
+                            if subset.empty: continue
+                            success = subset[subset["outcome"] == "successful"]
+                            fail = subset[subset["outcome"] == "unsuccessful"]
+                            color = dc.get(act, "#AAAAAA")
+                            marker = dm.get(act, "o") or "o"
+                            if not success.empty:
+                                vp.scatter(success["x"], success["y"], ax=ax, s=100,
+                                           color=color, edgecolors="white",
+                                           linewidth=1.2, marker=marker, zorder=5)
+                            if not fail.empty:
+                                vp.scatter(fail["x"], fail["y"], ax=ax, s=100,
+                                           facecolors="none", edgecolors=color,
+                                           linewidth=1.6, marker=marker, zorder=5)
                         ax.set_title(t, color=THEMES[S["tn"]]["text"], fontsize=16, weight="bold")
                     else:
                         dc_f = {k:v for k,v in dc.items() if k in leg_cfg["active"]}
@@ -1128,14 +1138,27 @@ if section == "🔄 Distribution Charts":
                     pc_f = {k:v for k,v in pc.items() if k in al}
                     pm_f = {k:v for k,v in pm2.items() if k in al}
                     if dv:
-                        from charts import _filter_passes_for_map, _yes_only, PASS_ORDER
+                        from charts import _filter_passes_for_map, PASS_ORDER
                         d2 = df[df["event_type"]=="pass"].copy()
+                        if "x2" in d2.columns:
+                            d2["x2"] = pd.to_numeric(d2["x2"], errors="coerce")
+                        else:
+                            d2["x2"] = np.nan
+                        if "y2" in d2.columns:
+                            d2["y2"] = pd.to_numeric(d2["y2"], errors="coerce")
+                        else:
+                            d2["y2"] = np.nan
+                        d2 = _filter_passes_for_map(d2, pass_view=pv, result_scope=ps, min_packing=ppk)
                         fig, ax, vp_p = make_full_vertical_pitch(S["pm"], S["pw"], THEMES[S["tn"]])
+                        if d2.empty:
+                            ax.text(0.5, 0.5, "No passes match the selected filters.",
+                                    transform=ax.transAxes, ha="center", va="center",
+                                    fontsize=12, color=THEMES[S["tn"]].get("text","white"), wrap=True)
                         for outc in PASS_ORDER:
                             if outc not in al: continue
                             sub = d2[d2["outcome"]==outc]
                             if sub.empty: continue
-                            has_end = sub["x2"].notna() & sub["y2"].notna() if "x2" in sub.columns else pd.Series(False, index=sub.index)
+                            has_end = sub["x2"].notna() & sub["y2"].notna()
                             if has_end.any():
                                 vp_p.arrows(sub.loc[has_end,"x"],sub.loc[has_end,"y"],
                                             sub.loc[has_end,"x2"],sub.loc[has_end,"y2"],
@@ -1276,6 +1299,7 @@ if section == "🎯 Specialist Charts":
                                          stats_row=stats_row or None, theme_name=gtn,
                                          goal_color=gc, save_color=sc, goal_edge=ge, save_edge=se,
                                          size_by_xg=sxg,
+                                         pitch_mode=S["pm"], pitch_width=S["pw"],
                                          logo_img=logo_ov["img"],
                                          logo_x=logo_ov["x"], logo_y=logo_ov["y"],
                                          logo_w=logo_ov["w"], logo_h=logo_ov["h"],
