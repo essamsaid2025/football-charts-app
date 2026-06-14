@@ -317,6 +317,8 @@ def goal_mouth_map(
     footer_left: str = "",
     footer_right: str = "",
     active_legend_items: Optional[List[str]] = None,
+    pitch_mode: str = "rect",
+    pitch_width: float = 68.0,
 ):
     """
     CannonStats-style goal mouth map.
@@ -382,9 +384,9 @@ def goal_mouth_map(
         ax_g.plot([0.09, 0.91], [gy, gy], color="#DDDDDD", lw=0.45, alpha=0.55, zorder=3)
 
     if not on_target.empty:
-        y_max_p = 68.0
-        y_vals = pd.to_numeric(on_target.get("y", 34.0), errors="coerce").fillna(34.0)
-        gx_norm = 0.09 + (y_vals / y_max_p) * 0.82
+        y_max_p = float(pitch_width if pitch_mode == "rect" else 100.0)
+        y_vals = pd.to_numeric(on_target.get("y", y_max_p / 2.0), errors="coerce").fillna(y_max_p / 2.0)
+        gx_norm = 0.09 + (y_vals / y_max_p).clip(0, 1) * 0.82
 
         z_col = next((c for c in ["z", "height", "shot_height", "goal_height"] if c in on_target.columns), None)
         if z_col:
