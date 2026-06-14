@@ -34,9 +34,9 @@ def _load_local_module(alias, filename):
     return None
 
 # Try both naming conventions (with and without spaces/parentheses)
-_load_local_module("charts", "charts.py") or _load_local_module("charts", "charts (8).py")
-_load_local_module("charts_extra", "charts_extra.py") or _load_local_module("charts_extra", "charts_extra (1).py")
-_load_local_module("scouting_tools_v2", "scouting_tools_v2.py") or _load_local_module("scouting_tools_v2", "scouting_tools_v2 (6).py")
+_ = _load_local_module("charts", "charts.py") or _load_local_module("charts", "charts (8).py")
+_ = _load_local_module("charts_extra", "charts_extra.py") or _load_local_module("charts_extra", "charts_extra (1).py")
+_ = _load_local_module("scouting_tools_v2", "scouting_tools_v2.py") or _load_local_module("scouting_tools_v2", "scouting_tools_v2 (6).py")
 
 # ── core chart library ────────────────────────────────────────────────────────
 from charts import (
@@ -1905,15 +1905,54 @@ In the meantime you can still use the **Manual Entry** tab below to log events b
                     for c in ["x","y","x2","y2"]:
                         if c in events_clean.columns:
                             events_clean[c] = pd.to_numeric(events_clean[c], errors="coerce")
+
+                    # Normalize tagging-tool event types to the vocabulary used by validate_and_clean
+                    # (tagging tool uses: pass, carry, dribble, cross, shot, touch, "defensive action", recovery)
+                    EVENT_TYPE_MAP = {
+                        "defensive action": "defensive",
+                        "recovery": "defensive",
+                        "carry": "carry",
+                        "dribble": "carry",
+                        "cross": "pass",
+                    }
+                    if "event_type" in events_clean.columns:
+                        events_clean["event_type"] = (
+                            events_clean["event_type"].astype(str).str.strip().str.lower()
+                            .map(lambda v: EVENT_TYPE_MAP.get(v, v))
+                        )
+
                     prepared = prepare_df_for_charts(ensure_outcome(events_clean),
                                                      pitch_mode=pm_tag, pitch_width=pw_tag)
                     et_counts = prepared.get("event_type", pd.Series(dtype=str)).value_counts()
+
+                    has_carry_pts = (prepared["x2"].notna() & prepared["y2"].notna()).any()
+
                     if "shot" in et_counts.index and et_counts["shot"] > 0:
                         fig = shot_map(prepared, pitch_mode=pm_tag, pitch_width=pw_tag, theme_name=tn)
                         fig.axes[0].set_title("Tagged Shots", color=THEMES[tn]["text"], fontsize=14, weight="bold")
-                    else:
+                    elif "pass" in et_counts.index and et_counts["pass"] > 0:
                         fig = pass_map(prepared, pitch_mode=pm_tag, pitch_width=pw_tag, theme_name=tn)
+                        fig.axes[0].set_title("Tagged Passes / Crosses", color=THEMES[tn]["text"], fontsize=14, weight="bold")
+                    elif "defensive" in et_counts.index and et_counts["defensive"] > 0:
+                        fig = defensive_actions_map(prepared, pitch_mode=pm_tag, pitch_width=pw_tag, theme_name=tn)
+                        fig.axes[0].set_title("Tagged Defensive Actions / Recoveries", color=THEMES[tn]["text"], fontsize=14, weight="bold")
+                    elif "carry" in et_counts.index and et_counts["carry"] > 0 and has_carry_pts:
+                        fig = progressive_carries_map(prepared, title="Tagged Carries / Dribbles",
+                                                       theme_name=tn, pitch_mode=pm_tag, pitch_width=pw_tag,
+                                                       min_distance=0.0)
+                    elif "touch" in et_counts.index and et_counts["touch"] > 0:
+                        fig = touch_map(prepared, pitch_mode=pm_tag, pitch_width=pw_tag, theme_name=tn)
+                        fig.axes[0].set_title("Tagged Touches", color=THEMES[tn]["text"], fontsize=14, weight="bold")
+                    elif has_carry_pts:
+                        # Generic events with start/end points -> reuse carries map
+                        fig = progressive_carries_map(prepared, title="Tagged Events",
+                                                       theme_name=tn, pitch_mode=pm_tag, pitch_width=pw_tag,
+                                                       min_distance=0.0)
+                    else:
+                        # Fallback: plot raw tagged points on the pitch
+                        fig = touch_map(prepared, pitch_mode=pm_tag, pitch_width=pw_tag, theme_name=tn)
                         fig.axes[0].set_title("Tagged Events", color=THEMES[tn]["text"], fontsize=14, weight="bold")
+
                     st.image(_bytes(fig, dpi=150), use_container_width=True)
                     plt.close(fig)
                 except Exception as e:
