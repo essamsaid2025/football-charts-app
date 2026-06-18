@@ -624,7 +624,7 @@ if section == "🎯 Pro Shot Map":
         cfg = default_layout_cfg()
         cfg["theme_name"] = st.selectbox("Theme", ALL_THEMES,
             index=ALL_THEMES.index("The Athletic Light") if "The Athletic Light" in ALL_THEMES else 0,
-            key="psm_tn")
+            key="psm_theme_main")
         theme = THEMES.get(cfg["theme_name"], {})
 
         cfg["player_name"] = st.text_input("Player name", "", key="psm_pn")
