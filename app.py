@@ -878,7 +878,6 @@ if section == "⚔️ Attacking Charts":
                 st.markdown('</div>',unsafe_allow_html=True)
             with R:
                 if gen:
-                    from app import _opta_goal_combo
                     fig = _opta_goal_combo(df,gl_title,gl_sub,
                         player_ov.get("img"),logo_ov.get("img"),
                         gl_color,gl_edge,gl_ds,gl_tn,S["pm"],S["pw"],stats or None)
