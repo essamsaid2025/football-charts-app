@@ -268,8 +268,7 @@ def draw_attack_direction(ax, cfg: dict, theme: dict,
                     annotation_clip=False)
         if lbl:
             ax.text((x0 + x1) / 2, arrow_y - 2.5, lbl,
-                    color=col, fontsize=fsize, ha="center", va="top",
-                    annotation_clip=False)
+                    color=col, fontsize=fsize, ha="center", va="top")
 
 
 def draw_opta_attack_arrows(ax, theme: dict, y_max: float = 68.0,
@@ -293,7 +292,7 @@ def draw_opta_attack_arrows(ax, theme: dict, y_max: float = 68.0,
                     annotation_clip=False)
     if show_label:
         ax.text(50, base_y - 2.8, label, color=col, fontsize=9.5,
-                ha="center", va="top", annotation_clip=False)
+                ha="center", va="top")
 
 
 def draw_stat_blocks_bottom(fig, blocks: List[dict], theme: dict,
