@@ -762,6 +762,186 @@ def athletic_shot_map_pro(
     return fig
 
 
+def athletic_compact_shot_map(
+    df: pd.DataFrame,
+    cfg: dict = None,
+    goal_color: str = "#C8102E",
+    no_goal_color: str = None,
+    edge_color: str = None,
+    min_dot_size: int = 70,
+    max_dot_size: int = 520,
+    pitch_mode: str = "square",
+    pitch_width: float = 100.0,
+    result_col: str = None,
+    xg_col: str = None,
+):
+    """Compact vertical The Athletic-style shot map inspired by the notebook reference."""
+    cfg = cfg or default_layout_cfg()
+    theme_name = cfg.get("theme_name", "The Athletic Dark")
+    theme = THEMES.get(theme_name, THEMES.get("The Athletic Dark", {})) or PRO_THEMES["The Athletic Dark"]
+
+    bg = theme.get("bg", "#0C0D0E")
+    pitch_bg = theme.get("pitch", bg)
+    text_col = theme.get("text", "#FFFFFF")
+    muted_col = theme.get("muted", "#A0A7B4")
+    line_col = theme.get("pitch_lines", "#FFFFFF")
+    accent = goal_color or theme.get("accent", "#C8102E")
+    no_goal_color = no_goal_color or bg
+    edge_color = edge_color or line_col
+
+    d = df.copy()
+    rename = {}
+    lower_cols = {str(c).strip().lower(): c for c in d.columns}
+    if "x" not in d.columns and "x" in lower_cols:
+        rename[lower_cols["x"]] = "x"
+    if "y" not in d.columns and "y" in lower_cols:
+        rename[lower_cols["y"]] = "y"
+    if "xg" not in d.columns and "xg" in lower_cols:
+        rename[lower_cols["xg"]] = "xg"
+    if "outcome" not in d.columns and "result" in lower_cols:
+        rename[lower_cols["result"]] = "outcome"
+    if "X" in d.columns and "x" not in d.columns:
+        rename["X"] = "x"
+    if "Y" in d.columns and "y" not in d.columns:
+        rename["Y"] = "y"
+    if rename:
+        d = d.rename(columns=rename)
+
+    if "event_type" in d.columns:
+        shots = d[d["event_type"].astype(str).str.lower().str.contains("shot", na=False)].copy()
+        if shots.empty:
+            shots = d.copy()
+    else:
+        shots = d.copy()
+
+    result_col = result_col if result_col in shots.columns else ("outcome" if "outcome" in shots.columns else None)
+    xg_col = xg_col if xg_col in shots.columns else ("xg" if "xg" in shots.columns else None)
+    if result_col is None:
+        shots["outcome"] = ""
+        result_col = "outcome"
+    if xg_col is None:
+        shots["xg"] = 0.08
+        xg_col = "xg"
+
+    for c in ["x", "y", xg_col]:
+        shots[c] = pd.to_numeric(shots.get(c), errors="coerce")
+    shots = shots.dropna(subset=["x", "y"]).copy()
+    shots[xg_col] = shots[xg_col].fillna(0.08).clip(lower=0.0)
+
+    y_max = float(pitch_width if pitch_mode == "rect" else 100.0)
+    if not shots.empty:
+        if shots["x"].max(skipna=True) <= 1.5:
+            shots["x"] = shots["x"] * 100.0
+        if shots["y"].max(skipna=True) <= 1.5:
+            shots["y"] = shots["y"] * y_max
+        elif y_max != 100.0 and shots["y"].max(skipna=True) > y_max + 1:
+            shots["y"] = shots["y"] / 100.0 * y_max
+        if shots["x"].median(skipna=True) < 50:
+            shots["x"] = 100.0 - shots["x"]
+
+    outcome = shots[result_col].astype(str).str.lower().str.replace(" ", "", regex=False)
+    goals_mask = outcome.eq("goal")
+    total_shots = int(len(shots))
+    total_goals = int(goals_mask.sum())
+    total_xg = float(shots[xg_col].sum()) if total_shots else 0.0
+    xg_per_shot = total_xg / total_shots if total_shots else 0.0
+    avg_x = float(shots["x"].mean()) if total_shots else 0.0
+    avg_distance = (100.0 - avg_x) / 100.0 * 105.0 * 1.094 if total_shots else 0.0
+
+    fig = plt.figure(figsize=(8, 12))
+    fig.patch.set_facecolor(bg)
+
+    ax_title = fig.add_axes([0, 0.72, 1, 0.20])
+    ax_title.set_facecolor(bg)
+    ax_title.set_xlim(0, 1)
+    ax_title.set_ylim(0, 1)
+    ax_title.axis("off")
+
+    main_title = cfg.get("player_name") or cfg.get("title") or "Shot Map"
+    sub_title = "  |  ".join(p for p in [
+        cfg.get("subtitle", ""), cfg.get("competition", ""), cfg.get("season", "")
+    ] if str(p).strip())
+
+    ax_title.text(0.5, 0.88, main_title, fontsize=22, fontweight="900",
+                  color=text_col, ha="center", va="top")
+    if sub_title:
+        ax_title.text(0.5, 0.70, sub_title, fontsize=13, fontweight="bold",
+                      color=text_col, ha="center", va="top")
+
+    ax_title.text(0.25, 0.45, "Low Quality Chance", fontsize=11,
+                  color=text_col, ha="center", va="center")
+    for x_pos, xgv in zip(np.linspace(0.37, 0.60, 5), [0.03, 0.08, 0.15, 0.25, 0.45]):
+        size = min_dot_size + (xgv / 0.65) * (max_dot_size - min_dot_size)
+        ax_title.scatter([x_pos], [0.47], s=size, facecolors=no_goal_color,
+                         edgecolors=edge_color, linewidth=0.9)
+    ax_title.text(0.75, 0.45, "High Quality Chance", fontsize=11,
+                  color=text_col, ha="center", va="center")
+
+    ax_title.text(0.45, 0.20, "Goal", fontsize=10, color=text_col,
+                  ha="right", va="center")
+    ax_title.scatter([0.47], [0.22], s=110, color=accent,
+                     edgecolors=edge_color, linewidth=0.9, alpha=0.80)
+    ax_title.scatter([0.53], [0.22], s=110, facecolors=no_goal_color,
+                     edgecolors=edge_color, linewidth=0.9)
+    ax_title.text(0.55, 0.20, "No Goal", fontsize=10, color=text_col,
+                  ha="left", va="center")
+
+    ax_pitch = fig.add_axes([0.08, 0.28, 0.84, 0.46])
+    ax_pitch.set_facecolor(pitch_bg)
+    ax_pitch.set_xlim(-3, y_max + 3)
+    ax_pitch.set_ylim(49, 104)
+    ax_pitch.set_aspect("equal", adjustable="box")
+    ax_pitch.axis("off")
+    _draw_vertical_half_pitch_lines(ax_pitch, y_max, line_col, lw=0.9)
+
+    if total_shots:
+        mid = y_max / 2.0
+        ax_pitch.scatter([mid + y_max * 0.32], [avg_x], s=90,
+                         color=text_col, edgecolors=text_col, linewidth=0.8, zorder=4)
+        ax_pitch.plot([mid + y_max * 0.32, mid + y_max * 0.32], [100, avg_x],
+                      color=text_col, linewidth=1.8, zorder=3)
+        ax_pitch.text(mid + y_max * 0.32, avg_x - 4.0,
+                      f"Average Distance\n{avg_distance:.1f} yards",
+                      fontsize=9.5, color=text_col, ha="center", va="top")
+
+    for _, row in shots.iterrows():
+        out = str(row.get(result_col, "")).lower().replace(" ", "")
+        is_goal = out == "goal"
+        xgv = float(row.get(xg_col, 0.08) or 0.08)
+        size = min_dot_size + (xgv / 0.65) * (max_dot_size - min_dot_size)
+        size = max(min_dot_size, min(max_dot_size, size))
+        ax_pitch.scatter([float(row["y"])], [float(row["x"])],
+                         s=size, color=accent if is_goal else no_goal_color,
+                         edgecolors=edge_color, linewidth=0.9, alpha=0.82, zorder=5)
+
+    ax_stats = fig.add_axes([0, 0.18, 1, 0.07])
+    ax_stats.set_facecolor(bg)
+    ax_stats.set_xlim(0, 1)
+    ax_stats.set_ylim(0, 1)
+    ax_stats.axis("off")
+
+    stats = [
+        ("Shots", f"{total_shots}"),
+        ("Goals", f"{total_goals}"),
+        ("xG", f"{total_xg:.2f}"),
+        ("xG/Shot", f"{xg_per_shot:.2f}"),
+    ]
+    for x_pos, (label, value) in zip([0.25, 0.39, 0.54, 0.66], stats):
+        ax_stats.text(x_pos, 0.72, label, fontsize=18, fontweight="900",
+                      color=text_col, ha="left", va="center")
+        ax_stats.text(x_pos, 0.18, value, fontsize=15, fontweight="bold",
+                      color=accent, ha="left", va="center")
+
+    footer = cfg.get("footer_note", "")
+    if footer:
+        fig.text(0.04, 0.035, footer, fontsize=8.5, color=muted_col, va="bottom")
+    credit = cfg.get("analyst_credit", "")
+    if credit:
+        fig.text(0.96, 0.035, credit, fontsize=9, color=muted_col,
+                 ha="right", va="bottom", weight="bold")
+    return fig
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 2.  OPTA ANALYST PASS MAP  (reference image 1)
 # ─────────────────────────────────────────────────────────────────────────────
