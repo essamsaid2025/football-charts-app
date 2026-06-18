@@ -37,10 +37,10 @@ def _load_local(alias, *filenames):
                 return mod
     return None
 
-_load_local("charts",          "charts.py",          "charts__8_.py")
-_load_local("charts_extra",    "charts_extra.py",    "charts_extra__1_.py")
+_load_local("charts",          "charts.py",          "charts (9).py",       "charts__8_.py")
+_load_local("charts_extra",    "charts_extra.py",    "charts_extra (2).py", "charts_extra__1_.py")
 _load_local("charts_pro",      "charts_pro.py")
-_load_local("scouting_tools_v2","scouting_tools_v2.py","scouting_tools_v2__6_.py")
+_load_local("scouting_tools_v2","scouting_tools_v2.py","scouting_tools_v2 (7).py","scouting_tools_v2__6_.py")
 
 # ── core imports ──────────────────────────────────────────────────────────────
 from charts import (
@@ -66,7 +66,8 @@ from charts_pro import (
     draw_attack_direction, draw_opta_attack_arrows,
     draw_stat_blocks_bottom, draw_stat_blocks_right,
     draw_custom_legend, layout_controls_ui, image_overlay_controls_pro,
-    athletic_shot_map_pro, opta_pass_map_pro, pro_pass_map, pro_shot_map,
+    athletic_shot_map_pro, athletic_compact_shot_map,
+    opta_pass_map_pro, pro_pass_map, pro_shot_map,
 )
 
 try:
@@ -649,6 +650,11 @@ if section == "🎯 Pro Shot Map":
             index=ALL_THEMES.index("The Athletic Light") if "The Athletic Light" in ALL_THEMES else 0,
             key="psm_theme_main")
         theme = THEMES.get(cfg["theme_name"], {})
+        chart_style = st.selectbox(
+            "Chart style",
+            ["Pro panel", "Notebook compact"],
+            key="psm_chart_style",
+        )
 
         cfg["player_name"] = st.text_input("Player name", "", key="psm_pn")
         cfg["subtitle"]    = st.text_input("Subtitle (e.g. All non-penalty shots)", "", key="psm_sub")
@@ -668,21 +674,46 @@ if section == "🎯 Pro Shot Map":
         with c1: min_sz = st.slider("Min size", 10, 200, 30, key="psm_mins")
         with c2: max_sz = st.slider("Max size", 100, 1500, 700, key="psm_maxs")
 
-        st.markdown("**Body part column (optional)**")
-        bp_opts = [None] + list(df.columns)
-        bp_col = st.selectbox("Body part column", bp_opts, key="psm_bp")
+        if chart_style == "Notebook compact":
+            st.markdown("**Notebook column mapping**")
+            all_cols = list(df.columns)
+            result_opts = [None] + all_cols
+            xg_opts = [None] + all_cols
+            bp_col = None
+            result_col = st.selectbox(
+                "Result column",
+                result_opts,
+                index=result_opts.index("outcome") if "outcome" in result_opts else 0,
+                key="psm_comp_result_col",
+            )
+            xg_col = st.selectbox(
+                "xG column",
+                xg_opts,
+                index=xg_opts.index("xg") if "xg" in xg_opts else 0,
+                key="psm_comp_xg_col",
+            )
+        else:
+            st.markdown("**Body part column (optional)**")
+            bp_opts = [None] + list(df.columns)
+            bp_col = st.selectbox("Body part column", bp_opts, key="psm_bp")
+            result_col = None
+            xg_col = None
 
-        st.markdown("**Stats overrides** (leave blank = auto)")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            tot_ov = st.text_input("Total shots", "", key="psm_tot")
-            rf_ov  = st.text_input("Right foot",  "", key="psm_rf")
-        with c2:
-            lf_ov  = st.text_input("Left foot",   "", key="psm_lf")
-            hd_ov  = st.text_input("Head",        "", key="psm_hd")
-        with c3:
-            oth_ov = st.text_input("Other",       "", key="psm_oth")
-            min_pl = st.number_input("Minutes played (for p90)", 0, 5000, 0, key="psm_mp")
+        if chart_style == "Pro panel":
+            st.markdown("**Stats overrides** (leave blank = auto)")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                tot_ov = st.text_input("Total shots", "", key="psm_tot")
+                rf_ov  = st.text_input("Right foot",  "", key="psm_rf")
+            with c2:
+                lf_ov  = st.text_input("Left foot",   "", key="psm_lf")
+                hd_ov  = st.text_input("Head",        "", key="psm_hd")
+            with c3:
+                oth_ov = st.text_input("Other",       "", key="psm_oth")
+                min_pl = st.number_input("Minutes played (for p90)", 0, 5000, 0, key="psm_mp")
+        else:
+            tot_ov = rf_ov = lf_ov = hd_ov = oth_ov = ""
+            min_pl = 0
 
         logo_ov   = img_overlay_controls("psm_logo","Logo image",
                                          default_x=0.78, default_y=0.89,
@@ -704,20 +735,34 @@ if section == "🎯 Pro Shot Map":
     with R:
         if gen:
             try:
-                fig = athletic_shot_map_pro(
-                    df, cfg=cfg,
-                    goal_color=goal_col, no_goal_color=nogoal_col,
-                    goal_edge=goal_edge, no_goal_edge=nogoal_edge,
-                    min_dot_size=min_sz, max_dot_size=max_sz,
-                    pitch_mode=S["pm"], pitch_width=S["pw"],
-                    body_part_col=bp_col,
-                    total_shots_override=tot_ov or None,
-                    right_foot_override=rf_ov or None,
-                    left_foot_override=lf_ov or None,
-                    head_override=hd_ov or None,
-                    other_override=oth_ov or None,
-                    minutes_played=float(min_pl) if min_pl else None,
-                )
+                if chart_style == "Notebook compact":
+                    fig = athletic_compact_shot_map(
+                        df, cfg=cfg,
+                        goal_color=goal_col,
+                        no_goal_color=nogoal_col,
+                        edge_color=nogoal_edge,
+                        min_dot_size=min_sz,
+                        max_dot_size=max_sz,
+                        pitch_mode=S["pm"],
+                        pitch_width=S["pw"],
+                        result_col=result_col,
+                        xg_col=xg_col,
+                    )
+                else:
+                    fig = athletic_shot_map_pro(
+                        df, cfg=cfg,
+                        goal_color=goal_col, no_goal_color=nogoal_col,
+                        goal_edge=goal_edge, no_goal_edge=nogoal_edge,
+                        min_dot_size=min_sz, max_dot_size=max_sz,
+                        pitch_mode=S["pm"], pitch_width=S["pw"],
+                        body_part_col=bp_col,
+                        total_shots_override=tot_ov or None,
+                        right_foot_override=rf_ov or None,
+                        left_foot_override=lf_ov or None,
+                        head_override=hd_ov or None,
+                        other_override=oth_ov or None,
+                        minutes_played=float(min_pl) if min_pl else None,
+                    )
                 st.session_state["psm_fig"] = fig
             except Exception as e:
                 st.error(f"Error: {e}")
