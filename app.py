@@ -349,13 +349,20 @@ def apply_legend_style(ax, legend_cfg, theme):
         if ax.get_legend(): ax.get_legend().remove()
         return
     hs, ls = zip(*filtered)
-    bbox = (0.5, -0.02) if "center" in legend_cfg.get("pos","") else None
+    pos = legend_cfg.get("pos", "lower center")
+    if "upper" in pos and "center" in pos:
+        bbox = (0.5, 0.98)
+    elif "lower" in pos and "center" in pos:
+        bbox = (0.5, 0.02)
+    else:
+        bbox = None
     leg = ax.legend(hs, ls,
-        loc=legend_cfg.get("pos","lower center"),
+        loc=pos,
         fontsize=legend_cfg.get("fontsize", 9),
         title=legend_cfg.get("title"),
         frameon=legend_cfg.get("frame", False),
         bbox_to_anchor=bbox)
+    leg.set_in_layout(True)
     for t in leg.get_texts():
         t.set_color(theme.get("text", "white"))
     if leg.get_title():
