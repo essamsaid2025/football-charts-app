@@ -66,9 +66,13 @@ from charts_pro import (
     draw_attack_direction, draw_opta_attack_arrows,
     draw_stat_blocks_bottom, draw_stat_blocks_right,
     draw_custom_legend, layout_controls_ui, image_overlay_controls_pro,
-    athletic_shot_map_pro, athletic_compact_shot_map,
+    athletic_shot_map_pro,
     opta_pass_map_pro, pro_pass_map, pro_shot_map,
 )
+try:
+    from charts_pro import athletic_compact_shot_map
+except ImportError:
+    athletic_compact_shot_map = None
 
 try:
     from scouting_tools_v2 import (
@@ -736,6 +740,8 @@ if section == "🎯 Pro Shot Map":
         if gen:
             try:
                 if chart_style == "Notebook compact":
+                    if athletic_compact_shot_map is None:
+                        raise ImportError("Notebook compact chart is missing from charts_pro.py. Deploy the updated charts_pro.py file.")
                     fig = athletic_compact_shot_map(
                         df, cfg=cfg,
                         goal_color=goal_col,
