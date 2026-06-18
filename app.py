@@ -724,32 +724,32 @@ if section == "📨 Pro Pass Map":
             index=ALL_THEMES.index("Opta Analyst Light") if "Opta Analyst Light" in ALL_THEMES else 0,
             key="pro_pass_theme")
 
-        cfg["player_name"] = st.text_input("Player name", "", key="ppm_pn")
-        cfg["competition"] = st.text_input("Competition", "", key="ppm_cp")
-        cfg["match_info"]  = st.text_input("Match info (e.g. Iraq 1-4 Norway)", "", key="ppm_mi")
-        cfg["season"]      = st.text_input("Date / Season", "", key="ppm_sea")
-        cfg["footer_note"] = st.text_input("Footer note", "", key="ppm_fn")
+        cfg["player_name"] = st.text_input("Player name", "", key="ppm_chart_pn")
+        cfg["competition"] = st.text_input("Competition", "", key="ppm_chart_cp")
+        cfg["match_info"]  = st.text_input("Match info (e.g. Iraq 1-4 Norway)", "", key="ppm_chart_mi")
+        cfg["season"]      = st.text_input("Date / Season", "", key="ppm_chart_sea")
+        cfg["footer_note"] = st.text_input("Footer note", "", key="ppm_chart_fn")
 
         # Attack direction
-        cfg["show_attack_dir"]     = st.checkbox("Show attack direction", True, key="ppm_sad")
-        cfg["attack_dir"]          = st.selectbox("Direction", ["ltr","rtl"], key="ppm_ad")
-        cfg["attack_dir_label"]    = st.text_input("Direction label", "Attacking Direction", key="ppm_adl")
-        cfg["attack_dir_color"]    = st.color_picker("Direction color", "#777777", key="ppm_adc")
+        cfg["show_attack_dir"]     = st.checkbox("Show attack direction", True, key="ppm_chart_sad")
+        cfg["attack_dir"]          = st.selectbox("Direction", ["ltr","rtl"], key="ppm_attack_dir_main")
+        cfg["attack_dir_label"]    = st.text_input("Direction label", "Attacking Direction", key="ppm_chart_adl")
+        cfg["attack_dir_color"]    = st.color_picker("Direction color", "#777777", key="ppm_chart_adc")
 
         st.markdown("**Pass colours**")
-        succ_col  = st.color_picker("Successful",   "#C8102E", key="ppm_sc")
-        unsucc_col= st.color_picker("Unsuccessful", "#AAAAAA", key="ppm_uc")
+        succ_col  = st.color_picker("Successful",   "#C8102E", key="ppm_chart_sc")
+        unsucc_col= st.color_picker("Unsuccessful", "#AAAAAA", key="ppm_chart_uc")
 
         st.markdown("**Arrow style**")
         c1, c2 = st.columns(2)
-        with c1: arrow_alpha = st.slider("Opacity", 0.3, 1.0, 0.82, key="ppm_alpha")
-        with c2: arrow_w     = st.slider("Width",   0.5, 4.0, 1.8,  key="ppm_aw")
+        with c1: arrow_alpha = st.slider("Opacity", 0.3, 1.0, 0.82, key="ppm_chart_alpha")
+        with c2: arrow_w     = st.slider("Width",   0.5, 4.0, 1.8,  key="ppm_chart_aw")
 
         st.markdown("**Stat overrides** (leave blank = auto)")
         c1, c2, c3 = st.columns(3)
-        with c1: succ_ov = st.text_input("Successful",   "", key="ppm_sov")
-        with c2: un_ov   = st.text_input("Unsuccessful", "", key="ppm_uov")
-        with c3: acc_ov  = st.text_input("Accuracy %",   "", key="ppm_aov")
+        with c1: succ_ov = st.text_input("Successful",   "", key="ppm_chart_sov")
+        with c2: un_ov   = st.text_input("Unsuccessful", "", key="ppm_chart_uov")
+        with c3: acc_ov  = st.text_input("Accuracy %",   "", key="ppm_chart_aov")
 
         logo_ov   = img_overlay_controls("ppm_logo","Logo image (top-right)",
                                          default_x=0.84, default_y=0.895,
@@ -765,7 +765,7 @@ if section == "📨 Pro Pass Map":
         cfg["player_x"]   = player_ov["x"]; cfg["player_y"] = player_ov["y"]
         cfg["player_w"]   = player_ov["w"]; cfg["player_h"] = player_ov["h"]
 
-        gen = st.button("Generate", key="ppm_gen")
+        gen = st.button("Generate", key="ppm_chart_gen")
         st.markdown('</div>', unsafe_allow_html=True)
 
     with R:
