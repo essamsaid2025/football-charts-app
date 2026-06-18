@@ -244,6 +244,10 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = new_cols
     cols_lower_map = {c.lower(): c for c in df.columns}
 
+    if "outcome" not in cols_lower_map and "result" in cols_lower_map:
+        df.rename(columns={cols_lower_map["result"]: "outcome"}, inplace=True)
+        cols_lower_map = {c.lower(): c for c in df.columns}
+
     if "outcome" not in cols_lower_map:
         raise ValueError("Missing column: outcome (required).")
     df.rename(columns={cols_lower_map["outcome"]: "outcome"}, inplace=True)
@@ -251,6 +255,10 @@ def validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     for want in ["x", "y", "x2", "y2"]:
         if want in cols_lower_map:
             df.rename(columns={cols_lower_map[want]: want}, inplace=True)
+    if "x" not in df.columns and "X" in df.columns:
+        df.rename(columns={"X": "x"}, inplace=True)
+    if "y" not in df.columns and "Y" in df.columns:
+        df.rename(columns={"Y": "y"}, inplace=True)
 
     missing = [c for c in REQUIRED if c not in df.columns]
     if missing:
