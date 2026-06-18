@@ -44,8 +44,15 @@ def _yes_col(s: pd.Series) -> pd.Series:
 def _add_leg(ax, handles, theme: dict, loc: str = "lower center"):
     if not handles:
         return
-    leg = ax.legend(handles=handles, loc=loc, bbox_to_anchor=(0.5, -0.02),
+    if "upper" in loc:
+        anchor = (0.5, 0.98)
+    elif "lower" in loc:
+        anchor = (0.5, 0.02)
+    else:
+        anchor = None
+    leg = ax.legend(handles=handles, loc=loc, bbox_to_anchor=anchor,
                     ncol=min(4, len(handles)), frameon=False, fontsize=9)
+    leg.set_in_layout(True)
     for t in leg.get_texts():
         t.set_color(theme.get("text", "white"))
 
@@ -660,9 +667,10 @@ def vertical_event_map(
 
     if handles:
         leg = ax.legend(handles=handles, loc="lower center",
-                        bbox_to_anchor=(0.5, -0.04), ncol=min(4, len(handles)),
+                        bbox_to_anchor=(0.5, 0.02), ncol=min(4, len(handles)),
                         frameon=True, facecolor=theme.get("panel", "#111827"),
                         edgecolor=theme.get("lines", "#333"), fontsize=9)
+        leg.set_in_layout(True)
         for t in leg.get_texts():
             t.set_color(text_col)
 
