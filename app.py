@@ -722,7 +722,7 @@ if section == "📨 Pro Pass Map":
         cfg = default_layout_cfg()
         cfg["theme_name"] = st.selectbox("Theme", ALL_THEMES,
             index=ALL_THEMES.index("Opta Analyst Light") if "Opta Analyst Light" in ALL_THEMES else 0,
-            key="ppm_tn")
+            key="pro_pass_theme")
 
         cfg["player_name"] = st.text_input("Player name", "", key="ppm_pn")
         cfg["competition"] = st.text_input("Competition", "", key="ppm_cp")
