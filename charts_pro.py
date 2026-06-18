@@ -369,6 +369,7 @@ def draw_custom_legend(ax, handles: list, cfg: dict, theme: dict):
         markerscale=ms, ncol=ncol, frameon=frame,
         title=title, bbox_to_anchor=bbox,
     )
+    leg.set_in_layout(True)
     text_col = theme.get("text", "white")
     for t in leg.get_texts():
         t.set_color(text_col)
@@ -559,7 +560,7 @@ def athletic_shot_map_pro(
     # Pitch panel
     ax_pitch = fig.add_axes([0.02, 0.24, 0.60, 0.64])
     ax_pitch.set_facecolor(bg)
-    ax_pitch.set_xlim(48, 104); ax_pitch.set_ylim(-2, y_max + 2)
+    ax_pitch.set_xlim(48, 104); ax_pitch.set_ylim(-2, y_max + 9)
     ax_pitch.axis("off")
 
     # Right stats panel
@@ -769,30 +770,44 @@ def opta_pass_map_pro(
     if accuracy_override:     accuracy_pct = accuracy_override
 
     # ── Figure ──────────────────────────────────────────────────────────────
-    fig = plt.figure(figsize=(13, 10))
+    fig = plt.figure(figsize=(10, 12))
     fig.patch.set_facecolor(bg)
+    if cfg.get("player_img"):
+        ax_bg = fig.add_axes([0, 0, 1, 1], zorder=0)
+        ax_bg.imshow(np.asarray(cfg["player_img"].convert("RGB")), aspect="auto")
+        ax_bg.axis("off")
+    else:
+        ax_bg = fig.add_axes([0, 0, 1, 1], zorder=0)
+        ax_bg.set_facecolor(bg)
+        ax_bg.axis("off")
+
+    card_bg = "#F5F5F6"
+    ax_card = fig.add_axes([0.055, 0.065, 0.89, 0.57], zorder=1)
+    ax_card.set_facecolor(card_bg)
+    for sp in ax_card.spines.values():
+        sp.set_visible(False)
+    ax_card.set_xticks([]); ax_card.set_yticks([])
 
     # Header strip — white/light card with subtle border
-    header_h = 0.135
-    ax_hdr = fig.add_axes([0.0, 1.0 - header_h, 1.0, header_h])
-    ax_hdr.set_facecolor(bg); ax_hdr.axis("off")
+    ax_hdr = fig.add_axes([0.095, 0.545, 0.81, 0.07], zorder=2)
+    ax_hdr.set_facecolor(card_bg); ax_hdr.axis("off")
 
     # Pitch area
-    ax_pitch = fig.add_axes([0.04, 0.14, 0.92, 0.72])
+    ax_pitch = fig.add_axes([0.135, 0.185, 0.73, 0.335], zorder=2)
     ax_pitch.set_facecolor(pitch_bg)
     ax_pitch.set_xlim(-3, 103); ax_pitch.set_ylim(-3, y_max + 3)
     ax_pitch.axis("off")
 
     # Bottom stats bar
-    ax_foot = fig.add_axes([0.0, 0.0, 1.0, 0.14])
-    ax_foot.set_facecolor(bg); ax_foot.axis("off")
+    ax_foot = fig.add_axes([0.12, 0.075, 0.76, 0.09], zorder=2)
+    ax_foot.set_facecolor(card_bg); ax_foot.axis("off")
     ax_foot.set_xlim(0, 1); ax_foot.set_ylim(0, 1)
 
     # ── Pitch background card ───────────────────────────────────────────────
     ax_pitch.add_patch(FancyBboxPatch((-2, -2), 104, y_max + 4,
-                                      boxstyle="round,pad=1",
+                                      boxstyle="square,pad=0",
                                       facecolor=pitch_bg,
-                                      edgecolor=line_col, linewidth=1.8,
+                                      edgecolor=line_col, linewidth=1.25,
                                       zorder=0))
 
     # ── Full pitch lines ────────────────────────────────────────────────────
@@ -827,46 +842,42 @@ def opta_pass_map_pro(
     ] if p.strip()]
     sub_line = "  |  ".join(sub_parts[:3])
 
-    title_x = 0.06
-    if cfg.get("player_img"):
-        title_x = 0.18
-        draw_logo(fig, cfg["player_img"], 0.045, 0.895, 0.10, 0.09,
-                  circle_crop=True, border_lw=2.0)
+    title_x = 0.145
 
-    fig.text(title_x, 0.970, player_name, fontsize=22, weight="900",
+    fig.text(title_x, 0.610, player_name, fontsize=18, weight="900",
              color=text_col, va="top")
     if sub_line:
-        fig.text(title_x, 0.930, sub_line, fontsize=11, color=muted_col, va="top")
+        fig.text(title_x, 0.585, sub_line, fontsize=9, color=muted_col, va="top")
 
     if cfg.get("logo_img"):
         draw_logo(fig, cfg["logo_img"],
-                  cfg.get("logo_x", 0.84), cfg.get("logo_y", 0.895),
-                  cfg.get("logo_w", 0.12), cfg.get("logo_h", 0.09),
+                  cfg.get("logo_x", 0.755), cfg.get("logo_y", 0.568),
+                  cfg.get("logo_w", 0.13), cfg.get("logo_h", 0.055),
                   circle_crop=cfg.get("logo_circle", True), border_lw=2.0)
 
     # ── Footer stats row (Opta-style) ───────────────────────────────────────
     # Divider line
-    ax_foot.plot([0.02, 0.98], [0.88, 0.88], color=line_col, lw=1.2, alpha=0.6)
+    ax_foot.plot([0.02, 0.98], [0.94, 0.94], color=line_col, lw=1.0, alpha=0.35)
 
     # Successful count
-    ax_foot.text(0.05, 0.70, str(n_succ), ha="left", va="top",
-                 fontsize=24, weight="900", color=text_col)
-    ax_foot.text(0.10, 0.70, "successful", ha="left", va="top",
-                 fontsize=11, color=muted_col)
-    ax_foot.scatter([0.055], [0.25], s=120, color=successful_color,
+    ax_foot.text(0.03, 0.70, str(n_succ), ha="left", va="top",
+                 fontsize=17, weight="900", color=text_col)
+    ax_foot.text(0.08, 0.68, "successful", ha="left", va="top",
+                 fontsize=8, color=muted_col)
+    ax_foot.scatter([0.048], [0.28], s=70, color=successful_color,
                     edgecolors="none", zorder=5)
-    ax_foot.annotate("", xy=(0.09, 0.25), xytext=(0.06, 0.25),
+    ax_foot.annotate("", xy=(0.09, 0.28), xytext=(0.055, 0.28),
                      xycoords="axes fraction",
                      arrowprops=dict(arrowstyle="-|>", color=successful_color, lw=1.5))
 
     # Unsuccessful count
-    ax_foot.text(0.22, 0.70, str(n_unsucc), ha="left", va="top",
-                 fontsize=24, weight="900", color=text_col)
-    ax_foot.text(0.265, 0.70, "unsuccessful", ha="left", va="top",
-                 fontsize=11, color=muted_col)
-    ax_foot.scatter([0.225], [0.25], s=120, facecolors="none",
+    ax_foot.text(0.21, 0.70, str(n_unsucc), ha="left", va="top",
+                 fontsize=17, weight="900", color=text_col)
+    ax_foot.text(0.255, 0.68, "unsuccessful", ha="left", va="top",
+                 fontsize=8, color=muted_col)
+    ax_foot.scatter([0.218], [0.28], s=70, facecolors="none",
                     edgecolors=unsuccessful_color, linewidth=1.5, zorder=5)
-    ax_foot.annotate("", xy=(0.262, 0.25), xytext=(0.232, 0.25),
+    ax_foot.annotate("", xy=(0.262, 0.28), xytext=(0.225, 0.28),
                      xycoords="axes fraction",
                      arrowprops=dict(arrowstyle="-|>", color=unsuccessful_color, lw=1.5))
 
@@ -876,37 +887,37 @@ def opta_pass_map_pro(
     if cfg.get("show_attack_dir", True):
         for i, xf in enumerate(np.linspace(0.43, 0.55, 5)):
             alpha = 0.25 + 0.15 * i
-            ax_foot.annotate("", xy=(xf + 0.022, 0.30), xytext=(xf, 0.30),
+            ax_foot.annotate("", xy=(xf + 0.022, 0.34), xytext=(xf, 0.34),
                              xycoords="axes fraction",
                              arrowprops=dict(arrowstyle="-|>", color=adir_col,
                                              lw=1.6, alpha=alpha))
-        ax_foot.text(0.49, 0.10, adir_label, ha="center", va="bottom",
-                     fontsize=9, color=adir_col, transform=ax_foot.transAxes)
+        ax_foot.text(0.49, 0.04, adir_label, ha="center", va="bottom",
+                     fontsize=7, color=adir_col, transform=ax_foot.transAxes)
 
     # Total passes count (circled)
     total_passes = n_succ + n_unsucc if not isinstance(n_succ, str) else "—"
     total_str = str(total_passes) if isinstance(total_passes, int) else str(n_total)
-    circ = plt.Circle((0.68, 0.40), 0.065, transform=ax_foot.transAxes,
+    circ = plt.Circle((0.68, 0.42), 0.075, transform=ax_foot.transAxes,
                        facecolor="none", edgecolor=text_col, linewidth=1.8, zorder=3)
     ax_foot.add_patch(circ)
-    ax_foot.text(0.68, 0.40, total_str, ha="center", va="center",
-                 fontsize=14, weight="900", color=text_col,
+    ax_foot.text(0.68, 0.42, total_str, ha="center", va="center",
+                 fontsize=12, weight="900", color=text_col,
                  transform=ax_foot.transAxes)
-    ax_foot.text(0.68, 0.08, "passes", ha="center", va="bottom",
-                 fontsize=9.5, color=muted_col, transform=ax_foot.transAxes)
+    ax_foot.text(0.735, 0.42, "passes", ha="left", va="center",
+                 fontsize=8, color=muted_col, transform=ax_foot.transAxes)
 
     # Accuracy %
     acc_str = f"{accuracy_pct}%" if isinstance(accuracy_pct, (int, float)) else str(accuracy_pct)
-    ax_foot.text(0.82, 0.55, acc_str, ha="center", va="top",
-                 fontsize=28, weight="900", color=text_col,
+    ax_foot.text(0.88, 0.62, acc_str, ha="center", va="top",
+                 fontsize=18, weight="900", color=text_col,
                  transform=ax_foot.transAxes)
-    ax_foot.text(0.82, 0.10, "accuracy", ha="center", va="bottom",
-                 fontsize=9.5, color=muted_col, transform=ax_foot.transAxes)
+    ax_foot.text(0.94, 0.40, "accuracy", ha="left", va="center",
+                 fontsize=8, color=muted_col, transform=ax_foot.transAxes)
 
     # Footer note
     footer = cfg.get("footer_note", "")
     if footer:
-        fig.text(0.04, 0.005, footer, fontsize=8, color=muted_col, va="bottom")
+        fig.text(0.08, 0.070, footer, fontsize=7, color=muted_col, va="bottom")
 
     return fig
 
