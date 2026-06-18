@@ -159,13 +159,29 @@ LEGEND_POSITIONS = [
 
 def _bytes(fig, dpi=240):
     b = io.BytesIO()
-    fig.savefig(b, format="png", dpi=dpi, bbox_inches="tight", pad_inches=.18)
+    fig.canvas.draw()
+    extras = list(fig.legends)
+    for ax in fig.axes:
+        leg = ax.get_legend()
+        if leg is not None:
+            extras.append(leg)
+    fig.savefig(
+        b, format="png", dpi=dpi, bbox_inches="tight", pad_inches=.18,
+        bbox_extra_artists=extras or None,
+    )
     b.seek(0); return b.read()
 
 def _pdf(fig):
     b = io.BytesIO()
     with PdfPages(b) as p:
-        p.savefig(fig, bbox_inches="tight", pad_inches=.18)
+        fig.canvas.draw()
+        extras = list(fig.legends)
+        for ax in fig.axes:
+            leg = ax.get_legend()
+            if leg is not None:
+                extras.append(leg)
+        p.savefig(fig, bbox_inches="tight", pad_inches=.18,
+                  bbox_extra_artists=extras or None)
     b.seek(0); return b.read()
 
 def _clean(s):
@@ -752,9 +768,9 @@ if section == "📨 Pro Pass Map":
         with c3: acc_ov  = st.text_input("Accuracy %",   "", key="ppm_chart_aov")
 
         logo_ov   = img_overlay_controls("ppm_logo","Logo image (top-right)",
-                                         default_x=0.84, default_y=0.895,
-                                         default_w=0.12, default_h=0.09)
-        player_ov = img_overlay_controls("ppm_plyr","Player photo (top-left)",
+                                         default_x=0.755, default_y=0.568,
+                                         default_w=0.13, default_h=0.055)
+        player_ov = img_overlay_controls("ppm_plyr","Player/background photo",
                                          default_x=0.03, default_y=0.895,
                                          default_w=0.10, default_h=0.09)
         cfg["logo_img"]   = logo_ov["img"]
@@ -1637,7 +1653,7 @@ if section == "🍕 Radars & Pizza":
                         cs2  =st.slider("Center scale",8,28,14,key="ath_cs")/100
                     elif ck=="pb":
                         gc_=st.color_picker("Good ≥70","#00e676",key="pb_g")
-                        mc2_=st.color_picker("Mid 50-70","#ffd060",key="pb_m")
+                        mc2_=st.color_picker("Mid 50-70","#ffd060",key="pb_mid_col")
                         lc_=st.color_picker("Low <50","#ff4060",key="pb_l")
                     ov=img_overlay_controls(f"{ck}_ov","Extra overlay")
                     gen=st.button("Generate",key=f"{ck}_gen",disabled=not sm_m)
