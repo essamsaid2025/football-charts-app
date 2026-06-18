@@ -361,8 +361,10 @@ def draw_custom_legend(ax, handles: list, cfg: dict, theme: dict):
     frame = cfg.get("legend_frame", False)
 
     bbox = None
-    if "center" in pos:
-        bbox = (0.5, -0.04)
+    if "upper" in pos and "center" in pos:
+        bbox = (0.5, 0.98)
+    elif "lower" in pos and "center" in pos:
+        bbox = (0.5, 0.02)
 
     leg = ax.legend(
         handles=handles, loc=pos, fontsize=fs,
@@ -440,6 +442,43 @@ def _draw_half_pitch_lines(ax, y_max: float, line_color: str, lw: float = 1.8,
                 color=line_color, lw=lw, zorder=3)
 
 
+def _draw_vertical_half_pitch_lines(ax, pitch_w: float, line_color: str, lw: float = 1.8):
+    """Draw The Athletic style vertical attacking half with the goal at the top."""
+    mid = pitch_w / 2.0
+
+    def line(xs, ys):
+        ax.plot(xs, ys, color=line_color, lw=lw, solid_capstyle="round", zorder=3)
+
+    def rect(x0, y0, x1, y1):
+        line([x0, x1, x1, x0, x0], [y0, y0, y1, y1, y0])
+
+    rect(0, 50, pitch_w, 100)
+
+    # Centre circle arc at halfway.
+    r_x = 9.15 / 68.0 * pitch_w
+    r_y = 9.15 / 105.0 * 100.0
+    theta = np.linspace(0, np.pi, 80)
+    line(mid + r_x * np.cos(theta), 50 + r_y * np.sin(theta))
+
+    pa_w = pitch_w * 40.32 / 68.0
+    sa_w = pitch_w * 18.32 / 68.0
+    pa_l = 16.5 / 105.0 * 100.0
+    sa_l = 5.5 / 105.0 * 100.0
+    goal_w = pitch_w * 7.32 / 68.0
+
+    rect(mid - pa_w / 2, 100 - pa_l, mid + pa_w / 2, 100)
+    rect(mid - sa_w / 2, 100 - sa_l, mid + sa_w / 2, 100)
+    rect(mid - goal_w / 2, 100, mid + goal_w / 2, 103)
+    ax.plot(mid, 100 - 11.0 / 105.0 * 100.0, "o", color=line_color, ms=3, zorder=3)
+
+    arc_y = 100 - pa_l
+    theta = np.linspace(np.pi * 1.10, np.pi * 1.90, 80)
+    xs = mid + r_x * np.cos(theta)
+    ys = arc_y + r_y * np.sin(theta)
+    mask = ys <= arc_y + 0.5
+    line(xs[mask], ys[mask])
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 1.  THE ATHLETIC SHOT MAP  (reference image 2)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -491,15 +530,33 @@ def athletic_shot_map_pro(
 
     d = df.copy()
     if "event_type" in d.columns:
-        shots = d[d["event_type"].astype(str).str.lower() == "shot"].copy()
+        shots = d[d["event_type"].astype(str).str.lower().str.strip().str.contains("shot", na=False)].copy()
+        if shots.empty:
+            shots = d.copy()
     else:
         shots = d.copy()
 
     shots["xg"] = pd.to_numeric(shots.get("xg", pd.Series(0.1, index=shots.index)), errors="coerce").fillna(0.1)
     shots["outcome"] = shots.get("outcome", pd.Series("", index=shots.index)).astype(str).str.lower()
+    for c in ["x", "y"]:
+        if c in shots.columns:
+            shots[c] = pd.to_numeric(shots[c], errors="coerce")
+    shots = shots.dropna(subset=["x", "y"]).copy()
 
     y_max = float(pitch_width if pitch_mode == "rect" else 100.0)
     mid = y_max / 2.0
+
+    if not shots.empty:
+        if shots["x"].max(skipna=True) <= 1.5:
+            shots["x"] = shots["x"] * 100.0
+        if shots["y"].max(skipna=True) <= 1.5:
+            shots["y"] = shots["y"] * y_max
+        elif y_max != 100.0 and shots["y"].max(skipna=True) > y_max + 1:
+            shots["y"] = shots["y"] / 100.0 * y_max
+        # If the data is from the opposite attacking direction, mirror it so shots
+        # appear in the attacking half used by the reference.
+        if shots["x"].median(skipna=True) < 50:
+            shots["x"] = 100.0 - shots["x"]
 
     # ── Compute stats ──────────────────────────────────────────────────────
     n_total = len(shots)
@@ -558,9 +615,10 @@ def athletic_shot_map_pro(
     ax_title.set_facecolor(bg); ax_title.axis("off")
 
     # Pitch panel
-    ax_pitch = fig.add_axes([0.02, 0.24, 0.60, 0.64])
+    ax_pitch = fig.add_axes([0.08, 0.27, 0.60, 0.58])
     ax_pitch.set_facecolor(bg)
-    ax_pitch.set_xlim(48, 104); ax_pitch.set_ylim(-2, y_max + 9)
+    ax_pitch.set_xlim(-4, y_max + 4); ax_pitch.set_ylim(48, 108)
+    ax_pitch.set_aspect("equal", adjustable="box")
     ax_pitch.axis("off")
 
     # Right stats panel
@@ -587,27 +645,27 @@ def athletic_shot_map_pro(
 
     # ── Pitch lines ────────────────────────────────────────────────────────
     lw = 1.8
-    _draw_half_pitch_lines(ax_pitch, y_max, line_col, lw=lw, show_full=False)
+    _draw_vertical_half_pitch_lines(ax_pitch, y_max, line_col, lw=lw)
 
     # ── Goal/No Goal legend (top of pitch) ─────────────────────────────────
-    lgnd_y = y_max + 6.5
-    ax_pitch.scatter([57], [lgnd_y], s=200, color=goal_color, edgecolors=goal_edge,
+    lgnd_y = 106.0
+    ax_pitch.scatter([mid - 8], [lgnd_y], s=200, color=goal_color, edgecolors=goal_edge,
                      linewidth=1.5, zorder=5)
-    ax_pitch.text(59.5, lgnd_y, "Goal", va="center", color=text_col, fontsize=11, weight="bold")
-    ax_pitch.scatter([68], [lgnd_y], s=200, facecolors=no_goal_color,
+    ax_pitch.text(mid - 5.7, lgnd_y, "Goal", va="center", color=text_col, fontsize=11, weight="bold")
+    ax_pitch.scatter([mid + 9], [lgnd_y], s=200, facecolors=no_goal_color,
                      edgecolors=no_goal_edge, linewidth=1.5, zorder=5)
-    ax_pitch.text(70.5, lgnd_y, "No Goal", va="center", color=text_col, fontsize=11, weight="bold")
+    ax_pitch.text(mid + 11.3, lgnd_y, "No Goal", va="center", color=text_col, fontsize=11, weight="bold")
 
     # xG size legend
-    lgnd_y2 = y_max + 2.0
-    ax_pitch.text(51, lgnd_y2, "Low-quality chance", va="center",
+    lgnd_y2 = 102.8
+    ax_pitch.text(0.5, lgnd_y2, "Low-quality chance", va="center",
                   color=text_col, fontsize=9, weight="bold")
     for j, xgv in enumerate([0.03, 0.08, 0.15, 0.25, 0.45]):
-        xpos = 72 + j * 5.5
+        xpos = mid - 3 + j * 5.8
         sz = min_dot_size + (xgv / 0.65) * (max_dot_size - min_dot_size)
         ax_pitch.scatter([xpos], [lgnd_y2], s=sz, facecolors=no_goal_color,
                          edgecolors=no_goal_edge, linewidth=1.2, zorder=5)
-    ax_pitch.text(99.5, lgnd_y2, "High-quality chance", va="center",
+    ax_pitch.text(y_max - 0.5, lgnd_y2, "High-quality chance", va="center",
                   ha="right", color=text_col, fontsize=9, weight="bold")
 
     # ── Plot shots ─────────────────────────────────────────────────────────
@@ -620,7 +678,7 @@ def athletic_shot_map_pro(
         fc = goal_color if is_goal else no_goal_color
         ec = goal_edge if is_goal else no_goal_edge
         lw_dot = 0 if is_goal else 1.5
-        ax_pitch.scatter([float(row["x"])], [float(row["y"])],
+        ax_pitch.scatter([float(row["y"])], [float(row["x"])],
                          s=sz, color=fc, edgecolors=ec,
                          linewidth=lw_dot, alpha=0.92, zorder=6)
 
@@ -630,19 +688,19 @@ def athletic_shot_map_pro(
         avg_dist_m = avg_dist / 1.094
         avg_x = 100 - (avg_dist_m / 105.0 * 100.0)
         avg_x = max(52, min(97, avg_x))
-        ax_pitch.scatter([avg_x], [mid], s=180, color=muted_col,
+        ax_pitch.scatter([mid], [avg_x], s=180, color=muted_col,
                          edgecolors=muted_col, alpha=0.85, zorder=4)
-        ax_pitch.plot([avg_x, 100], [mid, mid], color=muted_col,
+        ax_pitch.plot([mid, mid], [avg_x, 100], color=muted_col,
                       lw=2, ls="-", alpha=0.6, zorder=3)
-        ax_pitch.text(avg_x - 1.5, mid - 3.5,
+        ax_pitch.text(mid - 4.5, avg_x - 1.5,
                       f"Average distance:\n{avg_dist_str} yards",
                       color=muted_col, fontsize=8.5, ha="right", va="top")
 
         # Attack arrow on left side
-        ax_pitch.annotate("", xy=(avg_x - 2, 3),
-                          xytext=(avg_x - 2, 9),
+        ax_pitch.annotate("", xy=(-2.2, 72),
+                          xytext=(-2.2, 60),
                           arrowprops=dict(arrowstyle="-|>", color=muted_col, lw=1.5))
-        ax_pitch.text(avg_x - 3.5, 12, "Attack", color=muted_col,
+        ax_pitch.text(-3.3, 68, "Attack", color=muted_col,
                       fontsize=8, rotation=90, va="bottom")
 
     # ── Right stats panel — The Athletic style ─────────────────────────────
