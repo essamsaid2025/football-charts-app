@@ -804,14 +804,21 @@ def _set_pitch_bounds(ax, pitch_mode: str = "rect", pitch_width: float = 64.0, v
 def _add_legend(ax, handles, theme: dict, loc: str = "lower center"):
     if not handles:
         return
+    if "upper" in loc:
+        anchor = (0.5, 0.98)
+    elif "lower" in loc:
+        anchor = (0.5, 0.02)
+    else:
+        anchor = None
     leg = ax.legend(
         handles=handles,
         loc=loc,
-        bbox_to_anchor=(0.5, -0.02),
+        bbox_to_anchor=anchor,
         ncol=min(4, len(handles)),
         frameon=False,
         fontsize=9
     )
+    leg.set_in_layout(True)
     for t in leg.get_texts():
         t.set_color(theme.get("text", "white"))
 
