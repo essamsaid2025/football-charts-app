@@ -1080,9 +1080,6 @@ def _opta_goal_combo(df,title,subtitle,player_img,logo_img,
         draw_logo(fig,logo_img,0.87,0.89,0.10,0.09)
     return fig
 
-import app as _self_app
-_self_app._opta_goal_combo = _opta_goal_combo
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 🛡️  DEFENSIVE CHARTS
 # ─────────────────────────────────────────────────────────────────────────────
