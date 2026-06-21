@@ -68,7 +68,7 @@ if charts_extra:
     progressive_carries_map = getattr(charts_extra, "progressive_carries_map", None)
     pressure_map = getattr(charts_extra, "pressure_map", None)
     xg_timeline = getattr(charts_extra, "xg_timeline", None)
-    passing_network = getattr(charts_extra, "passing_network", None)
+    passing_network = getattr(charts_extra, "draw_pass_network_advanced", None)
 
 # Fallback in case draw_tagging_pitch resides natively in core charts module
 if draw_tagging_pitch is None and charts and hasattr(charts, "draw_tagging_pitch"):
