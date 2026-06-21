@@ -1,15 +1,6 @@
 """
 Football Analysis Suite  v4  — Professional Analyst Platform
-Upgrades:
-- Universal layout engine (title, subtitle, competition, player, logo, footer)
-- Attacking direction arrows on ALL pitch charts
-- Advanced legend controls
-- 8 professional themes (Opta, Athletic, StatsBomb, FotMob, Wyscout, SofaScore…)
-- The Athletic shot map (reference image 2 replica)
-- Opta Analyst pass map (reference image 1 replica)
-- Stat blocks configurable per chart
-- Full vertical pitch with correct aspect ratio
-- PNG + PDF exports preserve all overlays
+Upgrades: Cleaned and Ordered Dynamic Namespace Imports
 """
 
 import os, io, math, sys, importlib.util
@@ -21,7 +12,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.lines import Line2D
 from PIL import Image
 
-# ── module loader ─────────────────────────────────────────────────────────────
+# ── Dynamic module loader ─────────────────────────────────────────────────────
 def _load_local(alias, *filenames):
     if alias in sys.modules:
         return sys.modules[alias]
@@ -37,58 +28,98 @@ def _load_local(alias, *filenames):
                 return mod
     return None
 
-_load_local("charts",          "charts.py",          "charts (9).py",       "charts__8_.py")
-_load_local("charts_extra",    "charts_extra.py",    "charts_extra (2).py", "charts_extra__1_.py")
-_load_local("charts_pro",      "charts_pro.py")
-_load_local("scouting_tools_v2","scouting_tools_v2.py","scouting_tools_v2 (7).py","scouting_tools_v2__6_.py")
-# Load charts_extra using your dynamic loader instead
-charts_extra = _load_local("charts_extra", "charts_extra.py")
-
-# This makes the functions available to the rest of your app.py
-draw_pass_sonar = charts_extra.draw_pass_sonar
-draw_pass_network_advanced = charts_extra.draw_pass_network_advanced
-draw_defensive_territory = charts_extra.draw_defensive_territory
-# Load the pro module if you have one
+# 1. Safely register local modules in memory sequentially
+charts = _load_local("charts", "charts.py", "charts (9).py", "charts__8_.py")
+charts_extra = _load_local("charts_extra", "charts_extra.py", "charts_extra (2).py", "charts_extra__1_.py")
 charts_pro = _load_local("charts_pro", "charts_pro.py")
+scouting_tools_v2 = _load_local("scouting_tools_v2", "scouting_tools_v2.py", "scouting_tools_v2 (6).py", "scouting_tools_v2 (7).py", "scouting_tools_v2__6_.py")
 
-# Merge extended themes into the core THEMES registry if they exist
-if charts_pro and hasattr(charts_pro, "PRO_THEMES"):
-    import sys
+# 2. Safely unpack features from core charts.py into the global namespace
+if charts:
+    load_data = getattr(charts, "load_data")
+    prepare_df_for_charts = getattr(charts, "prepare_df_for_charts")
+    pizza_chart = getattr(charts, "pizza_chart")
+    mpl_pizza_dark = getattr(charts, "mpl_pizza_dark")
+    athletic_pizza = getattr(charts, "athletic_pizza")
+    shot_detail_card = getattr(charts, "shot_detail_card")
+    defensive_regains_map = getattr(charts, "defensive_regains_map")
+    outcome_bar = getattr(charts, "outcome_bar")
+    start_location_heatmap = getattr(charts, "start_location_heatmap")
+    touch_map = getattr(charts, "touch_map")
+    pass_map = getattr(charts, "pass_map")
+    shot_map = getattr(charts, "shot_map")
+    defensive_actions_map = getattr(charts, "defensive_actions_map")
+    THEMES = getattr(charts, "THEMES")
+    make_pitch = getattr(charts, "make_pitch")
+
+# 3. Safely unpack features from charts_extra.py (including the missing pitches)
+if charts_extra:
+    draw_pass_sonar = getattr(charts_extra, "draw_pass_sonar", None)
+    draw_pass_network_advanced = getattr(charts_extra, "draw_pass_network_advanced", None)
+    draw_defensive_territory = getattr(charts_extra, "draw_defensive_territory", None)
+    draw_tagging_pitch = getattr(charts_extra, "draw_tagging_pitch", None)
+    
+    # Extra chart metrics
+    overlay_image_on_fig = getattr(charts_extra, "overlay_image_on_fig", None)
+    goal_location_map = getattr(charts_extra, "goal_location_map", None)
+    goal_mouth_map = getattr(charts_extra, "goal_mouth_map", None)
+    goal_shot_report_map = getattr(charts_extra, "goal_shot_report_map", None)
+    vertical_event_map = getattr(charts_extra, "vertical_event_map", None)
+    progressive_carries_map = getattr(charts_extra, "progressive_carries_map", None)
+    pressure_map = getattr(charts_extra, "pressure_map", None)
+    xg_timeline = getattr(charts_extra, "xg_timeline", None)
+    passing_network = getattr(charts_extra, "passing_network", None)
+
+# Fallback in case draw_tagging_pitch resides natively in core charts module
+if draw_tagging_pitch is None and charts and hasattr(charts, "draw_tagging_pitch"):
+    draw_tagging_pitch = charts.draw_tagging_pitch
+
+# 4. Safely unpack layout features from charts_pro.py
+if charts_pro:
+    PRO_THEMES = getattr(charts_pro, "PRO_THEMES", {})
+    ALL_PRO_THEME_NAMES = getattr(charts_pro, "ALL_PRO_THEME_NAMES", [])
+    default_layout_cfg = getattr(charts_pro, "default_layout_cfg")
+    stat_block = getattr(charts_pro, "stat_block")
+    draw_logo = getattr(charts_pro, "draw_logo")
+    draw_title_block = getattr(charts_pro, "draw_title_block")
+    draw_footer = getattr(charts_pro, "draw_footer")
+    draw_attack_direction = getattr(charts_pro, "draw_attack_direction")
+    draw_opta_attack_arrows = getattr(charts_pro, "draw_opta_attack_arrows")
+    draw_stat_blocks_bottom = getattr(charts_pro, "draw_stat_blocks_bottom")
+    draw_stat_blocks_right = getattr(charts_pro, "draw_stat_blocks_right")
+    draw_custom_legend = getattr(charts_pro, "draw_custom_legend")
+    layout_controls_ui = getattr(charts_pro, "layout_controls_ui")
+    image_overlay_controls_pro = getattr(charts_pro, "image_overlay_controls_pro")
+    athletic_shot_map_pro = getattr(charts_pro, "athletic_shot_map_pro")
+    opta_pass_map_pro = getattr(charts_pro, "opta_pass_map_pro")
+    pro_pass_map = getattr(charts_pro, "pro_pass_map")
+    pro_shot_map = getattr(charts_pro, "pro_shot_map")
+    
+    # Safe theme dictionary injection update
     if "charts" in sys.modules:
-        sys.modules["charts"].THEMES.update(charts_pro.PRO_THEMES)
-# ── core imports ──────────────────────────────────────────────────────────────
-from charts import (
-    load_data, prepare_df_for_charts,
-    pizza_chart, mpl_pizza_dark, athletic_pizza, shot_detail_card,
-    defensive_regains_map, outcome_bar, start_location_heatmap,
-    touch_map, pass_map, shot_map, defensive_actions_map,
-    THEMES, make_pitch,
-)
+        sys.modules["charts"].THEMES.update(PRO_THEMES)
 
-
-
-from charts_pro import (
-    PRO_THEMES, ALL_PRO_THEME_NAMES,
-    default_layout_cfg, stat_block,
-    draw_logo, draw_title_block, draw_footer,
-    draw_attack_direction, draw_opta_attack_arrows,
-    draw_stat_blocks_bottom, draw_stat_blocks_right,
-    draw_custom_legend, layout_controls_ui, image_overlay_controls_pro,
-    athletic_shot_map_pro,
-    opta_pass_map_pro, pro_pass_map, pro_shot_map,
-)
+# 5. Handle try-except imports safely for Optional modules
 try:
-    from charts_pro import athletic_compact_shot_map
-except ImportError:
+    athletic_compact_shot_map = getattr(charts_pro, "athletic_compact_shot_map", None)
+except Exception:
     athletic_compact_shot_map = None
 
 try:
-    from scouting_tools_v2 import (
-        ROLE_TEMPLATES, load_player_data, standard_columns,
-        numeric_metrics, match_template_metrics, add_percentiles_and_score,
-        player_profile, similar_players, comparison_chart, radar_chart,
-        make_template_csv, recommendation_text, NEGATIVE_METRIC_WORDS,
-    )
+    if scouting_tools_v2:
+        ROLE_TEMPLATES = getattr(scouting_tools_v2, "ROLE_TEMPLATES")
+        load_player_data = getattr(scouting_tools_v2, "load_player_data")
+        standard_columns = getattr(scouting_tools_v2, "standard_columns")
+        numeric_metrics = getattr(scouting_tools_v2, "numeric_metrics")
+        match_template_metrics = getattr(scouting_tools_v2, "match_template_metrics")
+        add_percentiles_and_score = getattr(scouting_tools_v2, "add_percentiles_and_score")
+        player_profile = getattr(scouting_tools_v2, "player_profile")
+        similar_players = getattr(scouting_tools_v2, "similar_players")
+        comparison_chart = getattr(scouting_tools_v2, "comparison_chart")
+        radar_chart = getattr(scouting_tools_v2, "radar_chart")
+        make_template_csv = getattr(scouting_tools_v2, "make_template_csv")
+        recommendation_text = getattr(scouting_tools_v2, "recommendation_text")
+        NEGATIVE_METRIC_WORDS = getattr(scouting_tools_v2, "NEGATIVE_METRIC_WORDS")
 except Exception:
     ROLE_TEMPLATES = None; recommendation_text = None
     NEGATIVE_METRIC_WORDS = ["conceded","fouls","errors","turnovers","dispossessed"]
@@ -98,6 +129,8 @@ try:
     HAS_SIC = True
 except Exception:
     streamlit_image_coordinates = None; HAS_SIC = False
+
+# ── KEEP EVERYTHING BELOW THIS LINE EXACTLY AS IT WAS ─────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="⚽ Football Analysis Suite v4",
