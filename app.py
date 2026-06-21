@@ -65,7 +65,7 @@ from charts import (
     THEMES, make_pitch,
 )
 
-register_extra_themes()
+
 
 from charts_pro import (
     PRO_THEMES, ALL_PRO_THEME_NAMES,
