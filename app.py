@@ -48,7 +48,14 @@ charts_extra = _load_local("charts_extra", "charts_extra.py")
 draw_pass_sonar = charts_extra.draw_pass_sonar
 draw_pass_network_advanced = charts_extra.draw_pass_network_advanced
 draw_defensive_territory = charts_extra.draw_defensive_territory
+# Load the pro module if you have one
+charts_pro = _load_local("charts_pro", "charts_pro.py")
 
+# Merge extended themes into the core THEMES registry if they exist
+if charts_pro and hasattr(charts_pro, "PRO_THEMES"):
+    import sys
+    if "charts" in sys.modules:
+        sys.modules["charts"].THEMES.update(charts_pro.PRO_THEMES)
 # ── core imports ──────────────────────────────────────────────────────────────
 from charts import (
     load_data, prepare_df_for_charts,
