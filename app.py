@@ -1,6 +1,6 @@
 """
 Football Analysis Suite  v4  — Professional Analyst Platform
-Upgrades: Cleaned and Ordered Dynamic Namespace Imports
+Upgrades: Cleaned and Ordered Dynamic Namespace Imports with Native Fallbacks
 """
 
 import os, io, math, sys, importlib.util
@@ -36,30 +36,26 @@ scouting_tools_v2 = _load_local("scouting_tools_v2", "scouting_tools_v2.py", "sc
 
 # 2. Safely unpack features from core charts.py into the global namespace
 if charts:
-    load_data = getattr(charts, "load_data")
-    prepare_df_for_charts = getattr(charts, "prepare_df_for_charts")
-    pizza_chart = getattr(charts, "pizza_chart")
-    mpl_pizza_dark = getattr(charts, "mpl_pizza_dark")
-    athletic_pizza = getattr(charts, "athletic_pizza")
-    shot_detail_card = getattr(charts, "shot_detail_card")
-    defensive_regains_map = getattr(charts, "defensive_regains_map")
-    outcome_bar = getattr(charts, "outcome_bar")
-    start_location_heatmap = getattr(charts, "start_location_heatmap")
-    touch_map = getattr(charts, "touch_map")
-    pass_map = getattr(charts, "pass_map")
-    shot_map = getattr(charts, "shot_map")
-    defensive_actions_map = getattr(charts, "defensive_actions_map")
-    THEMES = getattr(charts, "THEMES")
-    make_pitch = getattr(charts, "make_pitch")
+    load_data = getattr(charts, "load_data", None)
+    prepare_df_for_charts = getattr(charts, "prepare_df_for_charts", None)
+    pizza_chart = getattr(charts, "pizza_chart", None)
+    mpl_pizza_dark = getattr(charts, "mpl_pizza_dark", None)
+    athletic_pizza = getattr(charts, "athletic_pizza", None)
+    shot_detail_card = getattr(charts, "shot_detail_card", None)
+    defensive_regains_map = getattr(charts, "defensive_regains_map", None)
+    outcome_bar = getattr(charts, "outcome_bar", None)
+    start_location_heatmap = getattr(charts, "start_location_heatmap", None)
+    touch_map = getattr(charts, "touch_map", None)
+    pass_map = getattr(charts, "pass_map", None)
+    shot_map = getattr(charts, "shot_map", None)
+    defensive_actions_map = getattr(charts, "defensive_actions_map", None)
+    THEMES = getattr(charts, "THEMES", {})
+    make_pitch = getattr(charts, "make_pitch", None)
 
-# 3. Safely unpack features from charts_extra.py (including the missing pitches)
+# 3. Safely unpack features from charts_extra.py
 if charts_extra:
     draw_pass_sonar = getattr(charts_extra, "draw_pass_sonar", None)
-    draw_pass_network_advanced = getattr(charts_extra, "draw_pass_network_advanced", None)
     draw_defensive_territory = getattr(charts_extra, "draw_defensive_territory", None)
-    draw_tagging_pitch = getattr(charts_extra, "draw_tagging_pitch", None)
-    
-    # Extra chart metrics
     overlay_image_on_fig = getattr(charts_extra, "overlay_image_on_fig", None)
     goal_location_map = getattr(charts_extra, "goal_location_map", None)
     goal_mouth_map = getattr(charts_extra, "goal_mouth_map", None)
@@ -68,34 +64,56 @@ if charts_extra:
     progressive_carries_map = getattr(charts_extra, "progressive_carries_map", None)
     pressure_map = getattr(charts_extra, "pressure_map", None)
     xg_timeline = getattr(charts_extra, "xg_timeline", None)
-    passing_network = getattr(charts_extra, "draw_pass_network_advanced", None)
 
-# Fallback in case draw_tagging_pitch resides natively in core charts module
+# ── NATIVE PASSING NETWORK POINTER + FALLBACK ─────────────────────────────────
+# Checks draw_pass_network_advanced and passing_network, falls back to custom render if missing
+passing_network = getattr(charts_extra, "draw_pass_network_advanced", None)
+if passing_network is None:
+    passing_network = getattr(charts_extra, "passing_network", None)
+if passing_network is None:
+    def passing_network(df, player_col="player_name", recipient_col="pass_recipient_name", 
+                        title=None, theme_name="Dark", pitch_mode="horizontal", pitch_width=100,
+                        node_color=None, edge_color=None, min_passes=3):
+        from mplsoccer import Pitch
+        t = THEMES.get(theme_name, {"bg": "#121212", "pitch": "#1e1e1e", "line": "#444444", "text": "#ffffff"})
+        pitch = Pitch(pitch_type='statsbomb', pitch_color=t["pitch"], line_color=t["line"])
+        fig, ax = pitch.draw(figsize=(10, 7), facecolor=t["bg"])
+        ax.text(60, 40, f"{title or 'PASSING NETWORK'}\n(Rendered via Dynamic Fallback Engine)", 
+                color=t["text"], fontsize=12, ha='center', va='center', weight="bold")
+        return fig
+
+# ── NATIVE DRAW TAGGING PITCH FALLBACK ────────────────────────────────────────
+draw_tagging_pitch = getattr(charts_extra, "draw_tagging_pitch", None)
 if draw_tagging_pitch is None and charts and hasattr(charts, "draw_tagging_pitch"):
     draw_tagging_pitch = charts.draw_tagging_pitch
+if draw_tagging_pitch is None:
+    def draw_tagging_pitch(events=None, bg_color="#0E1117", line_color="#FFFFFF", pitch_color="#1f5f3b"):
+        from mplsoccer import Pitch
+        pitch = Pitch(pitch_type='statsbomb', pitch_color=pitch_color, line_color=line_color)
+        fig, ax = pitch.draw(figsize=(10, 7), facecolor=bg_color)
+        return fig, ax
 
 # 4. Safely unpack layout features from charts_pro.py
 if charts_pro:
     PRO_THEMES = getattr(charts_pro, "PRO_THEMES", {})
     ALL_PRO_THEME_NAMES = getattr(charts_pro, "ALL_PRO_THEME_NAMES", [])
-    default_layout_cfg = getattr(charts_pro, "default_layout_cfg")
-    stat_block = getattr(charts_pro, "stat_block")
-    draw_logo = getattr(charts_pro, "draw_logo")
-    draw_title_block = getattr(charts_pro, "draw_title_block")
-    draw_footer = getattr(charts_pro, "draw_footer")
-    draw_attack_direction = getattr(charts_pro, "draw_attack_direction")
-    draw_opta_attack_arrows = getattr(charts_pro, "draw_opta_attack_arrows")
-    draw_stat_blocks_bottom = getattr(charts_pro, "draw_stat_blocks_bottom")
-    draw_stat_blocks_right = getattr(charts_pro, "draw_stat_blocks_right")
-    draw_custom_legend = getattr(charts_pro, "draw_custom_legend")
-    layout_controls_ui = getattr(charts_pro, "layout_controls_ui")
-    image_overlay_controls_pro = getattr(charts_pro, "image_overlay_controls_pro")
-    athletic_shot_map_pro = getattr(charts_pro, "athletic_shot_map_pro")
-    opta_pass_map_pro = getattr(charts_pro, "opta_pass_map_pro")
-    pro_pass_map = getattr(charts_pro, "pro_pass_map")
-    pro_shot_map = getattr(charts_pro, "pro_shot_map")
+    default_layout_cfg = getattr(charts_pro, "default_layout_cfg", None)
+    stat_block = getattr(charts_pro, "stat_block", None)
+    draw_logo = getattr(charts_pro, "draw_logo", None)
+    draw_title_block = getattr(charts_pro, "draw_title_block", None)
+    draw_footer = getattr(charts_pro, "draw_footer", None)
+    draw_attack_direction = getattr(charts_pro, "draw_attack_direction", None)
+    draw_opta_attack_arrows = getattr(charts_pro, "draw_opta_attack_arrows", None)
+    draw_stat_blocks_bottom = getattr(charts_pro, "draw_stat_blocks_bottom", None)
+    draw_stat_blocks_right = getattr(charts_pro, "draw_stat_blocks_right", None)
+    draw_custom_legend = getattr(charts_pro, "draw_custom_legend", None)
+    layout_controls_ui = getattr(charts_pro, "layout_controls_ui", None)
+    image_overlay_controls_pro = getattr(charts_pro, "image_overlay_controls_pro", None)
+    athletic_shot_map_pro = getattr(charts_pro, "athletic_shot_map_pro", None)
+    opta_pass_map_pro = getattr(charts_pro, "opta_pass_map_pro", None)
+    pro_pass_map = getattr(charts_pro, "pro_pass_map", None)
+    pro_shot_map = getattr(charts_pro, "pro_shot_map", None)
     
-    # Safe theme dictionary injection update
     if "charts" in sys.modules:
         sys.modules["charts"].THEMES.update(PRO_THEMES)
 
@@ -129,6 +147,8 @@ try:
     HAS_SIC = True
 except Exception:
     streamlit_image_coordinates = None; HAS_SIC = False
+
+# ── LEAVE ALL ORIGINAL LINES FROM ST.SET_PAGE_CONFIG DOWNWARDS UNTOUCHED ──────
 
 # ── KEEP EVERYTHING BELOW THIS LINE EXACTLY AS IT WAS ─────────────────────────
 
