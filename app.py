@@ -41,6 +41,13 @@ _load_local("charts",          "charts.py",          "charts (9).py",       "cha
 _load_local("charts_extra",    "charts_extra.py",    "charts_extra (2).py", "charts_extra__1_.py")
 _load_local("charts_pro",      "charts_pro.py")
 _load_local("scouting_tools_v2","scouting_tools_v2.py","scouting_tools_v2 (7).py","scouting_tools_v2__6_.py")
+# Load charts_extra using your dynamic loader instead
+charts_extra = _load_local("charts_extra", "charts_extra.py")
+
+# This makes the functions available to the rest of your app.py
+draw_pass_sonar = charts_extra.draw_pass_sonar
+draw_pass_network_advanced = charts_extra.draw_pass_network_advanced
+draw_defensive_territory = charts_extra.draw_defensive_territory
 
 # ── core imports ──────────────────────────────────────────────────────────────
 from charts import (
@@ -50,13 +57,7 @@ from charts import (
     touch_map, pass_map, shot_map, defensive_actions_map,
     THEMES, make_pitch,
 )
-from charts_extra import (
-    register_extra_themes, overlay_image_on_fig,
-    goal_location_map, goal_mouth_map, goal_shot_report_map,
-    vertical_event_map, progressive_carries_map,
-    pressure_map, xg_timeline, passing_network,
-    draw_tagging_pitch,
-)
+
 register_extra_themes()
 
 from charts_pro import (
