@@ -6,28 +6,63 @@ No private underscore functions imported from charts.py.
 from __future__ import annotations
 import math
 import io
+import os
+import sys
 from typing import Optional, List, Tuple, Dict, Any
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import matplotlib.gridspec as gridspec
-from matplotlib.patches import FancyBboxPatch, Patch
+from matplotlib.patches import FancyBboxPatch, Patch, Arc
 from matplotlib.lines import Line2D
+from matplotlib.colors import LinearSegmentedColormap
 from mplsoccer import Pitch, VerticalPitch
+from scipy.spatial import ConvexHull
 
-# Only public names from charts
+# ── Dynamic Import Fix for base 'charts' module ───────────────────────────
 try:
     from charts import THEMES, make_pitch
-except Exception:
-    # Fallbacks if charts isn't available or partially-initialized (prevents circular import failures)
-    THEMES = {}
-    def make_pitch(**kw):
-        return Pitch()
+except ImportError:
+    # Fallback search if sys.modules contains the dynamically loaded module
+    charts_mod = sys.modules.get("charts")
+    if charts_mod is not None:
+        THEMES = getattr(charts_mod, "THEMES", {})
+        make_pitch = getattr(charts_mod, "make_pitch", None)
+    else:
+        # Emergency local file fallback detection
+        possible_names = ["charts", "charts (9)", "charts__8_"]
+        loaded = False
+        for name in possible_names:
+            if name in sys.modules:
+                THEMES = getattr(sys.modules[name], "THEMES", {})
+                make_pitch = getattr(sys.modules[name], "make_pitch", None)
+                loaded = True
+                break
+        if not loaded:
+            # Absolute baseline defaults to prevent script crash
+            THEMES = {
+                "Dark": {"bg": "#121212", "pitch": "#1e1e1e", "line": "#444444", "text": "#ffffff", "accent": "#00ffcc"},
+                "Light": {"bg": "#ffffff", "pitch": "#f0f0f0", "line": "#cccccc", "text": "#000000", "accent": "#ff0055"}
+            }
+            def make_pitch(theme_name="Dark", pitch_type="statsbomb", orientation="horizontal", view="full"):
+                t = THEMES.get(theme_name, THEMES["Dark"])
+                return Pitch(pitch_color=t["pitch"], line_color=t["line"])
+# ──────────────────────────────────────────────────────────────────────────
 
-# ────────────────────────────────────────────────────────────────��[...]
+# Setup fonts
+try:
+    font_path = os.path.join(os.path.dirname(__file__), 'GeistMono-Bold.otf')
+    if os.path.exists(font_path):
+        fm.fontManager.addfont(font_path)
+        FONT_NAME = fm.FontProperties(fname=font_path).get_name()
+    else:
+        FONT_NAME = 'DejaVu Sans'
+except Exception:
+    FONT_NAME = 'DejaVu Sans'
+
 # LOCAL COPIES of helpers (avoids importing private _ functions from charts.py)
-# ────────────────────────────────────────────────────────────────��[...]
 PASS_ORDER_X = ["unsuccessful", "successful", "key pass", "assist"]
 SHOT_ORDER_X  = ["off target", "ontarget", "goal", "blocked"]
 DEF_COLS_X    = ["interception", "tackle", "recovery", "aerial_duel", "ground_duel", "clearance"]
@@ -44,266 +79,247 @@ def _yes_col(s: pd.Series) -> pd.Series:
     if pd.api.types.is_numeric_dtype(x):
         return (pd.to_numeric(x, errors="coerce").fillna(0) == 1)
     xs = x.astype(str).str.strip().str.lower()
-    return xs.map(lambda v: True if v in {"yes","y","true","t","1","نعم"} else False).astype(bool)
+    return xs.isin({"yes", "y", "true", "t", "1", "نعم"}).astype(bool)
 
 
-def _add_leg(ax, handles, theme: dict, loc: str = "lower center"):
-    if not handles:
-        return
-    if "upper" in loc:
-        anchor = (0.5, 0.98)
-    elif "lower" in loc:
-        anchor = (0.5, 0.02)
-    else:
-        anchor = None
-    leg = ax.legend(handles=handles, loc=loc, bbox_to_anchor=anchor,
-                    ncol=min(4, len(handles)), frameon=False, fontsize=9)
-    leg.set_in_layout(True)
-    for t in leg.get_texts():
-        t.set_color(theme.get("text", "white"))
+def draw_pass_sonar(df, player_name, theme_name="Dark"):
+    """Draws a Pass Sonar chart for a specific player."""
+    t = THEMES.get(theme_name, THEMES.get("Dark", {"bg": "#121212", "text": "#ffffff", "accent": "#00ffcc"}))
+    
+    p_df = df[(df['type_name'] == 'Pass') & (df['player_name'] == player_name)].copy()
+    if p_df.empty:
+        fig, ax = plt.subplots(figsize=(6, 6), facecolor=t["bg"])
+        ax.set_facecolor(t["bg"])
+        ax.text(0.5, 0.5, "No pass data available\nfor this player.", 
+                color=t["text"], fontname=FONT_NAME, fontsize=14, ha='center', va='center')
+        ax.axis('off')
+        return fig
+        
+    p_df['dx'] = p_df['pass_end_x'] - p_df['x']
+    p_df['dy'] = p_df['pass_end_y'] - p_df['y']
+    p_df['angle'] = np.arctan2(p_df['dy'], p_df['dx'])
+    p_df['angle_deg'] = np.degrees(p_df['angle']) % 360
+    p_df['length'] = np.sqrt(p_df['dx']**2 + p_df['dy']**2)
+    
+    num_bins = 16
+    bin_edges = np.linspace(0, 360, num_bins + 1)
+    p_df['angle_bin'] = pd.cut(p_df['angle_deg'], bins=bin_edges, labels=False, include_lowest=True)
+    
+    grouped = p_df.groupby('angle_bin').agg(
+        count=('id', 'count'),
+        avg_len=('length', 'mean'),
+        prog_count=('pass_progressive', lambda x: sorted(x)[-1] if len(x)>0 else 0)
+    ).reindex(range(num_bins), fill_value=0)
+    
+    angles = np.linspace(0, 2*np.pi, num_bins, endpoint=False)
+    counts = grouped['count'].values
+    lengths = grouped['avg_len'].values
+    
+    fig = plt.figure(figsize=(7, 7), facecolor=t["bg"])
+    ax = fig.add_subplot(111, projection='polar')
+    ax.set_facecolor(t["bg"])
+    
+    widths = np.ones(num_bins) * (2 * np.pi / num_bins) * 0.9
+    cmap = LinearSegmentedColormap.from_list("sonar", [t.get("line", "#444444"), t["accent"]])
+    norm = plt.Normalize(vmin=0, vmax=max(lengths) if max(lengths)>0 else 40)
+    
+    ax.bar(angles, counts, width=widths, bottom=0.0, color=cmap(norm(lengths)), edgecolor=t["bg"], linewidth=1)
+    
+    ax.set_theta_zero_location("E")
+    ax.set_theta_direction(1)
+    
+    ax.set_xticklabels(['Forward', 'Run/Left', 'Backward', 'Run/Right'], color=t["text"], fontname=FONT_NAME, fontsize=10)
+    ax.set_xticks([0, np.pi/2, np.pi, 3*np.pi/2])
+    
+    ax.spines['polar'].set_visible(False)
+    ax.grid(True, color=t.get("line", "#444444"), alpha=0.5, linestyle='--')
+    ax.tick_params(colors=t["text"], labelsize=9)
+    
+    ax.set_title(f"PASS SONAR: {player_name.upper()}\nBar length = Frequency | Color = Avg Distance", 
+                 color=t["text"], fontname=FONT_NAME, fontsize=12, pad=20, va='bottom')
+    
+    plt.tight_layout()
+    return fig
 
 
-def _set_pitch_bounds(ax, pitch_mode: str = "rect", pitch_width: float = 68.0, vertical_pitch: bool = False):
-    y_max = pitch_width if pitch_mode == "rect" else 100.0
-    if vertical_pitch:
-        ax.set_xlim(-2, y_max + 2)
-        ax.set_ylim(-2, 102)
-    else:
-        ax.set_xlim(-2, 102)
-        ax.set_ylim(-2, y_max + 2)
+def draw_pass_network_advanced(df, team_name, theme_name="Dark"):
+    """Draws an advanced Pass Network with convex hulls / positioning variance."""
+    t = THEMES.get(theme_name, THEMES.get("Dark", {"bg": "#121212", "pitch": "#1e1e1e", "line": "#444444", "text": "#ffffff", "accent": "#00ffcc"}))
+    
+    pitch = Pitch(pitch_type='statsbomb', pitch_color=t["pitch"], line_color=t["line"], goal_type='line')
+    fig, ax = pitch.draw(figsize=(10, 7), facecolor=t["bg"])
+    
+    team_df = df[df['team_name'] == team_name].copy()
+    if team_df.empty:
+        ax.text(60, 40, f"No data found for {team_name}", color=t["text"], fontname=FONT_NAME, fontsize=14, ha='center')
+        return fig
+        
+    players = []
+    for p in team_df['player_name'].dropna().unique():
+        p_events = team_df[team_df['player_name'] == p]
+        first_loc = p_events.index[0]
+        players.append({'name': p, 'first_idx': first_loc, 'count': len(p_events)})
+    
+    top_players = pd.DataFrame(players).sort_values('first_idx').head(11)['name'].tolist()
+    net_df = team_df[(team_df['player_name'].isin(top_players)) & (team_df['type_name'] == 'Pass')].copy()
+    avg_locs = net_df.groupby('player_name').agg(x=('x', 'mean'), y=('y', 'mean')).reset_index()
+    
+    for p in top_players[:3]:
+        p_locs = net_df[net_df['player_name'] == p][['x', 'y']].dropna()
+        if len(p_locs) > 5:
+            try:
+                hull = ConvexHull(p_locs.values)
+                hull_pts = p_locs.values[hull.vertices]
+                poly = plt.Polygon(hull_pts, facecolor=t["accent"], alpha=0.05, edgecolor=t["accent"], linestyle=':', linewidth=1)
+                ax.add_patch(poly)
+            except:
+                pass
+
+    net_df['next_player'] = net_df['pass_recipient_name']
+    pairs = net_df[net_df['next_player'].isin(top_players)].groupby(['player_name', 'next_player']).size().reset_index(name='count')
+    pairs = pairs[pairs['count'] > 2]
+    
+    loc_dict = avg_locs.set_index('player_name').to_dict(orient='index')
+    max_count = pairs['count'].max() if not pairs.empty else 1
+    
+    for _, row in pairs.iterrows():
+        p1, p2 = row['player_name'], row['next_player']
+        if p1 in loc_dict and p2 in loc_dict:
+            x1, y1 = loc_dict[p1]['x'], loc_dict[p1]['y']
+            x2, y2 = loc_dict[p2]['x'], loc_dict[p2]['y']
+            alpha = max(0.2, row['count'] / max_count)
+            lw = (row['count'] / max_count) * 5 + 1
+            pitch.lines(x1, y1, x2, y2, color=t["accent"], alpha=alpha, lw=lw, ax=ax, zorder=2)
+            
+    for _, row in avg_locs.iterrows():
+        p = row['player_name']
+        p_events_count = len(net_df[net_df['player_name'] == p])
+        size = max(100, min(600, p_events_count * 10))
+        pitch.scatter(row['x'], row['y'], s=size, color=t["bg"], edgecolor=t["accent"], linewidth=2, zorder=3, ax=ax)
+        
+        display_name = p.split(' ')[-1]
+        ax.text(row['x'], row['y'] - 3, display_name, color=t["text"], fontname=FONT_NAME, fontsize=9, ha='center', zorder=4)
+        
+    ax.set_title(f"ADVANCED PASSING NETWORK & TERRITORY\n{team_name.upper()} Starting Lineup", 
+                 color=t["text"], fontname=FONT_NAME, fontsize=14, pad=15)
+                 
+    return fig
 
 
-# ────────────────────────────────────────────────────────────────��[...]
-# EXTRA THEMES
-# ────────────────────────────────────────────────────────────────��[...]
-EXTRA_THEMES: Dict[str, dict] = {
-    "Opta Analyst Light": {
-        "bg": "#F3F3F4", "panel": "#ECEDEF", "pitch": "#F3F3F4",
-        "pitch_lines": "#9B9B9B", "pitch_stripe": None,
-        "text": "#151326", "muted": "#77727F", "lines": "#D4D4D7", "goal": "#4A4A4A",
-    },
-    "Opta Analyst Pink": {
-        "bg": "#F4F2F4", "panel": "#EEE9EE", "pitch": "#F4F2F4",
-        "pitch_lines": "#9B9B9B", "pitch_stripe": None,
-        "text": "#171329", "muted": "#807985", "lines": "#D7D2D7", "goal": "#4A4A4A",
-    },
-    "The Athletic FC Cream": {
-        "bg": "#F7F3EA", "panel": "#EFE8DB", "pitch": "#376B49",
-        "pitch_lines": "#FDFBF4", "pitch_stripe": "#3F7551",
-        "text": "#161616", "muted": "#6F6A61", "lines": "#CCC1AD", "goal": "#222222",
-    },
-    "The Athletic FC Paper": {
-        "bg": "#FBFAF6", "panel": "#F0EEE6", "pitch": "#FBFAF6",
-        "pitch_lines": "#8E8E88", "pitch_stripe": None,
-        "text": "#222222", "muted": "#62615C", "lines": "#D9D5C9", "goal": "#2B2B2B",
-    },
-    "Opta Light": {
-        "bg": "#F0F0F0", "panel": "#E8E8E8", "pitch": "#F0F0F0",
-        "pitch_lines": "#888888", "pitch_stripe": None,
-        "text": "#1A1A2E", "muted": "#666666", "lines": "#CCCCCC", "goal": "#444444",
-    },
-    "Athletic FC Dark": {
-        "bg": "#0A0A0A", "panel": "#111111", "pitch": "#0D2818",
-        "pitch_lines": "#CCCCCC", "pitch_stripe": "#0F2E1A",
-        "text": "#F5F5F0", "muted": "#999999", "lines": "#333333", "goal": "#DDDDDD",
-    },
-    "Athletic FC Light": {
-        "bg": "#F4F1E8", "panel": "#EDE9DC", "pitch": "#4A7C59",
-        "pitch_lines": "#FFFFFF", "pitch_stripe": None,
-        "text": "#1A1A1A", "muted": "#666666", "lines": "#CCBFA0", "goal": "#333333",
-    },
-    "Whoscored Dark": {
-        "bg": "#1C1C2E", "panel": "#252540", "pitch": "#1A3A2A",
-        "pitch_lines": "#E0E0E0", "pitch_stripe": None,
-        "text": "#FFFFFF", "muted": "#A0A0C0", "lines": "#303060", "goal": "#FFFFFF",
-    },
-    "Statsbomb Light": {
-        "bg": "#FAFAFA", "panel": "#F0F0F0", "pitch": "#68BB59",
-        "pitch_lines": "#FFFFFF", "pitch_stripe": None,
-        "text": "#111111", "muted": "#555555", "lines": "#DDDDDD", "goal": "#222222",
-    },
-    "Night Blue": {
-        "bg": "#060D1F", "panel": "#0A1628", "pitch": "#0F3460",
-        "pitch_lines": "#E8F4FD", "pitch_stripe": None,
-        "text": "#E8F4FD", "muted": "#7BA7C2", "lines": "#1A2D50", "goal": "#E8F4FD",
-    },
-    "Broadcast Green": {
-        "bg": "#0A1A0A", "panel": "#111C11", "pitch": "#1A4A1A",
-        "pitch_lines": "#FFFFFF", "pitch_stripe": "#1E501E",
-        "text": "#FFFFFF", "muted": "#88BB88", "lines": "#224422", "goal": "#FFFFFF",
-    },
-}
-
-
-def register_extra_themes():
-    """Add extra themes into the global THEMES dict from charts.py."""
-    for k, v in EXTRA_THEMES.items():
-        if k not in THEMES:
-            THEMES[k] = v
-
-
-register_extra_themes()
-
-
-# ────────────────────────────────────────────────────────────────�[...]
-# IMAGE OVERLAY
-# ────────────────────────────────────────────────────────────────�[...]
-def overlay_image_on_fig(fig, img_obj, x=0.02, y=0.88, w=0.10, h=0.10,
-                          circle_crop=False, border_color="white", border_lw=0.0):
-    """Paste a PIL Image onto any figure at figure-fraction position."""
-    if img_obj is None:
-        return
+def draw_defensive_territory(df, team_name, theme_name="Dark"):
+    """Draws a visual heatmap overlay showcasing defensive interventions."""
+    t = THEMES.get(theme_name, THEMES.get("Dark", {"bg": "#121212", "pitch": "#1e1e1e", "line": "#444444", "text": "#ffffff", "accent": "#00ffcc"}))
+    
+    pitch = Pitch(pitch_type='statsbomb', pitch_color=t["pitch"], line_color=t["line"])
+    fig, ax = pitch.draw(figsize=(10, 7), facecolor=t["bg"])
+    
+    def_actions = ['Ball Recovery', 'Block', 'Clearance', 'Interception', 'Tackle']
+    def_df = df[(df['team_name'] == team_name) & (df['type_name'].isin(def_actions))].copy()
+    
+    if def_df.empty or len(def_df) < 3:
+        ax.text(60, 40, "Insufficient defensive event data", color=t["text"], fontname=FONT_NAME, fontsize=14, ha='center')
+        return fig
+        
     try:
-        img = img_obj.convert("RGBA")
-        arr = np.asarray(img)
-        ax_img = fig.add_axes([x, y, w, h], zorder=50)
-        ax_img.imshow(arr)
-        ax_img.axis("off")
-        ax_img.set_facecolor("none")
-        if circle_crop:
-            circ = plt.Circle((0.5, 0.5), 0.5, transform=ax_img.transAxes,
-                               facecolor="none", edgecolor=border_color, linewidth=border_lw)
-            ax_img.add_patch(circ)
-            ax_img.set_clip_path(circ)
-        if border_lw > 0 and not circle_crop:
-            for sp in ax_img.spines.values():
-                sp.set_visible(True)
-                sp.set_color(border_color)
-                sp.set_linewidth(border_lw)
-    except Exception:
-        pass
+        pitch.kdeplot(def_df['x'], def_df['y'], ax=ax,
+                      cmap=LinearSegmentedColormap.from_list("def", [t["pitch"], t["accent"]]),
+                      fill=True, alpha=0.4, levels=8, thresh=0.1)
+    except:
+        pitch.scatter(def_df['x'], def_df['y'], color=t["accent"], alpha=0.5, s=60, ax=ax)
+        
+    markers = {'Tackle': 'o', 'Interception': 's', 'Block': '^', 'Clearance': 'x', 'Ball Recovery': 'D'}
+    for act in def_actions:
+        act_df = def_df[def_df['type_name'] == act]
+        if not act_df.empty:
+            pitch.scatter(act_df['x'], act_df['y'], alpha=0.8, s=40, 
+                          color=t["text"], marker=markers.get(act, 'o'), edgecolors=t["bg"], 
+                          label=act, ax=ax, zorder=3)
+            
+    avg_x = def_df['x'].mean()
+    avg_y = def_df['y'].mean()
+    pitch.scatter(avg_x, avg_y, color='#ff0055', marker='*', s=300, edgecolors=t["text"], zorder=5, ax=ax, label='Defensive Center')
+    
+    ax.legend(facecolor=t["bg"], edgecolor=t["line"], labelcolor=t["text"], loc='lower left', prop={'size': 9})
+    ax.set_title(f"DEFENSIVE ACTIONS TERRITORY & ENGAGEMENT BLOCKS\n{team_name.upper()} Heatmap Overlay", 
+                 color=t["text"], fontname=FONT_NAME, fontsize=13, pad=15)
+                 
+    return fig
 
 
-# ────────────────────────────────────────────────────────────────�[...]
-# 1. GOAL LOCATION MAP  (Opta Analyst style — Image 1 reference)
-# ────────────────────────────────────────────────────────────────�[...]
-def goal_location_map(
-    df: pd.DataFrame,
-    title: str = "Goal Location Map",
-    player_name: str = "",
-    subtitle: str = "",
-    stat_labels: Optional[List[Tuple[str, str]]] = None,
-    theme_name: str = "Opta Light",
-    pitch_mode: str = "rect",
-    pitch_width: float = 68.0,
-    goal_color: str = "#C8102E",
-    goal_edge: str = "#8B0000",
-    dot_size: int = 160,
-    penalty_label_col: Optional[str] = None,
-    logo_img=None,
-    logo_x: float = 0.72, logo_y: float = 0.88,
-    logo_w: float = 0.14, logo_h: float = 0.10,
-    player_img=None,
-    player_img_x: float = 0.02, player_img_y: float = 0.88,
-    player_img_w: float = 0.10, player_img_h: float = 0.10,
-    show_pitch_half_only: bool = True,
-    attack_direction: str = "ltr",
-):
-    """
-    Opta Analyst-style goal location map.
-    Required columns: x, y, outcome
-    """
-    theme = THEMES.get(theme_name, THEMES["The Athletic Dark"])
-    bg = theme.get("bg", "#F0F0F0")
-    text_col = theme.get("text", "#1A1A1A")
-    muted_col = theme.get("muted", "#666666")
-    line_col = theme.get("pitch_lines", "#888888")
+def draw_tactical_board(events: Optional[List[Dict[str, Any]]] = None, 
+                       bg_color: str = "#121212", pitch_color: str = "#1e1e1e", 
+                       line_color: str = "#444444", text_color: str = "#ffffff") -> io.BytesIO:
+    """Fallback tactical vector generator rendering direct shape buffers."""
+    from PIL import Image, ImageDraw
+    img = Image.new("RGBA", (1200, 800), bg_color)
+    draw = ImageDraw.Draw(img)
+    
+    # Draw field outline
+    draw.rectangle([50, 50, 1150, 750], fill=pitch_color, outline=line_color, width=4)
+    draw.line([600, 50, 600, 750], fill=line_color, width=4)
+    draw.ellipse([500, 300, 700, 500], outline=line_color, width=4)
+    
+    # Boxes
+    draw.rectangle([50, 200, 215, 600], fill=pitch_color, outline=line_color, width=4)
+    draw.rectangle([985, 200, 1150, 600], fill=pitch_color, outline=line_color, width=4)
+    
+    def P(x, y):
+        # Scale 0-100 to canvas boundaries safely
+        nx = 50 + (float(x) / 100.0) * 1100
+        ny = 50 + (float(y) / 100.0) * 700
+        return nx, ny
 
-    df = df.copy()
-    goals = df[df["outcome"].astype(str).str.lower() == "goal"].copy()
+    def _ev_col(et: str) -> str:
+        if et == "pass": return "#00FFCC"
+        if et == "shot": return "#FF0055"
+        return "#FFFF00"
 
-    fig = plt.figure(figsize=(13, 9))
-    fig.patch.set_facecolor(bg)
+    def _arrow(p1, p2, color, width=5):
+        draw.line([p1[0], p1[1], p2[0], p2[1]], fill=color, width=width)
+        # Cap end indicator
+        draw.ellipse([p2[0]-4, p2[1]-4, p2[0]+4, p2[1]+4], fill=color)
 
-    ax_pitch = fig.add_axes([0.02, 0.06, 0.60, 0.78])
-    ax_stats  = fig.add_axes([0.64, 0.06, 0.34, 0.78])
+    def _dot(x, y, color, edge="#FFF", r=10, marker="o"):
+        nx, ny = P(x, y)
+        box = [nx - r, ny - r, nx + r, ny + r]
+        box2 = [nx - r + 2, ny - r + 2, nx + r - 2, ny + r - 2]
+        if marker == "x":
+            draw.line([nx-r, ny-r, nx+r, ny+r], fill=color, width=4)
+            draw.line([nx-r, ny+r, nx+r, ny-r], fill=color, width=4)
+        elif marker == "^":
+            draw.polygon([nx, ny-r, nx-r, ny+r, nx+r, ny+r], fill=color, outline=edge)
+        elif marker == "s":
+            draw.rectangle(box, fill=color, outline=edge, width=3)
+        elif marker == "D":
+            draw.polygon([nx, ny-r, nx+r, ny, nx, ny+r, nx-r, ny], fill=color, outline=edge, width=5)
+        else:
+            draw.ellipse(box2, fill=color, outline=edge, width=3)
 
-    ax_pitch.set_facecolor(bg)
-    ax_pitch.set_xlim(-2, 104)
-    y_max = pitch_width if pitch_mode == "rect" else 100.0
-    ax_pitch.set_ylim(-2, y_max + 2)
-    ax_pitch.axis("off")
-
-    lc = line_col
-    lw = 2.0
-    mid = y_max / 2.0
-
-    def _rect(x0, y0, x1, y1):
-        ax_pitch.plot([x0, x1, x1, x0, x0], [y0, y0, y1, y1, y0],
-                      color=lc, lw=lw, solid_capstyle="round")
-
-    x_start = 50.0 if show_pitch_half_only else 0.0
-    _rect(x_start, 0, 100, y_max)
-
-    pa_w = y_max * 40.32 / 68.0
-    pa_l = 16.5 / 105.0 * 100.0
-    _rect(100 - pa_l, mid - pa_w / 2, 100, mid + pa_w / 2)
-
-    sa_w = y_max * 18.32 / 68.0
-    sa_l = 5.5 / 105.0 * 100.0
-    _rect(100 - sa_l, mid - sa_w / 2, 100, mid + sa_w / 2)
-
-    goal_w = y_max * 7.32 / 68.0
-    ax_pitch.plot([100, 103], [mid - goal_w / 2, mid - goal_w / 2], color=lc, lw=lw)
-    ax_pitch.plot([100, 103], [mid + goal_w / 2, mid + goal_w / 2], color=lc, lw=lw)
-    ax_pitch.plot([103, 103], [mid - goal_w / 2, mid + goal_w / 2], color=lc, lw=lw)
-
-    pen_x = 100 - 11.0 / 105.0 * 100.0
-    ax_pitch.plot(pen_x, mid, "o", color=lc, ms=3)
-
-    # Penalty arc
-    arc_cx = 100 - pa_l
-    arc_rx = 9.15 / 105.0 * 100.0
-    arc_ry = 9.15 / 68.0 * y_max
-    theta_arc = np.linspace(np.pi * 0.62, np.pi * 1.38, 80)
-    arc_xs = arc_cx + arc_rx * np.cos(theta_arc)
-    arc_ys = mid + arc_ry * np.sin(theta_arc)
-    outside = arc_xs <= (100 - pa_l + 0.5)
-    ax_pitch.plot(arc_xs[outside], arc_ys[outside], color=lc, lw=lw)
-
-    if not show_pitch_half_only:
-        ax_pitch.plot([50, 50], [0, y_max], color=lc, lw=lw)
-
-    if not goals.empty:
-        ax_pitch.scatter(goals["x"], goals["y"], s=dot_size,
-                         color=goal_color, edgecolors=goal_edge,
-                         linewidth=1.2, zorder=6, alpha=0.92)
-        if penalty_label_col and penalty_label_col in goals.columns:
-            for _, r in goals.iterrows():
+    for ev in (events or []):
+        try:
+            et   = str(ev.get("event_type", "")).lower()
+            col  = str(ev.get("start_color",  _ev_col(et)) or _ev_col(et))
+            edge = str(ev.get("start_edge",   "#FFF") or "#FFF")
+            mk   = ev.get("start_marker", "o")
+            sz   = int(float(ev.get("start_size", 9) or 9))
+            ac   = str(ev.get("arrow_color", col) or col)
+            ex   = float(ev.get("x", 0))
+            ey   = float(ev.get("y", 0))
+            ex2  = ev.get("x2")
+            ey2  = ev.get("y2")
+            if et in ["pass", "carry", "dribble", "cross"]:
                 try:
-                    val = int(float(r.get(penalty_label_col, 0)))
-                    if val > 0:
-                        ax_pitch.text(float(r["x"]), float(r["y"]), str(val),
-                                      ha="center", va="center", fontsize=7,
-                                      color="white", weight="bold", zorder=7)
+                    if ex2 is not None and ey2 is not None:
+                        if not (isinstance(ex2, float) and math.isnan(ex2)) and \
+                           not (isinstance(ey2, float) and math.isnan(ey2)):
+                            _arrow(P(ex, ey), P(float(ex2), float(ey2)), ac, width=5)
                 except Exception:
                     pass
+            _dot(ex, ey, col, edge=edge, r=max(4, sz), marker=mk)
+        except Exception:
+            pass
 
-    # Stats panel
-    ax_stats.set_facecolor(bg)
-    ax_stats.axis("off")
-    ax_stats.set_xlim(0, 1)
-    ax_stats.set_ylim(0, 1)
-
-    if stat_labels:
-        y_pos = 0.90
-        for i, (val, label) in enumerate(stat_labels):
-            ax_stats.text(0.05, y_pos, str(val), fontsize=28, weight="900",
-                          color=text_col, va="top", transform=ax_stats.transAxes)
-            ax_stats.text(0.05, y_pos - 0.08, str(label), fontsize=12,
-                          color=muted_col, va="top", transform=ax_stats.transAxes)
-            if i < len(stat_labels) - 1:
-                y_sep = y_pos - 0.14
-                ax_stats.plot([0.0, 0.85], [y_sep, y_sep],
-                              color=theme.get("lines", "#CCCCCC"), lw=1.0,
-                              transform=ax_stats.transAxes)
-            y_pos -= 0.22
-
-    fig.text(0.02, 0.955, player_name or title, fontsize=22, weight="900",
-             color=text_col, va="top")
-    fig.text(0.02, 0.912, subtitle, fontsize=11, color=muted_col, va="top")
-
-    overlay_image_on_fig(fig, logo_img,   x=logo_x,      y=logo_y,      w=logo_w,      h=logo_h)
-    overlay_image_on_fig(fig, player_img, x=player_img_x, y=player_img_y,
-                         w=player_img_w, h=player_img_h, circle_crop=True)
-    return fig
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
