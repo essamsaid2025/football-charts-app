@@ -87,11 +87,160 @@ draw_tagging_pitch = getattr(charts_extra, "draw_tagging_pitch", None)
 if draw_tagging_pitch is None and charts and hasattr(charts, "draw_tagging_pitch"):
     draw_tagging_pitch = charts.draw_tagging_pitch
 if draw_tagging_pitch is None:
-    def draw_tagging_pitch(events=None, bg_color="#0E1117", line_color="#FFFFFF", pitch_color="#1f5f3b"):
-        from mplsoccer import Pitch
-        pitch = Pitch(pitch_type='statsbomb', pitch_color=pitch_color, line_color=line_color)
-        fig, ax = pitch.draw(figsize=(10, 7), facecolor=bg_color)
-        return fig, ax
+    def draw_tagging_pitch(
+        theme_name="The Athletic Dark",
+        pitch_mode="rect",
+        pitch_width=68.0,
+        display_width=900,
+        show_thirds=True,
+        events=None,
+        start_point=None,
+        current_marker="o",
+        current_color="#22C55E",
+        current_edge="#FFFFFF",
+        current_size=9,
+    ):
+        """
+        Renders an interactive tagging pitch as a PIL Image.
+        Returns (PIL.Image, img_w, img_h, y_max, pad).
+        """
+        import math as _math
+        from PIL import Image as _Image
+        import io as _io
+
+        t = THEMES.get(theme_name, THEMES.get("The Athletic Dark", {
+            "bg": "#0E1117", "pitch": "#1f5f3b", "pitch_lines": "#E6E6E6",
+            "text": "#FFFFFF", "muted": "#A0A7B4", "lines": "#2A3240",
+        }))
+
+        y_max = float(pitch_width if pitch_mode == "rect" else 100.0)
+        aspect = y_max / 100.0
+        fig_w = display_width / 100.0
+        fig_h = fig_w * aspect
+
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+        fig.patch.set_facecolor(t["bg"])
+        ax.set_facecolor(t.get("pitch", "#1f5f3b"))
+
+        lc = t.get("pitch_lines", "#E6E6E6")
+        lw = 1.6
+        mid = y_max / 2.0
+
+        # ── Pitch outline ──────────────────────────────────────────────────
+        ax.plot([0,100,100,0,0], [0,0,y_max,y_max,0], color=lc, lw=lw)
+        # Halfway line
+        ax.plot([50,50],[0,y_max], color=lc, lw=lw)
+        # Centre circle
+        theta = np.linspace(0, 2*np.pi, 100)
+        rx = 9.15; ry = 9.15 / 100.0 * y_max
+        ax.plot(50 + rx*np.cos(theta), mid + ry*np.sin(theta), color=lc, lw=lw)
+        ax.plot(50, mid, "o", color=lc, ms=3)
+
+        # ── Penalty areas ──────────────────────────────────────────────────
+        pa_w = y_max * 40.32/68.0; sa_w = y_max * 18.32/68.0
+        goal_w = y_max * 7.32/68.0
+        pa_l = 16.5/105.0 * 100; sa_l = 5.5/105.0 * 100
+        for x0, x1 in [(0, pa_l), (100-pa_l, 100)]:
+            ax.plot([x0,x1,x1,x0,x0],
+                    [mid-pa_w/2,mid-pa_w/2,mid+pa_w/2,mid+pa_w/2,mid-pa_w/2],
+                    color=lc, lw=lw)
+        for x0, x1 in [(0, sa_l), (100-sa_l, 100)]:
+            ax.plot([x0,x1,x1,x0,x0],
+                    [mid-sa_w/2,mid-sa_w/2,mid+sa_w/2,mid+sa_w/2,mid-sa_w/2],
+                    color=lc, lw=lw)
+        # Goals
+        for x0, x1 in [(-2.5, 0), (100, 102.5)]:
+            ax.plot([x0,x1,x1,x0,x0],
+                    [mid-goal_w/2,mid-goal_w/2,mid+goal_w/2,mid+goal_w/2,mid-goal_w/2],
+                    color=lc, lw=lw)
+        # Penalty spots
+        for px in [11.0/105.0*100, 100 - 11.0/105.0*100]:
+            ax.plot(px, mid, "o", color=lc, ms=3)
+        # Penalty arcs
+        for cx, sign in [(pa_l, 1), (100-pa_l, -1)]:
+            arc_r_x = rx; arc_r_y = ry
+            th = np.linspace(0, 2*np.pi, 200)
+            xs = cx + arc_r_x*np.cos(th)*sign
+            ys = mid + arc_r_y*np.sin(th)
+            mask = xs*sign >= cx*sign
+            ax.plot(xs[mask], ys[mask], color=lc, lw=lw)
+
+        # ── Thirds ────────────────────────────────────────────────────────
+        if show_thirds:
+            for x in [100/3, 200/3]:
+                ax.plot([x,x],[0,y_max], color=lc, lw=0.8, ls="--", alpha=0.4)
+            text_kw = dict(color=t.get("muted","#A0A7B4"), fontsize=8,
+                           alpha=0.7, ha="center", va="top")
+            ax.text(100/6, y_max*0.98, "Defensive Third", **text_kw)
+            ax.text(50,    y_max*0.98, "Middle Third",    **text_kw)
+            ax.text(500/6, y_max*0.98, "Attacking Third", **text_kw)
+
+        # ── Attacking direction arrow ──────────────────────────────────────
+        arrow_y = -y_max * 0.06
+        ax.annotate("", xy=(75, arrow_y), xytext=(25, arrow_y),
+                    arrowprops=dict(arrowstyle="-|>", color=t.get("muted","#A0A7B4"), lw=1.8),
+                    annotation_clip=False)
+        ax.text(50, arrow_y - y_max*0.04, "Attacking Direction",
+                color=t.get("muted","#A0A7B4"), fontsize=8, ha="center",
+                va="top", annotation_clip=False)
+
+        # ── Draw existing events ───────────────────────────────────────────
+        for ev in (events or []):
+            try:
+                ex = float(ev.get("x", 0)); ey = float(ev.get("y", 0))
+                col  = str(ev.get("start_color",  current_color) or current_color)
+                edge = str(ev.get("start_edge",   current_edge)  or current_edge)
+                mk   = ev.get("start_marker", "o") or "o"
+                sz   = float(ev.get("start_size", 9) or 9) * 15
+                # Arrow for pass/carry/cross/dribble
+                et = str(ev.get("event_type","")).lower()
+                if et in ("pass","carry","cross","dribble"):
+                    ex2 = ev.get("x2"); ey2 = ev.get("y2")
+                    if ex2 is not None and ey2 is not None:
+                        try:
+                            if not (_math.isnan(float(ex2)) or _math.isnan(float(ey2))):
+                                arr_col = str(ev.get("arrow_color", col) or col)
+                                ax.annotate("", xy=(float(ex2), float(ey2)),
+                                            xytext=(ex, ey),
+                                            arrowprops=dict(arrowstyle="-|>",
+                                                            color=arr_col, lw=1.8))
+                        except Exception:
+                            pass
+                ax.scatter([ex], [ey], s=sz, marker=mk, color=col,
+                           edgecolors=edge, linewidth=1.5, zorder=6)
+            except Exception:
+                pass
+
+        # ── Pending start point ────────────────────────────────────────────
+        if start_point is not None:
+            try:
+                spx, spy = float(start_point[0]), float(start_point[1])
+                mk = current_marker if current_marker else "o"
+                ax.scatter([spx], [spy], s=float(current_size)*15,
+                           marker=mk, color=current_color, edgecolors=current_edge,
+                           linewidth=2, zorder=7, alpha=0.6)
+                # Crosshair
+                ax.plot([spx-2, spx+2], [spy, spy], color=current_color, lw=1, alpha=0.5)
+                ax.plot([spx, spx], [spy-2*aspect, spy+2*aspect], color=current_color, lw=1, alpha=0.5)
+            except Exception:
+                pass
+
+        ax.set_xlim(-4, 104)
+        ax.set_ylim(-y_max*0.15, y_max*1.05)
+        ax.set_aspect("equal", adjustable="box")
+        ax.axis("off")
+        fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+
+        buf = _io.BytesIO()
+        fig.savefig(buf, format="PNG", dpi=100, bbox_inches="tight", pad_inches=0.05,
+                    facecolor=t["bg"])
+        buf.seek(0)
+        plt.close(fig)
+
+        pil_img = _Image.open(buf).convert("RGB")
+        img_w, img_h = pil_img.size
+        pad = 0
+        return pil_img, img_w, img_h, y_max, pad
 
 # 4. Safely unpack layout features from charts_pro.py
 if charts_pro:
@@ -103,6 +252,16 @@ if charts_pro:
     draw_title_block = getattr(charts_pro, "draw_title_block", None)
     draw_footer = getattr(charts_pro, "draw_footer", None)
     draw_attack_direction = getattr(charts_pro, "draw_attack_direction", None)
+    # Wrap draw_attack_direction to expand the axis limits so the arrow is never clipped
+    _raw_draw_attack_direction = draw_attack_direction
+    if _raw_draw_attack_direction is not None:
+        def draw_attack_direction(ax, cfg, theme, pitch_mode="rect", pitch_width=68.0, vertical=False):
+            y_max = pitch_width if pitch_mode == "rect" else 100.0
+            if not vertical:
+                ymin, ymax = ax.get_ylim()
+                ax.set_ylim(min(ymin, -y_max * 0.18), ymax)
+                ax.set_clip_on(False)
+            _raw_draw_attack_direction(ax, cfg, theme, pitch_mode, pitch_width, vertical)
     draw_opta_attack_arrows = getattr(charts_pro, "draw_opta_attack_arrows", None)
     draw_stat_blocks_bottom = getattr(charts_pro, "draw_stat_blocks_bottom", None)
     draw_stat_blocks_right = getattr(charts_pro, "draw_stat_blocks_right", None)
@@ -408,29 +567,49 @@ def legend_controls_full(prefix, all_items, default_active=None):
                 title=title_txt or None, frame=frame)
 
 def apply_legend_style(ax, legend_cfg, theme):
-    handles, labels = ax.get_legend_handles_labels()
-    active = legend_cfg.get("active", labels)
-    filtered = [(h, l) for h, l in zip(handles, labels) if l in active]
-    if not filtered:
-        if ax.get_legend(): ax.get_legend().remove()
+    """
+    Pull handles from the axis legend (set by chart internals),
+    filter by active items, then re-render with user-chosen style.
+    """
+    active = legend_cfg.get("active", [])
+    # Prefer handles already stored in the axis legend
+    existing_leg = ax.get_legend()
+    if existing_leg is not None:
+        handles = list(existing_leg.legend_handles)
+        labels  = [txt.get_text() for txt in existing_leg.get_texts()]
+        existing_leg.remove()
+    else:
+        handles, labels = ax.get_legend_handles_labels()
+
+    if not handles:
         return
-    hs, ls = zip(*filtered)
+
+    if active:
+        pairs = [(h, l) for h, l in zip(handles, labels) if l in active]
+    else:
+        pairs = list(zip(handles, labels))
+
+    if not pairs:
+        return
+
+    hs, ls = zip(*pairs)
     pos = legend_cfg.get("pos", "lower center")
+    bbox = None
     if "upper" in pos and "center" in pos:
         bbox = (0.5, 0.98)
     elif "lower" in pos and "center" in pos:
         bbox = (0.5, 0.02)
-    else:
-        bbox = None
-    leg = ax.legend(hs, ls,
+
+    leg = ax.legend(list(hs), list(ls),
         loc=pos,
         fontsize=legend_cfg.get("fontsize", 9),
         title=legend_cfg.get("title"),
         frameon=legend_cfg.get("frame", False),
-        bbox_to_anchor=bbox)
+        bbox_to_anchor=bbox,
+        ncol=min(4, len(hs)))
     leg.set_in_layout(True)
-    for t in leg.get_texts():
-        t.set_color(theme.get("text", "white"))
+    for txt in leg.get_texts():
+        txt.set_color(theme.get("text", "white"))
     if leg.get_title():
         leg.get_title().set_color(theme.get("muted","#888888"))
 
@@ -2073,11 +2252,14 @@ if section == "🖱️ Tagging Tool":
                 key_c=(int(click["x"]),int(click["y"]))
                 if key_c!=st.session_state["tag_last_click"]:
                     st.session_state["tag_last_click"]=key_c
-                    inner_w=img_w-2*pad_tag; inner_h=img_h-2*pad_tag
-                    px=min(max(int(click["x"])-pad_tag,0),inner_w)
-                    py=min(max(int(click["y"])-pad_tag,0),inner_h)
-                    x_pitch=round((px/inner_w)*100.0,2)
-                    y_pitch=round((1.0-py/inner_h)*float(y_max_tag),2)
+                    # Map pixel coords to pitch coords
+                    # The pitch is drawn with xlim(-4,104) and ylim(-y_max*0.15, y_max*1.05)
+                    x_pitch = round(-4.0 + (int(click["x"]) / max(img_w,1)) * 108.0, 2)
+                    x_pitch = max(0.0, min(100.0, x_pitch))
+                    pitch_y_min = -float(y_max_tag)*0.15
+                    pitch_y_range = float(y_max_tag)*1.20   # 1.05 - (-0.15)
+                    y_pitch = round(pitch_y_min + (1.0 - int(click["y"])/max(img_h,1)) * pitch_y_range, 2)
+                    y_pitch = max(0.0, min(float(y_max_tag), y_pitch))
                     if two_click and st.session_state["tag_start"] is None:
                         st.session_state["tag_start"]=(x_pitch,y_pitch)
                     else:
