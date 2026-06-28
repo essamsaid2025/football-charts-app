@@ -2300,24 +2300,63 @@ if section == "🖱️ Tagging Tool":
                                           .map(lambda v:ET_MAP.get(v,v)))
                     prepared=prepare_df_for_charts(ensure_outcome(ec),
                                                    pitch_mode=pm_tag,pitch_width=pw_tag)
-                    et_counts=prepared.get("event_type",pd.Series(dtype=str)).value_counts()
-                    has_xy2=(prepared["x2"].notna()&prepared["y2"].notna()).any()
+                    et_counts=prepared["event_type"].value_counts() if "event_type" in prepared.columns else pd.Series(dtype=str)
+                    has_xy2="x2" in prepared.columns and "y2" in prepared.columns and (prepared["x2"].notna()&prepared["y2"].notna()).any()
+                    theme_t=THEMES.get(tn,THEMES["The Athletic Dark"])
+                    tc=theme_t.get("text","white"); mc=theme_t.get("muted","#A0A7B4")
+                    lc_t=theme_t.get("pitch_lines","#E6E6E6")
+
+                    # ── colour / marker palettes ──────────────────────────────
+                    _sc={"off target":"#FF8A00","ontarget":"#00C2FF","goal":"#00FF6A","blocked":"#AAAAAA"}
+                    _sm={"off target":"^","ontarget":"D","goal":"*","blocked":"s"}
+                    _pc={"successful":"#00FF6A","unsuccessful":"#FF4D4D","key pass":"#00C2FF","assist":"#FFD400"}
+                    _pm={"successful":"o","unsuccessful":"x","key pass":"D","assist":"*"}
+                    _dc={"interception":"#00C2FF","tackle":"#FF8A00","recovery":"#00FF6A",
+                         "aerial_duel":"#FFD400","ground_duel":"#FF4D4D","clearance":"#A78BFA"}
+                    _dm={"interception":"o","tackle":"s","recovery":"D",
+                         "aerial_duel":"^","ground_duel":"x","clearance":"*"}
+
+                    # ── build figure ──────────────────────────────────────────
                     if "shot" in et_counts.index and et_counts["shot"]>0:
-                        fig=shot_map(prepared,pitch_mode=pm_tag,pitch_width=pw_tag,theme_name=tn)
-                        fig.axes[0].set_title("Tagged Shots",color=THEMES[tn]["text"],fontsize=14,weight="bold")
+                        fig=shot_map(prepared,shot_colors=_sc,shot_markers=_sm,
+                                     pitch_mode=pm_tag,pitch_width=pw_tag,
+                                     show_xg=True,theme_name=tn)
+                        fig.axes[0].set_title("Tagged Shots",color=tc,fontsize=14,weight="bold")
                     elif "pass" in et_counts.index and et_counts["pass"]>0:
-                        fig=pass_map(prepared,pitch_mode=pm_tag,pitch_width=pw_tag,theme_name=tn)
-                        fig.axes[0].set_title("Tagged Passes",color=THEMES[tn]["text"],fontsize=14,weight="bold")
+                        fig=pass_map(prepared,pass_colors=_pc,pass_markers=_pm,
+                                     pitch_mode=pm_tag,pitch_width=pw_tag,theme_name=tn)
+                        fig.axes[0].set_title("Tagged Passes",color=tc,fontsize=14,weight="bold")
                     elif "defensive" in et_counts.index:
-                        fig=defensive_actions_map(prepared,pitch_mode=pm_tag,pitch_width=pw_tag,theme_name=tn)
-                        fig.axes[0].set_title("Tagged Defensive Actions",color=THEMES[tn]["text"],fontsize=14,weight="bold")
+                        fig=defensive_actions_map(prepared,def_colors=_dc,def_markers=_dm,
+                                                   pitch_mode=pm_tag,pitch_width=pw_tag,theme_name=tn)
+                        fig.axes[0].set_title("Tagged Defensive Actions",color=tc,fontsize=14,weight="bold")
                     elif "carry" in et_counts.index and has_xy2:
                         fig=progressive_carries_map(prepared,title="Tagged Carries",
                                                      theme_name=tn,pitch_mode=pm_tag,
                                                      pitch_width=pw_tag,min_distance=0.0)
                     else:
                         fig=touch_map(prepared,pitch_mode=pm_tag,pitch_width=pw_tag,theme_name=tn)
-                        fig.axes[0].set_title("Tagged Events",color=THEMES[tn]["text"],fontsize=14,weight="bold")
+                        fig.axes[0].set_title("Tagged Events",color=tc,fontsize=14,weight="bold")
+
+                    # ── add thirds overlay ────────────────────────────────────
+                    ax_t=fig.axes[0]
+                    y_max_t=float(pw_tag if pm_tag=="rect" else 100.0)
+                    for xv in [100/3, 200/3]:
+                        ax_t.plot([xv,xv],[0,y_max_t],color=lc_t,lw=0.9,ls="--",alpha=0.45,zorder=2)
+                    for xpos,lbl in [(100/6,"Defensive Third"),(50,"Middle Third"),(500/6,"Attacking Third")]:
+                        ax_t.text(xpos,y_max_t*0.97,lbl,color=mc,fontsize=7.5,
+                                  ha="center",va="top",alpha=0.8,zorder=3,clip_on=True)
+
+                    # ── attacking direction arrow ─────────────────────────────
+                    arr_y = -y_max_t*0.07
+                    ymin_cur,ymax_cur=ax_t.get_ylim()
+                    ax_t.set_ylim(min(ymin_cur, arr_y - y_max_t*0.06), ymax_cur)
+                    ax_t.annotate("",xy=(75,arr_y),xytext=(25,arr_y),
+                                  arrowprops=dict(arrowstyle="-|>",color=mc,lw=1.8),
+                                  annotation_clip=False)
+                    ax_t.text(50,arr_y-y_max_t*0.04,"Attacking Direction",
+                              color=mc,fontsize=8,ha="center",va="top",clip_on=False)
+
                     st.image(_bytes(fig,dpi=150),use_container_width=True)
                     plt.close(fig)
                 except Exception as e:
