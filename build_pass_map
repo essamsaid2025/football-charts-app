@@ -1,0 +1,163 @@
+"""
+Pass map that exactly matches the reference screenshot:
+- Dark background (#0E1117)
+- Dark navy pitch (#111827)
+- White pitch lines
+- Green arrows for successful passes with start dots
+- Red X markers for unsuccessful passes  
+- Proper legend top-left
+- Third lines (dashed)
+- Attacking direction arrow bottom
+Coordinates: X 0-100 (left→right), Y 0-68 (top→bottom)
+"""
+import sys, os
+sys.path.insert(0, '/mnt/project')
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.lines import Line2D
+from mplsoccer import Pitch
+
+# ── Load data ────────────────────────────────────────────────────────────────
+df = pd.read_excel('/mnt/user-data/uploads/Mohamed_eid_ra.xlsx')
+for c in ['x','y','x2','y2']:
+    df[c] = pd.to_numeric(df[c], errors='coerce')
+df = df.dropna(subset=['x','y','x2','y2'])
+
+# ── Theme — matches the screenshot exactly ───────────────────────────────────
+BG        = "#0E1117"    # outer background
+PITCH_COL = "#111827"    # pitch surface (dark navy, not green)
+LINE_COL  = "#FFFFFF"    # pitch lines white
+TEXT_COL  = "#FFFFFF"
+MUTED     = "#A0A7B4"
+
+SUCC_COL  = "#22C55E"    # bright green (matches screenshot)
+UNSUCC_COL= "#EF4444"    # red
+
+# ── Build mplsoccer Pitch ─────────────────────────────────────────────────────
+pitch = Pitch(
+    pitch_type='custom',
+    pitch_length=100,
+    pitch_width=68,
+    pitch_color=PITCH_COL,
+    line_color=LINE_COL,
+    line_zorder=2,
+    goal_type='line',
+    goal_alpha=1.0,
+    linewidth=1.8,
+)
+
+fig, ax = pitch.draw(figsize=(14, 9.5))
+fig.patch.set_facecolor(BG)
+ax.set_facecolor(PITCH_COL)
+
+# ── Third lines (dashed) ─────────────────────────────────────────────────────
+for xv in [100/3, 200/3]:
+    ax.plot([xv, xv], [0, 68], color=LINE_COL, lw=1.0, ls='--', alpha=0.45, zorder=3)
+
+# Third labels — very top of pitch matching reference screenshot
+for xpos, lbl in [(100/6, 'Defensive Third'), (50, 'Middle Third'), (500/6, 'Attacking Third')]:
+    ax.text(xpos, 1.8, lbl, color=MUTED, fontsize=9.5,
+            ha='center', va='top', zorder=10, alpha=0.9)
+
+# ── Split data ────────────────────────────────────────────────────────────────
+succ   = df[df['outcome'] == 'successful'].copy()
+unsucc = df[df['outcome'] == 'unsuccessful'].copy()
+
+# ── Draw successful passes — green arrows + start dots ───────────────────────
+for _, row in succ.iterrows():
+    x1, y1, x2, y2 = float(row['x']), float(row['y']), float(row['x2']), float(row['y2'])
+    dx, dy = x2 - x1, y2 - y1
+    dist = max((dx**2 + dy**2) ** 0.5, 0.5)
+    nx, ny = dx / dist, dy / dist
+    # Shrink tail from start dot edge
+    shrink_start = 0.8
+    ax.annotate(
+        '', 
+        xy=(x2 - nx * 0.3, y2 - ny * 0.3),
+        xytext=(x1 + nx * shrink_start, y1 + ny * shrink_start),
+        arrowprops=dict(
+            arrowstyle='-|>,head_width=0.22,head_length=0.35',
+            color=SUCC_COL,
+            lw=1.5,
+            alpha=0.92,
+        ),
+        zorder=5,
+        annotation_clip=False,
+    )
+    # Start dot — filled circle with dark edge (matches screenshot)
+    ax.scatter(x1, y1, s=90, color=SUCC_COL, edgecolors='#0E1117',
+               linewidth=1.0, zorder=6)
+
+# ── Draw unsuccessful passes — red X at start, faded arrow ───────────────────
+for _, row in unsucc.iterrows():
+    x1, y1, x2, y2 = float(row['x']), float(row['y']), float(row['x2']), float(row['y2'])
+    dx, dy = x2 - x1, y2 - y1
+    dist = max((dx**2 + dy**2) ** 0.5, 0.5)
+    nx, ny = dx / dist, dy / dist
+    ax.annotate(
+        '',
+        xy=(x2 - nx * 0.3, y2 - ny * 0.3),
+        xytext=(x1 + nx * 0.8, y1 + ny * 0.8),
+        arrowprops=dict(
+            arrowstyle='-|>,head_width=0.22,head_length=0.35',
+            color=UNSUCC_COL,
+            lw=1.5,
+            alpha=0.75,
+        ),
+        zorder=5,
+        annotation_clip=False,
+    )
+    # X marker at start (matches screenshot style)
+    ax.scatter(x1, y1, s=100, color=UNSUCC_COL, marker='x',
+               linewidths=2.0, zorder=6)
+
+# ── Legend — top-left inside pitch (matching reference) ──────────────────────
+legend_handles = [
+    Line2D([0], [0], marker='o', color='none', markerfacecolor=SUCC_COL,
+           markeredgecolor='#0E1117', markersize=9, label=f'Successful ({len(succ)})'),
+    Line2D([0], [0], marker='x', color=UNSUCC_COL, markersize=9,
+           markeredgewidth=2.0, linestyle='none', label=f'Unsuccessful ({len(unsucc)})'),
+]
+leg = ax.legend(
+    handles=legend_handles,
+    loc='upper left',
+    bbox_to_anchor=(0.0, 1.0),
+    frameon=True,
+    framealpha=0.85,
+    facecolor=BG,
+    edgecolor='#2A3240',
+    fontsize=10,
+    labelcolor=TEXT_COL,
+    borderpad=0.6,
+    handlelength=1.2,
+)
+
+# ── Attacking direction arrow — below pitch ───────────────────────────────────
+ax.annotate('', xy=(73, -5.5), xytext=(27, -5.5),
+            arrowprops=dict(arrowstyle='-|>', color=MUTED, lw=1.8),
+            annotation_clip=False, zorder=8)
+ax.text(50, -7.5, 'Attacking Direction', color=MUTED, fontsize=9,
+        ha='center', va='top', clip_on=False, zorder=8)
+
+# ── Stats + title in figure space ────────────────────────────────────────────
+n_tot    = len(df)
+n_succ_n = len(succ)
+n_unsc_n = len(unsucc)
+acc      = round(n_succ_n / max(1, n_tot) * 100, 1)
+
+fig.text(0.50, 0.975, 'Pass Map', ha='center', va='top',
+         color=TEXT_COL, fontsize=18, weight='bold')
+fig.text(0.50, 0.948,
+         f"Total: {n_tot}   ●  Successful: {n_succ_n}   ✕  Unsuccessful: {n_unsc_n}   Accuracy: {acc}%",
+         ha='center', va='top', color=MUTED, fontsize=10)
+
+fig.subplots_adjust(left=0.01, right=0.99, top=0.905, bottom=0.01)
+
+out_path = '/mnt/user-data/outputs/pass_map_exact.png'
+fig.savefig(out_path, dpi=180, bbox_inches='tight', pad_inches=0.15,
+            facecolor=BG)
+plt.close(fig)
+print(f'✅ Saved → {out_path}')
