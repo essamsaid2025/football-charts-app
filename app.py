@@ -182,7 +182,7 @@ if draw_tagging_pitch is None:
                     annotation_clip=False)
         ax.text(50, arrow_y - y_max*0.04, "Attacking Direction",
                 color=t.get("muted","#A0A7B4"), fontsize=8, ha="center",
-                va="top", annotation_clip=False)
+                va="top", clip_on=False)
 
         # ── Draw existing events ───────────────────────────────────────────
         for ev in (events or []):
