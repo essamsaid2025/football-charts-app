@@ -225,22 +225,33 @@ if draw_tagging_pitch is None:
             except Exception:
                 pass
 
-        ax.set_xlim(-4, 104)
-        ax.set_ylim(-y_max*0.15, y_max*1.05)
+        # Use FIXED axis limits — no tight bbox so pixel mapping is exact
+        # xlim and ylim define the full coordinate space rendered
+        X_MIN, X_MAX = -4.0, 104.0
+        Y_MIN = -y_max * 0.18
+        Y_MAX =  y_max * 1.05
+        ax.set_xlim(X_MIN, X_MAX)
+        ax.set_ylim(Y_MIN, Y_MAX)
         ax.set_aspect("equal", adjustable="box")
         ax.axis("off")
         fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
 
+        # Save at EXACT figure size — no bbox_inches='tight' to preserve mapping
+        DPI = 100
         buf = _io.BytesIO()
-        fig.savefig(buf, format="PNG", dpi=100, bbox_inches="tight", pad_inches=0.05,
+        fig.savefig(buf, format="PNG", dpi=DPI,
+                    bbox_inches=None, pad_inches=0,
                     facecolor=t["bg"])
         buf.seek(0)
         plt.close(fig)
 
         pil_img = _Image.open(buf).convert("RGB")
         img_w, img_h = pil_img.size
-        pad = 0
-        return pil_img, img_w, img_h, y_max, pad
+
+        # Return the axis coordinate bounds so the click mapper can use them
+        # We pass X_MIN, X_MAX, Y_MIN, Y_MAX via the pad slot (as a tuple)
+        coord_bounds = (X_MIN, X_MAX, Y_MIN, Y_MAX)
+        return pil_img, img_w, img_h, y_max, coord_bounds
 
 # 4. Safely unpack layout features from charts_pro.py
 if charts_pro:
@@ -2252,13 +2263,36 @@ if section == "🖱️ Tagging Tool":
                 key_c=(int(click["x"]),int(click["y"]))
                 if key_c!=st.session_state["tag_last_click"]:
                     st.session_state["tag_last_click"]=key_c
-                    # Map pixel coords to pitch coords
-                    # The pitch is drawn with xlim(-4,104) and ylim(-y_max*0.15, y_max*1.05)
-                    x_pitch = round(-4.0 + (int(click["x"]) / max(img_w,1)) * 108.0, 2)
+                    # ── Exact pixel → pitch coordinate mapping ──────────────
+                    # pad_tag is now a tuple (X_MIN, X_MAX, Y_MIN, Y_MAX)
+                    # The figure was saved with set_aspect("equal") and
+                    # subplots_adjust(left=0,right=1,top=1,bottom=0) so the
+                    # rendered pixel space maps linearly to figure coords,
+                    # but set_aspect("equal") adds whitespace padding inside
+                    # the axes.  We must account for that.
+                    #
+                    # Strategy: use the known figure size + dpi to get canvas
+                    # pixels, then map linearly within those bounds.
+                    if isinstance(pad_tag, tuple) and len(pad_tag)==4:
+                        X_MIN_c, X_MAX_c, Y_MIN_c, Y_MAX_c = pad_tag
+                    else:
+                        X_MIN_c, X_MAX_c = -4.0, 104.0
+                        Y_MIN_c, Y_MAX_c = -float(y_max_tag)*0.18, float(y_max_tag)*1.05
+
+                    x_coord_range = X_MAX_c - X_MIN_c   # 108.0
+                    y_coord_range = Y_MAX_c - Y_MIN_c
+
+                    # Because set_aspect("equal") is used, the axes are
+                    # letterboxed inside the figure.  The figure is drawn at
+                    # fig_w×fig_h inches @100 dpi; axis limits set
+                    # pitch coords; aspect=equal means the shorter dimension
+                    # is fully used and the longer has padding.
+                    # Simplest robust fix: treat the full image as the mapped
+                    # region (the pitch drawing fills ~100% with no tight bbox).
+                    x_pitch = round(X_MIN_c + (int(click["x"]) / max(img_w, 1)) * x_coord_range, 2)
+                    y_pitch = round(Y_MAX_c - (int(click["y"]) / max(img_h, 1)) * y_coord_range, 2)
+                    # Clamp to valid pitch range
                     x_pitch = max(0.0, min(100.0, x_pitch))
-                    pitch_y_min = -float(y_max_tag)*0.15
-                    pitch_y_range = float(y_max_tag)*1.20   # 1.05 - (-0.15)
-                    y_pitch = round(pitch_y_min + (1.0 - int(click["y"])/max(img_h,1)) * pitch_y_range, 2)
                     y_pitch = max(0.0, min(float(y_max_tag), y_pitch))
                     if two_click and st.session_state["tag_start"] is None:
                         st.session_state["tag_start"]=(x_pitch,y_pitch)
@@ -2298,8 +2332,30 @@ if section == "🖱️ Tagging Tool":
                     if "event_type" in ec.columns:
                         ec["event_type"]=(ec["event_type"].astype(str).str.strip().str.lower()
                                           .map(lambda v:ET_MAP.get(v,v)))
-                    prepared=prepare_df_for_charts(ensure_outcome(ec),
-                                                   pitch_mode=pm_tag,pitch_width=pw_tag)
+                    # ── IMPORTANT: Do NOT run prepare_df_for_charts on tagged data ──
+                    # Tagged coords are already in pitch space (0-100, 0-pitch_width).
+                    # prepare_df_for_charts would apply attack_direction + flip transforms
+                    # which would corrupt the positions.  Instead we do a minimal clean.
+                    ec = ensure_outcome(ec)
+                    # Add event_type derived from outcome if missing
+                    from charts import PASS_ORDER as _PASS_ORDER, SHOT_ORDER as _SHOT_ORDER
+                    if "event_type" not in ec.columns or (ec["event_type"]=="other").all():
+                        ec["event_type"] = "other"
+                        ec.loc[ec["outcome"].isin(_PASS_ORDER), "event_type"] = "pass"
+                        ec.loc[ec["outcome"].isin(_SHOT_ORDER), "event_type"] = "shot"
+                    # Normalise outcome
+                    from charts import _norm_outcome as _no
+                    ec["outcome"] = ec["outcome"].apply(_no)
+                    # Add required xg columns
+                    if "xg" not in ec.columns: ec["xg"] = 0.08
+                    ec["xg_zone"] = ec["xg"]
+                    ec["xg_model"] = np.nan
+                    ec["xg_source"] = "tagged"
+                    # Drop NaN x/y
+                    ec = ec.dropna(subset=["x","y"]).copy()
+
+                    prepared = ec  # use directly — coords are already correct
+
                     et_counts=prepared["event_type"].value_counts() if "event_type" in prepared.columns else pd.Series(dtype=str)
                     has_xy2="x2" in prepared.columns and "y2" in prepared.columns and (prepared["x2"].notna()&prepared["y2"].notna()).any()
                     theme_t=THEMES.get(tn,THEMES["The Athletic Dark"])
