@@ -951,11 +951,11 @@ def opta_pass_map_pro(
     cfg: dict = None,
     # Colors
     successful_color: str = "#C8102E",
-    unsuccessful_color: str = "#AAAAAA",
+    unsuccessful_color: str = "#888888",
     # Arrow styling
-    arrow_alpha: float = 0.82,
-    arrow_width: float = 1.8,
-    arrow_head_width: float = 5,
+    arrow_alpha: float = 0.88,
+    arrow_width: float = 1.6,
+    arrow_head_width: float = 4,
     # Layout
     pitch_mode: str = "rect",
     pitch_width: float = 68.0,
@@ -965,197 +965,259 @@ def opta_pass_map_pro(
     accuracy_override: str = None,
 ):
     """
-    Exact Opta Analyst style pass map:
-    - Light pitch background
-    - Red = successful, grey = unsuccessful
-    - Bottom stats row: N successful, N unsuccessful, arrows attack dir, total passes, accuracy%
-    - Player photo top-left, logo top-right
-    - Title: player name + match info
+    Professional Opta Analyst style pass map — full pitch, dark or light theme,
+    coloured arrows with start dots, clean stat footer, logo/player image support.
     """
+    import matplotlib.patheffects as pe_mod
     cfg = cfg or default_layout_cfg()
     theme_name = cfg.get("theme_name", "Opta Analyst Light")
     theme = THEMES.get(theme_name, PRO_THEMES.get("Opta Analyst Light", PRO_THEMES["The Athletic Dark"]))
 
-    bg = theme.get("bg", "#F3F3F4")
-    pitch_bg = theme.get("pitch", bg)
-    text_col = theme.get("text", "#151326")
-    muted_col = theme.get("muted", "#77727F")
-    line_col = theme.get("pitch_lines", "#9B9B9B")
+    bg        = theme.get("bg",          "#F3F3F4")
+    pitch_bg  = theme.get("pitch",       "#FAFAFA")
+    text_col  = theme.get("text",        "#151326")
+    muted_col = theme.get("muted",       "#77727F")
+    line_col  = theme.get("pitch_lines", "#9B9B9B")
+    panel_col = theme.get("panel",       "#ECEDEF")
+    lines_col = theme.get("lines",       "#D4D4D7")
 
+    # Dark themes: use a subtle green pitch
+    is_dark = text_col in ("#FFFFFF", "white") or bg.startswith("#0") or bg.startswith("#1")
+    if is_dark and pitch_bg in ("#F3F3F4", "#FAFAFA", "#F0F0F0"):
+        pitch_bg = theme.get("pitch", "#1A3A2A")
+    if is_dark and panel_col in ("#ECEDEF", "#F0F0F0"):
+        panel_col = theme.get("panel", "#141A22")
+
+    # ── Data prep ──────────────────────────────────────────────────────────
     d = df.copy()
     if "event_type" in d.columns:
         passes = d[d["event_type"].astype(str).str.lower() == "pass"].copy()
     else:
         passes = d.copy()
 
-    passes["outcome"] = passes.get("outcome", pd.Series("successful", index=passes.index)).astype(str).str.lower()
+    passes["outcome"] = (
+        passes["outcome"].astype(str).str.lower()
+        if "outcome" in passes.columns
+        else pd.Series("successful", index=passes.index)
+    )
     for c in ["x", "y", "x2", "y2"]:
         if c in passes.columns:
             passes[c] = pd.to_numeric(passes[c], errors="coerce")
 
-    y_max = float(pitch_width if pitch_mode == "rect" else 100.0)
+    y_max  = float(pitch_width if pitch_mode == "rect" else 100.0)
+    succ   = passes[passes["outcome"].isin(["successful", "key pass", "assist"])].dropna(subset=["x","y"])
+    unsucc = passes[passes["outcome"] == "unsuccessful"].dropna(subset=["x","y"])
+    key_p  = passes[passes["outcome"] == "key pass"].dropna(subset=["x","y"])
+    assist = passes[passes["outcome"] == "assist"].dropna(subset=["x","y"])
 
-    # Stats
-    succ = passes[passes["outcome"].isin(["successful", "key pass", "assist"])]
-    unsucc = passes[passes["outcome"] == "unsuccessful"]
-    n_succ = len(succ)
+    n_succ   = len(succ)
     n_unsucc = len(unsucc)
-    n_total = n_succ + n_unsucc
+    n_total  = n_succ + n_unsucc
     accuracy_pct = round(n_succ / max(1, n_total) * 100, 1)
 
-    if successful_override:   n_succ = successful_override
+    if successful_override:   n_succ   = successful_override
     if unsuccessful_override: n_unsucc = unsuccessful_override
     if accuracy_override:     accuracy_pct = accuracy_override
 
-    # ── Figure ──────────────────────────────────────────────────────────────
-    fig = plt.figure(figsize=(10, 12))
-    fig.patch.set_facecolor(bg)
-    if cfg.get("player_img"):
-        ax_bg = fig.add_axes([0, 0, 1, 1], zorder=0)
-        ax_bg.imshow(np.asarray(cfg["player_img"].convert("RGB")), aspect="auto")
-        ax_bg.axis("off")
-    else:
-        ax_bg = fig.add_axes([0, 0, 1, 1], zorder=0)
-        ax_bg.set_facecolor(bg)
-        ax_bg.axis("off")
+    # ── Figure layout ───────────────────────────────────────────────────────
+    # Proportions: header 14% | pitch 68% | footer stats 18%
+    fig_w, fig_h = 14.0, 10.0
+    fig = plt.figure(figsize=(fig_w, fig_h), facecolor=bg)
 
-    card_bg = "#F5F5F6"
-    ax_card = fig.add_axes([0.055, 0.065, 0.89, 0.57], zorder=1)
-    ax_card.set_facecolor(card_bg)
-    for sp in ax_card.spines.values():
-        sp.set_visible(False)
-    ax_card.set_xticks([]); ax_card.set_yticks([])
+    # ── Header band ─────────────────────────────────────────────────────────
+    ax_hdr = fig.add_axes([0.0, 0.865, 1.0, 0.135])
+    ax_hdr.set_facecolor(bg); ax_hdr.axis("off")
+    ax_hdr.set_xlim(0, 1); ax_hdr.set_ylim(0, 1)
 
-    # Header strip — white/light card with subtle border
-    ax_hdr = fig.add_axes([0.095, 0.545, 0.81, 0.07], zorder=2)
-    ax_hdr.set_facecolor(card_bg); ax_hdr.axis("off")
+    # Thin accent bar at top
+    ax_hdr.add_patch(plt.Rectangle((0, 0.88), 1, 0.12,
+                                    facecolor=successful_color, transform=ax_hdr.transAxes,
+                                    zorder=10, clip_on=False))
 
-    # Pitch area
-    ax_pitch = fig.add_axes([0.135, 0.185, 0.73, 0.335], zorder=2)
-    ax_pitch.set_facecolor(pitch_bg)
-    ax_pitch.set_xlim(-3, 103); ax_pitch.set_ylim(-3, y_max + 3)
-    ax_pitch.axis("off")
-
-    # Bottom stats bar
-    ax_foot = fig.add_axes([0.12, 0.075, 0.76, 0.09], zorder=2)
-    ax_foot.set_facecolor(card_bg); ax_foot.axis("off")
-    ax_foot.set_xlim(0, 1); ax_foot.set_ylim(0, 1)
-
-    # ── Pitch background card ───────────────────────────────────────────────
-    ax_pitch.add_patch(FancyBboxPatch((-2, -2), 104, y_max + 4,
-                                      boxstyle="square,pad=0",
-                                      facecolor=pitch_bg,
-                                      edgecolor=line_col, linewidth=1.25,
-                                      zorder=0))
-
-    # ── Full pitch lines ────────────────────────────────────────────────────
-    _draw_half_pitch_lines(ax_pitch, y_max, line_col, lw=1.8, show_full=True)
-
-    # ── Plot passes ─────────────────────────────────────────────────────────
-    def _plot_pass_group(pdf, color, alpha):
-        pdf = pdf.dropna(subset=["x", "y"])
-        has_end = ("x2" in pdf.columns and "y2" in pdf.columns and
-                   pdf["x2"].notna().any())
-        if has_end:
-            valid = pdf.dropna(subset=["x2", "y2"])
-            for _, row in valid.iterrows():
-                ax_pitch.annotate(
-                    "", xy=(float(row["x2"]), float(row["y2"])),
-                    xytext=(float(row["x"]), float(row["y"])),
-                    arrowprops=dict(
-                        arrowstyle=f"-|>,head_width={arrow_head_width * 0.055},head_length=0.08",
-                        color=color, lw=arrow_width, alpha=alpha
-                    ), zorder=4
-                )
-        else:
-            ax_pitch.scatter(pdf["x"], pdf["y"], s=40, color=color, alpha=alpha, zorder=4)
-
-    _plot_pass_group(succ, successful_color, arrow_alpha)
-    _plot_pass_group(unsucc, unsuccessful_color, arrow_alpha * 0.7)
-
-    # ── Header ──────────────────────────────────────────────────────────────
     player_name = cfg.get("player_name") or cfg.get("title", "")
-    sub_parts = [p for p in [
-        cfg.get("competition", ""), cfg.get("match_info", ""), cfg.get("season", "")
-    ] if p.strip()]
-    sub_line = "  |  ".join(sub_parts[:3])
+    sub_parts   = [p for p in [cfg.get("competition",""), cfg.get("match_info",""), cfg.get("season","")] if str(p).strip()]
+    sub_line    = "  ·  ".join(sub_parts[:3])
+    team_name   = cfg.get("team_name", "")
 
-    title_x = 0.145
-
-    fig.text(title_x, 0.610, player_name, fontsize=18, weight="900",
-             color=text_col, va="top")
+    # Player name — large bold left
+    ax_hdr.text(0.02, 0.78, player_name, fontsize=28, weight="900",
+                color=text_col, va="top", transform=ax_hdr.transAxes)
     if sub_line:
-        fig.text(title_x, 0.585, sub_line, fontsize=9, color=muted_col, va="top")
+        ax_hdr.text(0.02, 0.44, sub_line, fontsize=11, color=muted_col,
+                    va="top", transform=ax_hdr.transAxes)
+    if team_name:
+        ax_hdr.text(0.02, 0.18, team_name, fontsize=10, color=muted_col,
+                    va="top", transform=ax_hdr.transAxes, style="italic")
 
+    # Legend top-right
+    lx = 0.62
+    ly = 0.72
+    # Successful
+    ax_hdr.annotate("", xy=(lx + 0.048, ly), xytext=(lx + 0.010, ly),
+                    xycoords="axes fraction",
+                    arrowprops=dict(arrowstyle="-|>", color=successful_color, lw=2.2))
+    ax_hdr.scatter([lx + 0.010], [ly], s=55, color=successful_color,
+                   transform=ax_hdr.transAxes, zorder=5, clip_on=False)
+    ax_hdr.text(lx + 0.056, ly, "Successful pass", fontsize=10, color=text_col,
+                va="center", transform=ax_hdr.transAxes)
+    # Unsuccessful
+    lx2 = lx + 0.22
+    ax_hdr.annotate("", xy=(lx2 + 0.048, ly), xytext=(lx2 + 0.010, ly),
+                    xycoords="axes fraction",
+                    arrowprops=dict(arrowstyle="-|>", color=unsuccessful_color, lw=2.2))
+    ax_hdr.scatter([lx2 + 0.010], [ly], s=55, color=unsuccessful_color,
+                   transform=ax_hdr.transAxes, zorder=5, clip_on=False)
+    ax_hdr.text(lx2 + 0.056, ly, "Unsuccessful", fontsize=10, color=text_col,
+                va="center", transform=ax_hdr.transAxes)
+
+    # Key pass + Assist legend row
+    ly3 = 0.34
+    kp_col = "#FFB300"
+    as_col = "#7B2D8B"
+    ax_hdr.annotate("", xy=(lx + 0.048, ly3), xytext=(lx + 0.010, ly3),
+                    xycoords="axes fraction",
+                    arrowprops=dict(arrowstyle="-|>", color=kp_col, lw=2.2))
+    ax_hdr.scatter([lx + 0.010], [ly3], s=55, color=kp_col,
+                   transform=ax_hdr.transAxes, zorder=5, clip_on=False)
+    ax_hdr.text(lx + 0.056, ly3, "Key pass", fontsize=10, color=text_col,
+                va="center", transform=ax_hdr.transAxes)
+    ax_hdr.annotate("", xy=(lx2 + 0.048, ly3), xytext=(lx2 + 0.010, ly3),
+                    xycoords="axes fraction",
+                    arrowprops=dict(arrowstyle="-|>", color=as_col, lw=2.2))
+    ax_hdr.scatter([lx2 + 0.010], [ly3], s=55, color=as_col,
+                   transform=ax_hdr.transAxes, zorder=5, clip_on=False)
+    ax_hdr.text(lx2 + 0.056, ly3, "Assist", fontsize=10, color=text_col,
+                va="center", transform=ax_hdr.transAxes)
+
+    # Logos
     if cfg.get("logo_img"):
         draw_logo(fig, cfg["logo_img"],
-                  cfg.get("logo_x", 0.755), cfg.get("logo_y", 0.568),
-                  cfg.get("logo_w", 0.13), cfg.get("logo_h", 0.055),
-                  circle_crop=cfg.get("logo_circle", True), border_lw=2.0)
+                  cfg.get("logo_x", 0.875), cfg.get("logo_y", 0.878),
+                  cfg.get("logo_w", 0.10), cfg.get("logo_h", 0.105),
+                  circle_crop=cfg.get("logo_circle", False))
+    if cfg.get("player_img"):
+        draw_logo(fig, cfg["player_img"],
+                  cfg.get("player_x", 0.02), cfg.get("player_y", 0.89),
+                  cfg.get("player_w", 0.08), cfg.get("player_h", 0.09),
+                  circle_crop=True, border_lw=2.0, border_color=successful_color)
 
-    # ── Footer stats row (Opta-style) ───────────────────────────────────────
-    # Divider line
-    ax_foot.plot([0.02, 0.98], [0.94, 0.94], color=line_col, lw=1.0, alpha=0.35)
+    # ── Pitch axes ──────────────────────────────────────────────────────────
+    # Pitch occupies middle 68% vertically, full width minus margins
+    pitch_left  = 0.04
+    pitch_right = 0.96
+    pitch_bot   = 0.195
+    pitch_top   = 0.865
+    ax_pitch = fig.add_axes([pitch_left, pitch_bot,
+                              pitch_right - pitch_left, pitch_top - pitch_bot])
+    ax_pitch.set_facecolor(pitch_bg)
+    ax_pitch.set_xlim(-2, 102)
+    ax_pitch.set_ylim(-2, y_max + 2)
+    ax_pitch.axis("off")
 
-    # Successful count
-    ax_foot.text(0.03, 0.70, str(n_succ), ha="left", va="top",
-                 fontsize=17, weight="900", color=text_col)
-    ax_foot.text(0.08, 0.68, "successful", ha="left", va="top",
-                 fontsize=8, color=muted_col)
-    ax_foot.scatter([0.048], [0.28], s=70, color=successful_color,
-                    edgecolors="none", zorder=5)
-    ax_foot.annotate("", xy=(0.09, 0.28), xytext=(0.055, 0.28),
-                     xycoords="axes fraction",
-                     arrowprops=dict(arrowstyle="-|>", color=successful_color, lw=1.5))
+    # Pitch outline + lines
+    _draw_half_pitch_lines(ax_pitch, y_max, line_col, lw=1.6, show_full=True)
 
-    # Unsuccessful count
-    ax_foot.text(0.21, 0.70, str(n_unsucc), ha="left", va="top",
-                 fontsize=17, weight="900", color=text_col)
-    ax_foot.text(0.255, 0.68, "unsuccessful", ha="left", va="top",
-                 fontsize=8, color=muted_col)
-    ax_foot.scatter([0.218], [0.28], s=70, facecolors="none",
-                    edgecolors=unsuccessful_color, linewidth=1.5, zorder=5)
-    ax_foot.annotate("", xy=(0.262, 0.28), xytext=(0.225, 0.28),
-                     xycoords="axes fraction",
-                     arrowprops=dict(arrowstyle="-|>", color=unsuccessful_color, lw=1.5))
+    # ── Arrow drawing helper ────────────────────────────────────────────────
+    def _draw_arrows(subset, color, alpha_val, dot_size=28, zorder=4):
+        subset = subset.copy()
+        has_end = ("x2" in subset.columns and "y2" in subset.columns
+                   and subset["x2"].notna().any())
+        if has_end:
+            valid = subset.dropna(subset=["x2","y2"]) if not subset.empty else subset
+            try:
+                valid = subset.dropna(subset=["x2","y2"])
+            except Exception:
+                valid = subset
+            for _, row in valid.iterrows():
+                x1, y1 = float(row["x"]), float(row["y"])
+                x2, y2 = float(row["x2"]), float(row["y2"])
+                dx, dy = x2 - x1, y2 - y1
+                dist = max((dx**2 + dy**2)**0.5, 0.01)
+                # Shrink arrow so head doesn't overlap start dot
+                shrink = min(1.5, dist * 0.12)
+                nx, ny = dx/dist, dy/dist
+                ax_pitch.annotate(
+                    "", xy=(x2 - nx*0.4, y2 - ny*0.4),
+                    xytext=(x1 + nx*shrink, y1 + ny*shrink),
+                    arrowprops=dict(
+                        arrowstyle=f"-|>,head_width=0.25,head_length=0.35",
+                        color=color, lw=arrow_width, alpha=alpha_val,
+                        connectionstyle="arc3,rad=0.0",
+                    ), zorder=zorder, annotation_clip=False
+                )
+            # Start dots
+            ax_pitch.scatter(valid["x"], valid["y"], s=dot_size,
+                             color=color, alpha=min(1.0, alpha_val + 0.1),
+                             edgecolors="none", zorder=zorder + 1)
+        else:
+            ax_pitch.scatter(subset["x"], subset["y"], s=dot_size + 20,
+                             color=color, alpha=alpha_val,
+                             edgecolors=panel_col, linewidth=0.5, zorder=zorder)
 
-    # Attacking direction arrows (5 chevrons)
-    adir_col = cfg.get("attack_dir_color", muted_col)
+    # Draw in order: unsucc (bottom), succ, key_pass, assist (top)
+    _draw_arrows(unsucc, unsuccessful_color, arrow_alpha * 0.65, dot_size=22, zorder=3)
+    _draw_arrows(succ,   successful_color,   arrow_alpha,         dot_size=28, zorder=4)
+    _draw_arrows(key_p,  kp_col,             arrow_alpha + 0.05,  dot_size=35, zorder=5)
+    _draw_arrows(assist, as_col,             1.0,                 dot_size=40, zorder=6)
+
+    # Thirds overlay (subtle dashed)
+    for xv in [100/3, 200/3]:
+        ax_pitch.plot([xv, xv], [0, y_max], color=line_col, lw=0.9,
+                      ls="--", alpha=0.35, zorder=2)
+
+    # ── Attacking direction ─────────────────────────────────────────────────
+    adir_col   = cfg.get("attack_dir_color", muted_col)
     adir_label = cfg.get("attack_dir_label", "Attacking Direction")
-    if cfg.get("show_attack_dir", True):
-        for i, xf in enumerate(np.linspace(0.43, 0.55, 5)):
-            alpha = 0.25 + 0.15 * i
-            ax_foot.annotate("", xy=(xf + 0.022, 0.34), xytext=(xf, 0.34),
-                             xycoords="axes fraction",
-                             arrowprops=dict(arrowstyle="-|>", color=adir_col,
-                                             lw=1.6, alpha=alpha))
-        ax_foot.text(0.49, 0.04, adir_label, ha="center", va="bottom",
-                     fontsize=7, color=adir_col, transform=ax_foot.transAxes)
+    show_adir  = cfg.get("show_attack_dir", True)
+    if show_adir:
+        arr_y = -y_max * 0.085
+        ax_pitch.set_ylim(min(ax_pitch.get_ylim()[0], arr_y - y_max*0.05), ax_pitch.get_ylim()[1])
+        ax_pitch.annotate("", xy=(75, arr_y), xytext=(25, arr_y),
+                          arrowprops=dict(arrowstyle="-|>", color=adir_col, lw=2.0),
+                          annotation_clip=False)
+        ax_pitch.text(50, arr_y - y_max * 0.04, adir_label,
+                      color=adir_col, fontsize=9, ha="center", va="top", clip_on=False)
 
-    # Total passes count (circled)
-    total_passes = n_succ + n_unsucc if not isinstance(n_succ, str) else "—"
-    total_str = str(total_passes) if isinstance(total_passes, int) else str(n_total)
-    circ = plt.Circle((0.68, 0.42), 0.075, transform=ax_foot.transAxes,
-                       facecolor="none", edgecolor=text_col, linewidth=1.8, zorder=3)
-    ax_foot.add_patch(circ)
-    ax_foot.text(0.68, 0.42, total_str, ha="center", va="center",
-                 fontsize=12, weight="900", color=text_col,
-                 transform=ax_foot.transAxes)
-    ax_foot.text(0.735, 0.42, "passes", ha="left", va="center",
-                 fontsize=8, color=muted_col, transform=ax_foot.transAxes)
+    # ── Footer stats band ────────────────────────────────────────────────────
+    ax_foot = fig.add_axes([0.0, 0.0, 1.0, 0.195])
+    ax_foot.set_facecolor(panel_col); ax_foot.axis("off")
+    ax_foot.set_xlim(0, 1); ax_foot.set_ylim(0, 1)
 
-    # Accuracy %
+    # Separator line
+    ax_foot.plot([0.02, 0.98], [0.92, 0.92], color=lines_col, lw=1.2, alpha=0.6)
+
+    # ── Stat blocks ─────────────────────────────────────────────────────────
+    def _stat(ax, x, val, label, color=None):
+        color = color or text_col
+        ax.text(x, 0.72, str(val), ha="center", va="top",
+                fontsize=30, weight="900", color=color, transform=ax.transAxes)
+        ax.text(x, 0.34, label, ha="center", va="top",
+                fontsize=9.5, color=muted_col, transform=ax.transAxes,
+                weight="bold")
+
     acc_str = f"{accuracy_pct}%" if isinstance(accuracy_pct, (int, float)) else str(accuracy_pct)
-    ax_foot.text(0.88, 0.62, acc_str, ha="center", va="top",
-                 fontsize=18, weight="900", color=text_col,
-                 transform=ax_foot.transAxes)
-    ax_foot.text(0.94, 0.40, "accuracy", ha="left", va="center",
-                 fontsize=8, color=muted_col, transform=ax_foot.transAxes)
+    total_str = str(n_succ + n_unsucc) if not isinstance(n_succ, str) and not isinstance(n_unsucc, str) else str(n_total)
+
+    _stat(ax_foot, 0.10, str(n_succ),   "Successful",   successful_color)
+    _stat(ax_foot, 0.24, str(n_unsucc), "Unsuccessful", unsuccessful_color)
+    _stat(ax_foot, 0.38, str(len(key_p)), "Key Passes",  kp_col)
+    _stat(ax_foot, 0.52, str(len(assist)), "Assists",    as_col)
+    _stat(ax_foot, 0.68, total_str,     "Total Passes", text_col)
+    _stat(ax_foot, 0.84, acc_str,       "Pass Accuracy", successful_color)
+
+    # Thin dividers between stats
+    for xd in [0.175, 0.315, 0.455, 0.595, 0.76]:
+        ax_foot.plot([xd, xd], [0.18, 0.85], color=lines_col, lw=0.8, alpha=0.45)
 
     # Footer note
     footer = cfg.get("footer_note", "")
     if footer:
-        fig.text(0.08, 0.070, footer, fontsize=7, color=muted_col, va="bottom")
+        ax_foot.text(0.02, 0.06, footer, fontsize=7.5, color=muted_col,
+                     va="bottom", transform=ax_foot.transAxes)
+    credit = cfg.get("analyst_credit", "")
+    if credit:
+        ax_foot.text(0.98, 0.06, credit, fontsize=8.5, color=muted_col,
+                     va="bottom", ha="right", transform=ax_foot.transAxes, weight="bold")
 
     return fig
 
