@@ -554,6 +554,7 @@ def legend_controls_full(prefix, all_items, default_active=None):
     if default_active is None:
         default_active = list(all_items)
     with st.expander("🎨 Legend Controls", expanded=False):
+        show = st.checkbox("Show legend", True, key=f"{prefix}_leg_show")
         st.markdown("**Show/hide items**")
         active = []
         n_cols = min(3, max(1, len(all_items)))
@@ -573,9 +574,15 @@ def legend_controls_full(prefix, all_items, default_active=None):
             fs = st.slider("Font size", 7, 16, 9, key=f"{prefix}_leg_fs")
         with c3:
             title_txt = st.text_input("Legend title", "", key=f"{prefix}_leg_title")
-        frame = st.checkbox("Show frame", False, key=f"{prefix}_leg_frame")
-    return dict(active=active, pos=pos, fontsize=fs,
-                title=title_txt or None, frame=frame)
+        c4, c5 = st.columns(2)
+        with c4:
+            frame = st.checkbox("Show frame", False, key=f"{prefix}_leg_frame")
+        with c5:
+            ncol = st.number_input("Columns", 1, 8, min(4, max(1, len(all_items))), key=f"{prefix}_leg_ncol")
+        markerscale = st.slider("Marker scale", 0.5, 3.0, 1.0, 0.1, key=f"{prefix}_leg_ms")
+    return dict(show=show, active=active, pos=pos, fontsize=fs,
+                title=title_txt or None, frame=frame, ncol=int(ncol),
+                markerscale=markerscale)
 
 def apply_legend_style(ax, legend_cfg, theme):
     """
@@ -595,10 +602,10 @@ def apply_legend_style(ax, legend_cfg, theme):
     if not handles:
         return
 
-    if active:
-        pairs = [(h, l) for h, l in zip(handles, labels) if l in active]
-    else:
-        pairs = list(zip(handles, labels))
+    if not legend_cfg.get("show", True):
+        return
+
+    pairs = [(h, l) for h, l in zip(handles, labels) if l in active]
 
     if not pairs:
         return
@@ -617,7 +624,8 @@ def apply_legend_style(ax, legend_cfg, theme):
         title=legend_cfg.get("title"),
         frameon=legend_cfg.get("frame", False),
         bbox_to_anchor=bbox,
-        ncol=min(4, len(hs)))
+        ncol=int(legend_cfg.get("ncol") or min(4, len(hs))),
+        markerscale=float(legend_cfg.get("markerscale", 1.0)))
     leg.set_in_layout(True)
     for txt in leg.get_texts():
         txt.set_color(theme.get("text", "white"))
@@ -627,6 +635,63 @@ def apply_legend_style(ax, legend_cfg, theme):
 # ─────────────────────────────────────────────────────────────────────────────
 # IMAGE OVERLAY CONTROLS
 # ─────────────────────────────────────────────────────────────────────────────
+def tagged_events_map(events_df, pitch_mode="rect", pitch_width=68.0,
+                      theme_name="The Athletic Dark", show_thirds=True,
+                      legend_cfg=None, title="Tagged Events"):
+    theme = THEMES.get(theme_name, THEMES.get("The Athletic Dark", {}))
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
+    fig, ax = plt.subplots(figsize=(12, 7.2))
+    fig.patch.set_facecolor(theme.get("bg", "#0E1117"))
+    pitch.draw(ax=ax)
+    ax.set_facecolor(theme.get("pitch", "#1f5f3b"))
+
+    d = events_df.copy()
+    for c in ["x", "y", "x2", "y2"]:
+        if c in d.columns:
+            d[c] = pd.to_numeric(d[c], errors="coerce")
+    d = d.dropna(subset=["x", "y"]).copy()
+
+    active = None if legend_cfg is None else set(legend_cfg.get("active", []))
+    if active is not None and "outcome" in d.columns:
+        d = d[d["outcome"].astype(str).isin(active)].copy()
+
+    handles = {}
+    for _, row in d.iterrows():
+        outcome = str(row.get("outcome", "tagged")).strip() or "tagged"
+        event_type = str(row.get("event_type", "event")).strip().lower()
+        color = str(row.get("start_color") or row.get("arrow_color") or theme.get("accent", "#22C55E"))
+        edge = str(row.get("start_edge") or "#FFFFFF")
+        marker = row.get("start_marker", "o")
+        size = pd.to_numeric(row.get("start_size", 9), errors="coerce")
+        size = 9 if pd.isna(size) else float(size)
+
+        has_end = "x2" in d.columns and "y2" in d.columns and pd.notna(row.get("x2")) and pd.notna(row.get("y2"))
+        if has_end:
+            pitch.arrows([row["x"]], [row["y"]], [row["x2"]], [row["y2"]],
+                         ax=ax, width=2, alpha=0.86,
+                         color=str(row.get("arrow_color") or color), zorder=4)
+
+        if str(marker).strip().lower() not in {"none", "no marker", ""}:
+            pitch.scatter([row["x"]], [row["y"]], ax=ax, s=max(25, size * 12),
+                          marker=marker, color=color, edgecolors=edge,
+                          linewidth=1.3, alpha=0.95, zorder=6)
+
+        label = outcome
+        if label not in handles and str(marker).strip().lower() not in {"none", "no marker", ""}:
+            handles[label] = Line2D([0], [0], marker=marker, color="none",
+                                    markerfacecolor=color, markeredgecolor=edge,
+                                    markersize=8, label=label)
+
+    y_max = float(pitch_width if pitch_mode == "rect" else 100.0)
+    ax.set_xlim(-2, 102)
+    ax.set_ylim(-2, y_max + 2)
+    if show_thirds and charts and hasattr(charts, "_add_pitch_thirds"):
+        charts._add_pitch_thirds(ax, pitch_mode, pitch_width, theme, False)
+    ax.set_title(title, color=theme.get("text", "white"), fontsize=16, weight="bold")
+    if charts and hasattr(charts, "_add_legend"):
+        charts._add_legend(ax, list(handles.values()), theme, loc="upper center", legend_cfg=legend_cfg)
+    return fig
+
 def img_overlay_controls(prefix, label="Overlay Image",
                           default_x=0.02, default_y=0.88,
                           default_w=0.10, default_h=0.10):
@@ -1159,7 +1224,8 @@ if section == "⚔️ Attacking Charts":
                     sm_f  = {k:v for k,v in sm_m.items() if k in leg_cfg["active"]}
                     fig = shot_map(df, shot_colors=sc_f, shot_markers=sm_f,
                                    pitch_mode=S["pm"], pitch_width=S["pw"],
-                                   show_xg=show_xg, theme_name=S["tn"])
+                                   show_xg=show_xg, theme_name=S["tn"],
+                                   legend_cfg=leg_cfg)
                     ax = fig.axes[0]
                     ax.set_title(t, color=theme["text"], fontsize=16, weight="bold")
                     draw_attack_direction(ax, cfg_sm, theme, S["pm"], S["pw"])
@@ -1273,7 +1339,8 @@ if section == "⚔️ Attacking Charts":
                     else:
                         fig = touch_map(df,pitch_mode=S["pm"],pitch_width=S["pw"],
                                         theme_name=S["tn"],dot_color=tm_c,edge_color=tm_e,
-                                        dot_size=tm_s,alpha=tm_a,marker=MARKER_OPTS[tm_ml])
+                                        dot_size=tm_s,alpha=tm_a,marker=MARKER_OPTS[tm_ml],
+                                        legend_cfg=leg_cfg)
                         ax = fig.axes[0]
                         ax.set_title(tm_t,color=theme["text"],fontsize=16,weight="bold")
                         draw_attack_direction(ax,cfg_tm,theme,S["pm"],S["pw"],tm_v)
@@ -1441,7 +1508,8 @@ if section == "🛡️ Defensive Charts":
                     dm_f={k:v for k,v in dm.items() if k in leg_cfg["active"]}
                     fig=defensive_actions_map(df,def_colors=dc_f,def_markers=dm_f,
                                               pitch_mode=S["pm"],pitch_width=S["pw"],
-                                              theme_name=S["tn"])
+                                              theme_name=S["tn"],
+                                              legend_cfg=leg_cfg)
                     ax=fig.axes[0]
                     ax.set_title(t,color=theme["text"],fontsize=16,weight="bold")
                     draw_attack_direction(ax,cfg_da,theme,S["pm"],S["pw"],dv)
@@ -1618,7 +1686,8 @@ if section == "🔄 Distribution Charts":
                     fig=pass_map(df,pass_colors=pc_f,pass_markers=pm_f,
                                   pitch_mode=S["pm"],pitch_width=S["pw"],
                                   theme_name=S["tn"],pass_view=pv,
-                                  result_scope=ps,min_packing=ppk)
+                                  result_scope=ps,min_packing=ppk,
+                                  legend_cfg=leg_cfg)
                     ax=fig.axes[0]
                     ax.set_title(t,color=theme["text"],fontsize=16,weight="bold")
                     draw_attack_direction(ax,cfg_pm,theme,S["pm"],S["pw"],dv)
@@ -2189,6 +2258,9 @@ if section == "🖱️ Tagging Tool":
         pw_tag=st.slider("Pitch width",50.0,80.0,68.0,1.0,key="tag_pw") if pm_tag=="rect" else 100.0
         display_w=st.slider("Display width",600,1100,900,10,key="tag_dw")
         show_thirds=st.checkbox("Show thirds",True,key="tag_thirds")
+        tag_chart_mode=st.selectbox("Generated chart",
+                                    ["All tagged events","Passes","Shots","Defensive actions","Carries","Touches"],
+                                    key="tag_chart_mode")
         event_type=st.selectbox("Event type",
                                  ["pass","carry","dribble","cross","shot","touch","defensive action","recovery"],
                                  key="tag_et")
@@ -2208,6 +2280,10 @@ if section == "🖱️ Tagging Tool":
         marker_name=st.selectbox("Marker",MKL,index=1,key="tag_marker")
         marker_ev=MARKER_OPTS[marker_name]
         size_ev=st.slider("Marker size",4,22,9,key="tag_size")
+        tag_leg_cfg=legend_controls_full(
+            "tag",
+            ["successful","unsuccessful","key pass","assist","goal","ontarget","off target","blocked","touch"],
+        )
         c1,c2,c3=st.columns(3)
         with c1:
             if st.button("↩ Undo",key="tag_undo") and st.session_state["tag_events"]:
@@ -2373,33 +2449,45 @@ if section == "🖱️ Tagging Tool":
                          "aerial_duel":"^","ground_duel":"x","clearance":"*"}
 
                     # ── build figure ──────────────────────────────────────────
-                    if "shot" in et_counts.index and et_counts["shot"]>0:
+                    if tag_chart_mode == "All tagged events":
+                        fig=tagged_events_map(prepared,pitch_mode=pm_tag,pitch_width=pw_tag,
+                                              theme_name=tn,show_thirds=show_thirds,
+                                              legend_cfg=tag_leg_cfg,title="Tagged Events")
+                    elif tag_chart_mode == "Shots" and "shot" in et_counts.index and et_counts["shot"]>0:
                         fig=shot_map(prepared,shot_colors=_sc,shot_markers=_sm,
                                      pitch_mode=pm_tag,pitch_width=pw_tag,
-                                     show_xg=True,theme_name=tn)
+                                     show_xg=True,theme_name=tn,
+                                     show_pitch_thirds=show_thirds,
+                                     legend_cfg=tag_leg_cfg)
                         fig.axes[0].set_title("Tagged Shots",color=tc,fontsize=14,weight="bold")
-                    elif "pass" in et_counts.index and et_counts["pass"]>0:
+                    elif tag_chart_mode == "Passes" and "pass" in et_counts.index and et_counts["pass"]>0:
                         fig=pass_map(prepared,pass_colors=_pc,pass_markers=_pm,
-                                     pitch_mode=pm_tag,pitch_width=pw_tag,theme_name=tn)
+                                     pitch_mode=pm_tag,pitch_width=pw_tag,theme_name=tn,
+                                     show_pitch_thirds=show_thirds,
+                                     legend_cfg=tag_leg_cfg)
                         fig.axes[0].set_title("Tagged Passes",color=tc,fontsize=14,weight="bold")
-                    elif "defensive" in et_counts.index:
+                    elif tag_chart_mode == "Defensive actions" and "defensive" in et_counts.index:
                         fig=defensive_actions_map(prepared,def_colors=_dc,def_markers=_dm,
-                                                   pitch_mode=pm_tag,pitch_width=pw_tag,theme_name=tn)
+                                                   pitch_mode=pm_tag,pitch_width=pw_tag,theme_name=tn,
+                                                   show_pitch_thirds=show_thirds,
+                                                   legend_cfg=tag_leg_cfg)
                         fig.axes[0].set_title("Tagged Defensive Actions",color=tc,fontsize=14,weight="bold")
-                    elif "carry" in et_counts.index and has_xy2:
+                    elif tag_chart_mode == "Carries" and "carry" in et_counts.index and has_xy2:
                         fig=progressive_carries_map(prepared,title="Tagged Carries",
                                                      theme_name=tn,pitch_mode=pm_tag,
                                                      pitch_width=pw_tag,min_distance=0.0)
                     else:
-                        fig=touch_map(prepared,pitch_mode=pm_tag,pitch_width=pw_tag,theme_name=tn)
+                        fig=touch_map(prepared,pitch_mode=pm_tag,pitch_width=pw_tag,theme_name=tn,
+                                      show_pitch_thirds=show_thirds,
+                                      legend_cfg=tag_leg_cfg)
                         fig.axes[0].set_title("Tagged Events",color=tc,fontsize=14,weight="bold")
 
                     # ── add thirds overlay ────────────────────────────────────
                     ax_t=fig.axes[0]
                     y_max_t=float(pw_tag if pm_tag=="rect" else 100.0)
-                    for xv in [100/3, 200/3]:
+                    for xv in ([100/3, 200/3] if tag_chart_mode == "Carries" and show_thirds else []):
                         ax_t.plot([xv,xv],[0,y_max_t],color=lc_t,lw=0.9,ls="--",alpha=0.45,zorder=2)
-                    for xpos,lbl in [(100/6,"Defensive Third"),(50,"Middle Third"),(500/6,"Attacking Third")]:
+                    for xpos,lbl in ([(100/6,"Defensive Third"),(50,"Middle Third"),(500/6,"Attacking Third")] if tag_chart_mode == "Carries" and show_thirds else []):
                         ax_t.text(xpos,y_max_t*0.97,lbl,color=mc,fontsize=7.5,
                                   ha="center",va="top",alpha=0.8,zorder=3,clip_on=True)
 
