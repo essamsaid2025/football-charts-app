@@ -480,9 +480,25 @@ def load_ev(f):
     return pd.read_excel(f)
 
 def ensure_outcome(df):
-    if "outcome" in df.columns: return df
+    """
+    Guarantee an 'outcome' (success/fail) column exists before the shared
+    prepare_df_for_charts()/validate_and_clean() pipeline runs.
+
+    IMPORTANT: only 'result' is a legitimate stand-in for 'outcome' -- it's
+    a common alternate name for the same success/fail signal (and
+    validate_and_clean() has matching rename logic for it). Columns like
+    'event', 'type', or 'event_type' describe the EVENT CATEGORY (Pass,
+    Shot, Tackle, ...), not whether it succeeded. Treating them as outcome
+    used to copy category labels (e.g. "pass") into 'outcome', which then
+    fails validate_and_clean()'s `outcome.isin(PASS_ORDER)` /
+    `isin(SHOT_ORDER)` checks and silently drops every pass/shot event from
+    every chart that consumes this dataframe -- even when a correct
+    'result' column was present elsewhere in the file.
+    """
+    if "outcome" in df.columns:
+        return df
     for c in df.columns:
-        if c.lower().strip() in ["event","result","type","event_type"]:
+        if c.lower().strip() == "result":
             df = df.copy(); df["outcome"] = df[c]; return df
     df = df.copy(); df["outcome"] = "unknown"; return df
 
