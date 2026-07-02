@@ -3244,178 +3244,298 @@ if section == "📄 Report Builder":
     def build_report_figure(slots, annotations_per_slot, extra_images,
                              meta, logos, spacing=0.02, report_dpi=180):
         """
-        Assemble a matplotlib figure from:
-          - slots: list of {label, img_bytes}
-          - annotations_per_slot: list of lists of annotation dicts
-          - extra_images: list of {img, x, y, w, h, opacity}
-          - meta: dict with title/subtitle/scout/date/match/notes
-          - logos: dict with club/comp/team/photo PIL images
-        Returns a matplotlib figure.
+        Assemble a professional scouting report.
+        Charts are placed with CORRECT aspect ratios — no stretching.
+        Layout uses a fixed A3-landscape page (420×297mm equivalent).
         """
-        import matplotlib.gridspec as mgridspec
         from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+        from matplotlib.patches import FancyBboxPatch, Rectangle as MplRect
         import numpy as np
+        from PIL import Image as _PILImage
 
-        n_charts = len(slots)
-        has_header = True
-        has_notes  = bool(meta.get("notes", "").strip())
+        # ── Page setup ─────────────────────────────────────────────────────
+        PAGE_W   = 20.0   # inches
+        MARGIN   = 0.35   # left/right margin fraction of PAGE_W
+        BG       = "#0a0f1a"
+        HDR_BG   = "#0d1829"
+        CARD_BG  = "#111827"
+        ACCENT   = "#00d4ff"
+        TEXT_H   = "#e8f0fe"
+        TEXT_M   = "#6b8cae"
+        TEXT_S   = "#a0aec0"
+        BORDER   = "#1e3a5f"
 
-        # Page dimensions (A4-ish landscape ratio)
-        page_w = 16.0
-        header_h = 2.0
-        chart_h  = 5.5
-        notes_h  = 1.2 if has_notes else 0
-        total_h  = header_h + n_charts * (chart_h + spacing * 72) + notes_h + 0.6
+        has_notes = bool(meta.get("notes", "").strip())
 
-        fig = plt.figure(figsize=(page_w, max(6.0, total_h)))
-        bg_color = "#0E1117"
-        fig.patch.set_facecolor(bg_color)
+        # ── Compute actual pixel dims of each chart image ───────────────────
+        chart_info = []   # (pil_img, px_w, px_h, aspect)
+        for slot in slots:
+            ib = slot.get("img_bytes")
+            if not ib:
+                chart_info.append(None)
+                continue
+            try:
+                pil = _PILImage.open(io.BytesIO(ib)).convert("RGB")
+                pw, ph = pil.size
+                chart_info.append((pil, pw, ph, pw / max(ph, 1)))
+            except Exception:
+                chart_info.append(None)
 
-        # ── Header ─────────────────────────────────────────────────────────
-        header_frac = header_h / total_h
-        ax_hdr = fig.add_axes([0.0, 1.0 - header_frac, 1.0, header_frac])
-        ax_hdr.set_facecolor("#111827")
+        # ── Compute figure height ───────────────────────────────────────────
+        HDR_H    = 1.80   # inches
+        SEP_H    = 0.08   # separator line height
+        NOTES_H  = 1.20 if has_notes else 0
+        FOOT_H   = 0.35
+
+        # Each chart card: title bar + image at natural aspect + padding
+        CARD_PAD = 0.18   # inches top/bottom padding per card
+        TITLE_H  = 0.30   # chart title bar height
+        CONTENT_W = PAGE_W * (1 - 2 * MARGIN)  # usable width in inches
+
+        card_heights = []
+        for info in chart_info:
+            if info is None:
+                card_heights.append(2.0)
+                continue
+            _, pw, ph, asp = info
+            img_h_in = CONTENT_W / asp        # height at natural aspect
+            img_h_in = min(img_h_in, 8.0)     # cap tall charts
+            img_h_in = max(img_h_in, 2.5)     # floor short charts
+            card_heights.append(TITLE_H + img_h_in + CARD_PAD * 2)
+
+        SPACING = 0.20   # gap between cards
+        total_h = (HDR_H + SEP_H
+                   + sum(card_heights)
+                   + SPACING * max(0, len(slots) - 1)
+                   + NOTES_H + FOOT_H + 0.3)
+        total_h = max(total_h, 8.0)
+
+        fig = plt.figure(figsize=(PAGE_W, total_h))
+        fig.patch.set_facecolor(BG)
+
+        def add_axes_abs(left_in, bottom_in, w_in, h_in):
+            """Add axes using absolute inch coordinates."""
+            return fig.add_axes([
+                left_in  / PAGE_W,
+                bottom_in / total_h,
+                w_in     / PAGE_W,
+                h_in     / total_h,
+            ])
+
+        # Current vertical cursor — build TOP → BOTTOM
+        cur_top = total_h   # inches from bottom
+
+        # ── HEADER ─────────────────────────────────────────────────────────
+        hdr_bottom = cur_top - HDR_H
+        ax_hdr = add_axes_abs(0, hdr_bottom, PAGE_W, HDR_H)
+        ax_hdr.set_facecolor(HDR_BG)
+        ax_hdr.set_xlim(0, 1); ax_hdr.set_ylim(0, 1)
         ax_hdr.axis("off")
 
-        # Thin accent line at bottom of header
-        ax_hdr.axhline(0, color="#00d4ff", lw=2)
+        # Accent gradient bar at bottom of header
+        ax_hdr.add_patch(MplRect((0, 0), 1, 0.025,
+                                  transform=ax_hdr.transAxes,
+                                  facecolor=ACCENT, zorder=5))
 
-        title_txt = meta.get("title", "Scouting Report")
-        sub_txt   = meta.get("subtitle", "")
-        scout_txt = meta.get("scout", "")
-        date_txt  = meta.get("date", "")
-        match_txt = meta.get("match", "")
+        # Left side: logos
+        logo_cursor_x = 0.015
+        logo_zoom_base = 0.9  # will be auto-scaled
+        for logo_img in [logos.get("club"), logos.get("comp"), logos.get("team")]:
+            if logo_img is None:
+                continue
+            try:
+                arr = np.array(logo_img.convert("RGBA"))
+                h_px, w_px = arr.shape[:2]
+                # Target logo height = 70% of header in data units
+                target_h_pts = HDR_H * 0.70 * 72  # pts
+                zoom = target_h_pts / max(h_px, 1)
+                zoom = min(zoom, 1.5)
+                im  = OffsetImage(arr, zoom=zoom)
+                ab  = AnnotationBbox(im,
+                                     (logo_cursor_x + 0.045, 0.55),
+                                     xycoords="axes fraction",
+                                     frameon=False, zorder=6)
+                ax_hdr.add_artist(ab)
+                logo_cursor_x += 0.10
+            except Exception:
+                pass
 
-        # Place logos
-        logo_x = 0.01
-        for logo_key, logo_img in [
-            ("club", logos.get("club")),
-            ("comp", logos.get("comp")),
-            ("team", logos.get("team")),
-        ]:
-            if logo_img is not None:
-                try:
-                    arr = np.array(logo_img.convert("RGBA"))
-                    im  = OffsetImage(arr, zoom=0.38)
-                    ab  = AnnotationBbox(im, (logo_x + 0.03, 0.5),
-                                         xycoords="axes fraction",
-                                         frameon=False)
-                    ax_hdr.add_artist(ab)
-                    logo_x += 0.09
-                except Exception:
-                    pass
+        # Text block
+        tx = logo_cursor_x + 0.015
+        title_txt  = meta.get("title", "Scouting Report")
+        sub_txt    = meta.get("subtitle", "")
+        match_txt  = meta.get("match", "")
+        scout_txt  = meta.get("scout", "")
+        date_txt   = meta.get("date", "")
 
-        text_x = logo_x + 0.01
-        ax_hdr.text(text_x, 0.80, title_txt,
+        ax_hdr.text(tx, 0.82, title_txt,
                     transform=ax_hdr.transAxes,
-                    fontsize=22, fontweight="bold",
-                    color="#e8f0fe", va="top")
+                    fontsize=26, fontweight="black",
+                    color=TEXT_H, va="top", clip_on=False)
+        y_sub = 0.52
         if sub_txt:
-            ax_hdr.text(text_x, 0.52, sub_txt,
+            ax_hdr.text(tx, y_sub, sub_txt,
                         transform=ax_hdr.transAxes,
-                        fontsize=13, color="#6b8cae", va="top")
+                        fontsize=14, color=ACCENT,
+                        va="top", clip_on=False, style="italic")
+            y_sub -= 0.24
         info_parts = []
-        if match_txt: info_parts.append(match_txt)
-        if scout_txt: info_parts.append(f"Scout: {scout_txt}")
-        if date_txt:  info_parts.append(date_txt)
+        if match_txt: info_parts.append(f"⚽  {match_txt}")
+        if scout_txt: info_parts.append(f"👤  Scout: {scout_txt}")
+        if date_txt:  info_parts.append(f"📅  {date_txt}")
         if info_parts:
-            ax_hdr.text(text_x, 0.25, "  |  ".join(info_parts),
+            ax_hdr.text(tx, y_sub, "   ·   ".join(info_parts),
                         transform=ax_hdr.transAxes,
-                        fontsize=10, color="#a0aec0", va="top")
+                        fontsize=10, color=TEXT_S,
+                        va="top", clip_on=False)
 
-        # Player photo (right side)
+        # Player photo — right side
         if logos.get("photo") is not None:
             try:
                 arr = np.array(logos["photo"].convert("RGBA"))
-                im  = OffsetImage(arr, zoom=0.42)
-                ab  = AnnotationBbox(im, (0.97, 0.5),
+                h_px = arr.shape[0]
+                zoom = (HDR_H * 0.80 * 72) / max(h_px, 1)
+                zoom = min(zoom, 1.2)
+                im  = OffsetImage(arr, zoom=zoom)
+                ab  = AnnotationBbox(im, (0.975, 0.56),
                                      xycoords="axes fraction",
-                                     frameon=False)
+                                     frameon=False, zorder=6)
                 ax_hdr.add_artist(ab)
             except Exception:
                 pass
 
-        # ── Chart slots ────────────────────────────────────────────────────
-        used_height = header_frac
-        for slot_idx, slot in enumerate(slots):
-            img_bytes = slot.get("img_bytes")
-            if not img_bytes:
-                continue
+        cur_top = hdr_bottom
 
-            slot_frac = chart_h / total_h
-            y_pos = 1.0 - used_height - slot_frac
-            ax_chart = fig.add_axes([0.01, y_pos, 0.98, slot_frac])
-            ax_chart.set_facecolor(bg_color)
-            ax_chart.axis("off")
+        # ── SEPARATOR ──────────────────────────────────────────────────────
+        sep_bottom = cur_top - SEP_H
+        ax_sep = add_axes_abs(0, sep_bottom, PAGE_W, SEP_H)
+        ax_sep.set_facecolor(ACCENT)
+        ax_sep.axis("off")
+        cur_top = sep_bottom
 
-            # Render the chart bytes as image in axes
-            try:
-                from PIL import Image as _PILImage
-                pil = _PILImage.open(io.BytesIO(img_bytes)).convert("RGB")
-                ax_chart.imshow(np.array(pil), aspect="auto", zorder=1)
-                ax_chart.set_xlim(0, np.array(pil).shape[1])
-                ax_chart.set_ylim(np.array(pil).shape[0], 0)
-            except Exception:
-                ax_chart.text(0.5, 0.5, "Chart render error",
-                              transform=ax_chart.transAxes,
-                              ha="center", va="center", color="red")
+        # ── CHART CARDS ────────────────────────────────────────────────────
+        ML = PAGE_W * MARGIN        # left margin in inches
+        CW = CONTENT_W              # content width in inches
 
-            # Slot label
-            lbl = slot.get("label", "")
-            if lbl:
-                ax_chart.text(0.01, 0.98, lbl,
-                              transform=ax_chart.transAxes,
-                              fontsize=9, color="#6b8cae",
-                              va="top", alpha=0.8, zorder=5)
+        for slot_idx, (slot, info, card_h) in enumerate(
+                zip(slots, chart_info, card_heights)):
 
-            # Draw annotations for this slot
-            for ann in (annotations_per_slot[slot_idx]
-                        if slot_idx < len(annotations_per_slot) else []):
-                try:
-                    _draw_annotation(ax_chart, ann, 0, 0)
-                except Exception:
-                    pass
+            if slot_idx > 0:
+                cur_top -= SPACING
 
-            used_height += slot_frac + spacing * (chart_h / total_h) * 0.15
+            card_bottom = cur_top - card_h
 
-        # ── Extra images ───────────────────────────────────────────────────
+            # Card background
+            ax_card_bg = add_axes_abs(ML - 0.15, card_bottom,
+                                      CW + 0.30, card_h)
+            ax_card_bg.set_facecolor(CARD_BG)
+            ax_card_bg.axis("off")
+            # Border
+            ax_card_bg.add_patch(MplRect((0, 0), 1, 1,
+                                          transform=ax_card_bg.transAxes,
+                                          fill=False, edgecolor=BORDER,
+                                          linewidth=1.2, zorder=2))
+            # Accent left stripe
+            ax_card_bg.add_patch(MplRect((0, 0), 0.004, 1,
+                                          transform=ax_card_bg.transAxes,
+                                          facecolor=ACCENT, zorder=3))
+
+            # Card title bar
+            tb_bottom = cur_top - TITLE_H
+            ax_title = add_axes_abs(ML, tb_bottom, CW, TITLE_H)
+            ax_title.set_facecolor(CARD_BG)
+            ax_title.axis("off")
+            lbl = slot.get("label", f"Chart {slot_idx+1}")
+            ax_title.text(0.012, 0.55, lbl,
+                          transform=ax_title.transAxes,
+                          fontsize=11, fontweight="bold",
+                          color=ACCENT, va="center")
+            # Thin separator under title
+            ax_title.axhline(0, color=BORDER, lw=1)
+
+            # Chart image — PRESERVE ASPECT RATIO
+            if info is not None:
+                pil_img, px_w, px_h, asp = info
+                img_h_in = CW / asp
+                img_h_in = min(img_h_in, 8.0)
+                img_h_in = max(img_h_in, 2.5)
+
+                img_bottom = tb_bottom - CARD_PAD - img_h_in
+                ax_img = add_axes_abs(ML, img_bottom, CW, img_h_in)
+                ax_img.set_facecolor(CARD_BG)
+                ax_img.axis("off")
+
+                arr = np.array(pil_img)
+                ax_img.imshow(arr, aspect="equal", zorder=1,
+                              interpolation="lanczos")
+                ax_img.set_xlim(0, px_w)
+                ax_img.set_ylim(px_h, 0)
+
+                # Draw annotations on top of image
+                ann_list = (annotations_per_slot[slot_idx]
+                            if slot_idx < len(annotations_per_slot) else [])
+                for ann in ann_list:
+                    try:
+                        _draw_annotation(ax_img, ann, 0, 0)
+                    except Exception:
+                        pass
+
+            cur_top = card_bottom
+
+        # ── NOTES ──────────────────────────────────────────────────────────
+        if has_notes:
+            cur_top -= SPACING * 0.5
+            notes_bottom = cur_top - NOTES_H
+            ax_notes = add_axes_abs(ML, notes_bottom, CW, NOTES_H)
+            ax_notes.set_facecolor("#0d1f35")
+            ax_notes.axis("off")
+            ax_notes.add_patch(MplRect((0, 0), 1, 1,
+                                        transform=ax_notes.transAxes,
+                                        fill=False, edgecolor=BORDER, lw=1))
+            ax_notes.add_patch(MplRect((0, 0), 0.006, 1,
+                                        transform=ax_notes.transAxes,
+                                        facecolor="#ffd060", zorder=3))
+            ax_notes.text(0.015, 0.85, "ANALYST NOTES",
+                          transform=ax_notes.transAxes,
+                          fontsize=9, fontweight="bold",
+                          color="#ffd060", va="top")
+            ax_notes.text(0.015, 0.60, meta["notes"],
+                          transform=ax_notes.transAxes,
+                          fontsize=9.5, color=TEXT_S,
+                          va="top", wrap=True)
+            cur_top = notes_bottom
+
+        # ── FOOTER ─────────────────────────────────────────────────────────
+        ax_foot = add_axes_abs(0, 0, PAGE_W, FOOT_H)
+        ax_foot.set_facecolor("#080d14")
+        ax_foot.axis("off")
+        ax_foot.text(0.5, 0.5,
+                     "Generated by Football Analysis Suite v4",
+                     transform=ax_foot.transAxes,
+                     fontsize=8, color="#2a4a6b",
+                     ha="center", va="center")
+
+        # ── Extra overlay images ────────────────────────────────────────────
         for ei in extra_images:
             try:
                 img = ei.get("img")
                 if img is None:
                     continue
-                arr  = np.array(img.convert("RGBA"))
-                x_f  = ei.get("x", 0.5)
-                y_f  = ei.get("y", 0.5)
-                zoom = ei.get("zoom", 0.3)
-                alpha_val = ei.get("opacity", 1.0)
-                im   = OffsetImage(arr, zoom=zoom, alpha=alpha_val)
-                ab   = AnnotationBbox(im, (x_f, y_f),
-                                      xycoords="figure fraction",
-                                      frameon=False, zorder=20)
+                arr      = np.array(img.convert("RGBA"))
+                h_px     = arr.shape[0]
+                zoom     = ei.get("zoom", 0.3)
+                alpha_v  = ei.get("opacity", 1.0)
+                x_f      = ei.get("x", 0.5)
+                y_f      = ei.get("y", 0.5)
+                im  = OffsetImage(arr, zoom=zoom, alpha=alpha_v)
+                ab  = AnnotationBbox(im, (x_f, y_f),
+                                     xycoords="figure fraction",
+                                     frameon=False, zorder=20)
                 fig.add_artist(ab)
             except Exception:
                 pass
 
-        # ── Notes ──────────────────────────────────────────────────────────
-        if has_notes:
-            notes_frac = notes_h / total_h
-            ax_notes = fig.add_axes([0.01, 0.01, 0.98, notes_frac])
-            ax_notes.set_facecolor("#0d1f35")
-            ax_notes.axis("off")
-            ax_notes.text(0.01, 0.88, "📝 Notes",
-                          transform=ax_notes.transAxes,
-                          fontsize=10, fontweight="bold",
-                          color="#00d4ff", va="top")
-            ax_notes.text(0.01, 0.60, meta["notes"],
-                          transform=ax_notes.transAxes,
-                          fontsize=9, color="#a0aec0",
-                          va="top", wrap=True)
-            ax_notes.add_patch(
-                plt.Rectangle((0, 0), 1, 1,
-                               transform=ax_notes.transAxes,
-                               fill=False, edgecolor="#1e3a5f", lw=1))
-
+        fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
         return fig
 
     # ─────────────────────────────────────────────────────────────────────
@@ -3546,105 +3666,37 @@ if section == "📄 Report Builder":
 
     # ── TAB 3: ANNOTATIONS ────────────────────────────────────────────────
     with tab_ann:
-        st.markdown("#### ✏️ Annotations")
         slots = st.session_state["rb_slots"]
         if not slots:
-            st.info("Add charts first in the Charts tab.")
+            st.info("Add charts first in the Charts tab before adding annotations.")
         else:
             slot_labels = [f"#{i+1}: {s.get('label','Chart')}" for i, s in enumerate(slots)]
-            target_slot = st.selectbox("Apply annotation to chart", slot_labels, key="rb_ann_slot")
+            col_sel, col_count = st.columns([3, 1])
+            with col_sel:
+                target_slot = st.selectbox("Chart to annotate", slot_labels, key="rb_ann_slot")
             slot_idx = slot_labels.index(target_slot)
+            with col_count:
+                st.metric("Annotations", len(st.session_state["rb_annotations"][slot_idx]))
 
-            with st.expander("➕ Add New Annotation", expanded=True):
-                ann_type = st.selectbox("Annotation type", ANNOTATION_TYPES, key="rb_ann_type")
+            st.markdown("---")
 
-                ac1, ac2, ac3 = st.columns(3)
-                with ac1:
-                    ax_ = st.slider("X position (%)", 0, 100, 10, key="rb_ann_x")
-                    ay_ = st.slider("Y position (%)", 0, 100, 10, key="rb_ann_y")
-                with ac2:
-                    aw_ = st.slider("Width (%)", 1, 80, 20, key="rb_ann_w")
-                    ah_ = st.slider("Height (%)", 1, 60, 10, key="rb_ann_h")
-                with ac3:
-                    ar_ = st.slider("Rotation °", -180, 180, 0, key="rb_ann_rot")
-                    az_ = st.slider("Z-order", 1, 20, 10, key="rb_ann_z")
-
-                bc1, bc2, bc3 = st.columns(3)
-                with bc1:
-                    fill_c  = st.color_picker("Fill color",   "#FF000033" if ann_type in ("Rectangle","Circle","Ellipse","Highlight Box","Number Label") else "#FFFFFF", key="rb_ann_fc")
-                    border_c= st.color_picker("Border/text color", "#FF4060", key="rb_ann_bc")
-                with bc2:
-                    border_w = st.slider("Border width", 0.5, 8.0, 2.0, 0.25, key="rb_ann_bw")
-                    opacity  = st.slider("Opacity", 0.05, 1.0, 0.75, 0.05, key="rb_ann_op")
-                with bc3:
-                    font_sz  = st.slider("Font size", 8, 36, 14, key="rb_ann_fsz")
-                    font_fam = st.selectbox("Font", ["sans-serif","serif","monospace","Arial","Georgia"], key="rb_ann_ff")
-
-                ann_text = ""
-                if ann_type in ("Text", "Rectangle", "Circle", "Ellipse",
-                                "Highlight Box", "Number Label"):
-                    if ann_type == "Number Label":
-                        label_n = st.number_input("Number", 1, 99, 1, key="rb_ann_ln")
-                        ann_text = str(label_n)
-                    else:
-                        ann_text = st.text_input("Text label (optional)", "", key="rb_ann_txt")
-
-                x2_ = y2_ = None
-                curve_ = 0.3
-                if ann_type in ("Straight Arrow", "Curved Arrow"):
-                    ec1, ec2 = st.columns(2)
-                    with ec1:
-                        x2_ = st.slider("Arrow end X (%)", 0, 100, 60, key="rb_ann_x2")
-                        y2_ = st.slider("Arrow end Y (%)", 0, 100, 60, key="rb_ann_y2")
-                    with ec2:
-                        if ann_type == "Curved Arrow":
-                            curve_ = st.slider("Curvature", -1.0, 1.0, 0.3, 0.05, key="rb_ann_cv")
-
-                if st.button("➕ Add annotation", key="rb_ann_add"):
-                    new_ann = dict(
-                        type=ann_type, x=ax_, y=ay_, w=aw_, h=ah_,
-                        rotation=ar_, fill_color=fill_c, border_color=border_c,
-                        border_width=border_w, opacity=opacity, zorder=az_,
-                        font_size=font_sz, font=font_fam, text=ann_text,
-                    )
-                    if ann_type == "Number Label":
-                        new_ann["label_n"] = int(ann_text) if ann_text.isdigit() else 1
-                    if x2_ is not None:
-                        new_ann["x2"] = x2_; new_ann["y2"] = y2_
-                    if ann_type == "Curved Arrow":
-                        new_ann["curvature"] = curve_
-                    st.session_state["rb_annotations"][slot_idx].append(new_ann)
-                    st.rerun()
-
-            # Show existing annotations for this slot
-            anns = st.session_state["rb_annotations"][slot_idx]
-            if anns:
-                st.markdown(f"**{len(anns)} annotation(s) on this chart:**")
-                for ai, ann in enumerate(anns):
-                    with st.expander(f"#{ai+1} — {ann.get('type','?')} | {ann.get('text','')}", expanded=False):
-                        ec1, ec2 = st.columns([3,1])
-                        with ec1:
-                            st.write({k: v for k, v in ann.items() if k not in ("fill_color","border_color")})
-                        with ec2:
-                            if st.button("🗑️ Delete", key=f"rb_del_ann_{slot_idx}_{ai}"):
-                                st.session_state["rb_annotations"][slot_idx].pop(ai)
-                                st.rerun()
-
-            # Live preview with annotations
-            if st.button("👁️ Preview with annotations", key=f"rb_prev_ann_{slot_idx}"):
-                slot = st.session_state["rb_slots"][slot_idx]
+            # ── Live chart preview ─────────────────────────────────────────
+            slot_data = st.session_state["rb_slots"][slot_idx]
+            show_prev = st.checkbox("Show live preview", True, key="rb_ann_showprev")
+            if show_prev and slot_data.get("img_bytes"):
                 from PIL import Image as _PILImage
                 import numpy as np
-                fig_p, ax_p = plt.subplots(figsize=(12, 7))
+                fig_p, ax_p = plt.subplots(figsize=(14, 8))
                 fig_p.patch.set_facecolor("#0E1117")
-                ax_p.set_facecolor("#0E1117")
+                ax_p.set_facecolor("#111827")
                 ax_p.axis("off")
                 try:
-                    pil = _PILImage.open(io.BytesIO(slot["img_bytes"])).convert("RGB")
-                    arr = np.array(pil)
-                    ax_p.imshow(arr, aspect="auto", zorder=1)
-                    ax_p.set_xlim(0, arr.shape[1])
-                    ax_p.set_ylim(arr.shape[0], 0)
+                    pil_p = _PILImage.open(io.BytesIO(slot_data["img_bytes"])).convert("RGB")
+                    arr_p = np.array(pil_p)
+                    ax_p.imshow(arr_p, aspect="equal", zorder=1,
+                                interpolation="lanczos")
+                    ax_p.set_xlim(0, pil_p.width)
+                    ax_p.set_ylim(pil_p.height, 0)
                 except Exception:
                     pass
                 for ann in st.session_state["rb_annotations"][slot_idx]:
@@ -3652,8 +3704,98 @@ if section == "📄 Report Builder":
                         _draw_annotation(ax_p, ann, 0, 0)
                     except Exception:
                         pass
-                st.image(_bytes(fig_p, dpi=150), use_container_width=True)
+                prev_bytes = _bytes(fig_p, dpi=130)
                 plt.close(fig_p)
+                st.image(prev_bytes, use_container_width=True)
+
+            st.markdown("---")
+            # ── Add annotation form ────────────────────────────────────────
+            st.markdown("#### ➕ Add Annotation")
+            form_c1, form_c2 = st.columns([1, 2])
+
+            with form_c1:
+                ann_type = st.selectbox("Type", ANNOTATION_TYPES, key="rb_ann_type")
+                ann_text = ""
+                if ann_type == "Number Label":
+                    label_n = st.number_input("Number", 1, 99, 1, key="rb_ann_ln")
+                    ann_text = str(int(label_n))
+                elif ann_type not in ("Straight Arrow", "Curved Arrow"):
+                    ann_text = st.text_input("Text", "", key="rb_ann_txt",
+                                             placeholder="Optional label text")
+
+                fill_c   = st.color_picker("Fill color",   "#FF4060", key="rb_ann_fc")
+                border_c = st.color_picker("Stroke/Text color", "#FFFFFF", key="rb_ann_bc")
+                opacity  = st.slider("Opacity", 0.05, 1.0, 0.80, 0.05, key="rb_ann_op")
+
+            with form_c2:
+                st.markdown("**Position & Size** *(% of chart area)*")
+                pos_c1, pos_c2 = st.columns(2)
+                with pos_c1:
+                    ax_ = st.slider("X start (%)", 0, 99, 10, key="rb_ann_x")
+                    ay_ = st.slider("Y start (%)", 0, 99, 10, key="rb_ann_y")
+                with pos_c2:
+                    aw_ = st.slider("Width (%)", 1, 90, 25, key="rb_ann_w")
+                    ah_ = st.slider("Height (%)", 1, 80, 15, key="rb_ann_h")
+
+                st.markdown("**Style**")
+                sty_c1, sty_c2, sty_c3 = st.columns(3)
+                with sty_c1:
+                    border_w = st.slider("Stroke width", 0.5, 8.0, 2.5, 0.5, key="rb_ann_bw")
+                    ar_ = st.slider("Rotation °", -180, 180, 0, key="rb_ann_rot")
+                with sty_c2:
+                    font_sz  = st.slider("Font size", 8, 48, 16, key="rb_ann_fsz")
+                    az_      = st.slider("Z-order", 1, 20, 10, key="rb_ann_z")
+                with sty_c3:
+                    font_fam = st.selectbox("Font",
+                        ["sans-serif", "serif", "monospace", "Arial", "Georgia"],
+                        key="rb_ann_ff")
+
+                if ann_type in ("Straight Arrow", "Curved Arrow"):
+                    st.markdown("**Arrow endpoint**")
+                    ar_c1, ar_c2 = st.columns(2)
+                    with ar_c1:
+                        x2_ = st.slider("End X (%)", 0, 100, 60, key="rb_ann_x2")
+                        y2_ = st.slider("End Y (%)", 0, 100, 40, key="rb_ann_y2")
+                    with ar_c2:
+                        if ann_type == "Curved Arrow":
+                            curve_ = st.slider("Curvature", -1.0, 1.0, 0.3, 0.05, key="rb_ann_cv")
+                        else:
+                            curve_ = 0.0
+                else:
+                    x2_ = y2_ = None; curve_ = 0.0
+
+            if st.button("➕ Add to chart", type="primary", key="rb_ann_add"):
+                new_ann = dict(
+                    type=ann_type, x=ax_, y=ay_, w=aw_, h=ah_,
+                    rotation=ar_, fill_color=fill_c, border_color=border_c,
+                    border_width=border_w, opacity=opacity, zorder=az_,
+                    font_size=font_sz, font=font_fam, text=ann_text,
+                )
+                if ann_type == "Number Label":
+                    new_ann["label_n"] = int(ann_text) if ann_text.isdigit() else 1
+                if x2_ is not None:
+                    new_ann["x2"] = x2_; new_ann["y2"] = y2_
+                if ann_type == "Curved Arrow":
+                    new_ann["curvature"] = curve_
+                st.session_state["rb_annotations"][slot_idx].append(new_ann)
+                st.rerun()
+
+            # ── Existing annotations table ─────────────────────────────────
+            anns = st.session_state["rb_annotations"][slot_idx]
+            if anns:
+                st.markdown(f"---\n#### 📋 Annotations on this chart ({len(anns)})")
+                for ai, ann in enumerate(anns):
+                    col_info, col_del = st.columns([5, 1])
+                    with col_info:
+                        label_str = f"**#{ai+1}** `{ann.get('type')}` " \
+                                    f"at ({ann.get('x')}%, {ann.get('y')}%) " \
+                                    f"— {ann.get('text','') or ''}"
+                        st.markdown(label_str)
+                    with col_del:
+                        if st.button("🗑️", key=f"rb_del_ann_{slot_idx}_{ai}",
+                                     help="Delete this annotation"):
+                            st.session_state["rb_annotations"][slot_idx].pop(ai)
+                            st.rerun()
 
     # ── TAB 4: EXTRA IMAGES ───────────────────────────────────────────────
     with tab_imgs:
