@@ -1310,6 +1310,7 @@ with st.sidebar:
         "🍕 Radars & Pizza",
         "🧠 Player Scouting",
         "🖱️ Tagging Tool",
+        "📄 Report Builder",
     ], key="nav")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2968,4 +2969,702 @@ if section == "🖱️ Tagging Tool":
                     st.error(f"Chart error: {e}")
         else:
             st.info("No events tagged yet. Click the pitch above to start tagging.")
+    st.stop()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 📄  REPORT BUILDER
+# ─────────────────────────────────────────────────────────────────────────────
+if section == "📄 Report Builder":
+    hdr("📄", "Report Builder", "Assemble professional scouting reports from saved charts · annotate · export PNG/PDF")
+
+    # ── session-state initialisation ──────────────────────────────────────────
+    def _rb_init():
+        defaults = {
+            "rb_title":       "Scouting Report",
+            "rb_subtitle":    "",
+            "rb_scout":       "",
+            "rb_date":        "",
+            "rb_match":       "",
+            "rb_notes":       "",
+            "rb_slots":       [],       # list of {key, label, bytes}
+            "rb_annotations": [],       # list of annotation dicts per slot index
+            "rb_images":      [],       # list of inserted image dicts
+            "rb_logo_club":   None,
+            "rb_logo_comp":   None,
+            "rb_logo_team":   None,
+            "rb_photo":       None,
+        }
+        for k, v in defaults.items():
+            if k not in st.session_state:
+                st.session_state[k] = v
+    _rb_init()
+
+    # ── catalog of saved figures across the whole app ─────────────────────────
+    FIGURE_CATALOG = {
+        "atk_sm":   "⚔️ Shot Map",
+        "atk_gl":   "⚔️ Goal Location",
+        "atk_sz":   "⚔️ Shot Zones",
+        "atk_tm":   "⚔️ Touch Map",
+        "atk_ht":   "⚔️ Start Heatmap",
+        "atk_xt":   "⚔️ xG Timeline",
+        "psm_fig":  "🎯 Pro Shot Map",
+        "ppm_fig":  "📨 Pro Pass Map",
+        "def_da":   "🛡️ Defensive Actions",
+        "def_br":   "🛡️ Ball Regains",
+        "def_pr":   "🛡️ Pressure Map",
+        "def_mo":   "🛡️ Momentum Chart",
+        "def_ob":   "🛡️ Outcome Distribution",
+        "dist_pm":  "🔄 Pass Map",
+        "dist_pc":  "🔄 Progressive Carries",
+        "dist_pn":  "🔄 Passing Network",
+        "spec_gm":  "🎯 Goal Mouth",
+        "spec_sr":  "🎯 Shot Report",
+        "spec_vm":  "🎯 Vertical Map",
+        "spec_sd":  "🎯 Shot Detail Card",
+        "spec_ps":  "🎯 Pass Sonar",
+        "spec_dt":  "🎯 Defensive Territory",
+        "pizza_fig":"🍕 Pizza Radar",
+    }
+
+    available = {k: v for k, v in FIGURE_CATALOG.items()
+                 if k in st.session_state and st.session_state[k] is not None}
+
+    # ── helper: convert a session-state figure (matplotlib fig) to bytes ──────
+    def _fig_to_bytes(fig_or_bytes):
+        if isinstance(fig_or_bytes, bytes):
+            return fig_or_bytes
+        try:
+            return _bytes(fig_or_bytes, dpi=180)
+        except Exception:
+            return None
+
+    # ── ANNOTATION TYPES ──────────────────────────────────────────────────────
+    ANNOTATION_TYPES = [
+        "Text", "Rectangle", "Circle", "Ellipse",
+        "Straight Arrow", "Curved Arrow", "Highlight Box", "Number Label",
+    ]
+
+    # ── helper: draw a single annotation onto a matplotlib Axes ──────────────
+    def _draw_annotation(ax, ann, ax_w_pts, ax_h_pts):
+        """Draw one annotation dict onto ax. Coords are 0-100 % of axes."""
+        import matplotlib.patches as mpatches
+        import matplotlib.patheffects as pe
+
+        atype  = ann.get("type", "Text")
+        x_pct  = ann.get("x", 50) / 100.0
+        y_pct  = 1.0 - ann.get("y", 50) / 100.0   # flip: 0=top in UI
+        w_pct  = ann.get("w", 20) / 100.0
+        h_pct  = ann.get("h", 10) / 100.0
+        rot    = ann.get("rotation", 0)
+        fc     = ann.get("fill_color",   "#FF000044")
+        bc     = ann.get("border_color", "#FF0000")
+        bw     = ann.get("border_width", 1.5)
+        alpha  = ann.get("opacity", 0.7)
+        zorder = ann.get("zorder", 10)
+        fsize  = ann.get("font_size", 12)
+        ffam   = ann.get("font", "sans-serif")
+        text   = ann.get("text", "")
+        label_n = ann.get("label_n", 1)
+
+        transform = ax.transAxes
+
+        if atype == "Text":
+            ha = ann.get("ha", "left")
+            txt = ax.text(x_pct, y_pct, text,
+                          transform=transform,
+                          fontsize=fsize, fontfamily=ffam,
+                          color=bc, alpha=alpha, zorder=zorder,
+                          rotation=rot, ha=ha, va="top",
+                          fontweight="bold")
+            txt.set_path_effects([pe.withStroke(linewidth=2, foreground="black")])
+
+        elif atype in ("Rectangle", "Highlight Box"):
+            patch = mpatches.FancyBboxPatch(
+                (x_pct, y_pct - h_pct), w_pct, h_pct,
+                boxstyle="round,pad=0.01",
+                transform=transform,
+                facecolor=fc, edgecolor=bc,
+                linewidth=bw, alpha=alpha, zorder=zorder,
+                angle=rot,
+            )
+            ax.add_patch(patch)
+            if text:
+                ax.text(x_pct + w_pct/2, y_pct - h_pct/2, text,
+                        transform=transform,
+                        fontsize=fsize, fontfamily=ffam,
+                        color=bc, alpha=min(1.0, alpha+0.3),
+                        zorder=zorder+1, ha="center", va="center")
+
+        elif atype in ("Circle", "Ellipse"):
+            is_circle = (atype == "Circle")
+            ew = w_pct if not is_circle else min(w_pct, h_pct)
+            eh = h_pct if not is_circle else min(w_pct, h_pct)
+            patch = mpatches.Ellipse(
+                (x_pct + ew/2, y_pct - eh/2), ew, eh,
+                transform=transform,
+                facecolor=fc, edgecolor=bc,
+                linewidth=bw, alpha=alpha, zorder=zorder,
+                angle=rot,
+            )
+            ax.add_patch(patch)
+            if text:
+                ax.text(x_pct + ew/2, y_pct - eh/2, text,
+                        transform=transform,
+                        fontsize=fsize, color=bc,
+                        zorder=zorder+1, ha="center", va="center")
+
+        elif atype == "Straight Arrow":
+            x2_pct = ann.get("x2", x_pct*100 + w_pct*100) / 100.0
+            y2_pct = 1.0 - ann.get("y2", ann.get("y", 50) + h_pct*100) / 100.0
+            ax.annotate("", xy=(x2_pct, y2_pct), xytext=(x_pct, y_pct),
+                        xycoords=transform, textcoords=transform,
+                        arrowprops=dict(
+                            arrowstyle=f"-|>,head_width={bw*0.4},head_length={bw*0.3}",
+                            color=bc, lw=bw, alpha=alpha),
+                        zorder=zorder)
+
+        elif atype == "Curved Arrow":
+            x2_pct = ann.get("x2", x_pct*100 + w_pct*100) / 100.0
+            y2_pct = 1.0 - ann.get("y2", ann.get("y", 50) + h_pct*100) / 100.0
+            curve  = ann.get("curvature", 0.3)
+            ax.annotate("", xy=(x2_pct, y2_pct), xytext=(x_pct, y_pct),
+                        xycoords=transform, textcoords=transform,
+                        arrowprops=dict(
+                            arrowstyle=f"-|>,head_width={bw*0.4}",
+                            connectionstyle=f"arc3,rad={curve}",
+                            color=bc, lw=bw, alpha=alpha),
+                        zorder=zorder)
+
+        elif atype == "Number Label":
+            circle = mpatches.Circle(
+                (x_pct, y_pct), radius=min(w_pct, h_pct)/2,
+                transform=transform,
+                facecolor=fc, edgecolor=bc,
+                linewidth=bw, alpha=alpha, zorder=zorder,
+            )
+            ax.add_patch(circle)
+            ax.text(x_pct, y_pct, str(label_n),
+                    transform=transform,
+                    fontsize=fsize, fontfamily=ffam,
+                    color=bc, zorder=zorder+1,
+                    ha="center", va="center", fontweight="bold")
+
+    # ── helper: build the full report figure ──────────────────────────────────
+    def build_report_figure(slots, annotations_per_slot, extra_images,
+                             meta, logos, spacing=0.02, report_dpi=180):
+        """
+        Assemble a matplotlib figure from:
+          - slots: list of {label, img_bytes}
+          - annotations_per_slot: list of lists of annotation dicts
+          - extra_images: list of {img, x, y, w, h, opacity}
+          - meta: dict with title/subtitle/scout/date/match/notes
+          - logos: dict with club/comp/team/photo PIL images
+        Returns a matplotlib figure.
+        """
+        import matplotlib.gridspec as mgridspec
+        from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+        import numpy as np
+
+        n_charts = len(slots)
+        has_header = True
+        has_notes  = bool(meta.get("notes", "").strip())
+
+        # Page dimensions (A4-ish landscape ratio)
+        page_w = 16.0
+        header_h = 2.0
+        chart_h  = 5.5
+        notes_h  = 1.2 if has_notes else 0
+        total_h  = header_h + n_charts * (chart_h + spacing * 72) + notes_h + 0.6
+
+        fig = plt.figure(figsize=(page_w, max(6.0, total_h)))
+        bg_color = "#0E1117"
+        fig.patch.set_facecolor(bg_color)
+
+        # ── Header ─────────────────────────────────────────────────────────
+        header_frac = header_h / total_h
+        ax_hdr = fig.add_axes([0.0, 1.0 - header_frac, 1.0, header_frac])
+        ax_hdr.set_facecolor("#111827")
+        ax_hdr.axis("off")
+
+        # Thin accent line at bottom of header
+        ax_hdr.axhline(0, color="#00d4ff", lw=2)
+
+        title_txt = meta.get("title", "Scouting Report")
+        sub_txt   = meta.get("subtitle", "")
+        scout_txt = meta.get("scout", "")
+        date_txt  = meta.get("date", "")
+        match_txt = meta.get("match", "")
+
+        # Place logos
+        logo_x = 0.01
+        for logo_key, logo_img in [
+            ("club", logos.get("club")),
+            ("comp", logos.get("comp")),
+            ("team", logos.get("team")),
+        ]:
+            if logo_img is not None:
+                try:
+                    arr = np.array(logo_img.convert("RGBA"))
+                    im  = OffsetImage(arr, zoom=0.38)
+                    ab  = AnnotationBbox(im, (logo_x + 0.03, 0.5),
+                                         xycoords="axes fraction",
+                                         frameon=False)
+                    ax_hdr.add_artist(ab)
+                    logo_x += 0.09
+                except Exception:
+                    pass
+
+        text_x = logo_x + 0.01
+        ax_hdr.text(text_x, 0.80, title_txt,
+                    transform=ax_hdr.transAxes,
+                    fontsize=22, fontweight="bold",
+                    color="#e8f0fe", va="top")
+        if sub_txt:
+            ax_hdr.text(text_x, 0.52, sub_txt,
+                        transform=ax_hdr.transAxes,
+                        fontsize=13, color="#6b8cae", va="top")
+        info_parts = []
+        if match_txt: info_parts.append(match_txt)
+        if scout_txt: info_parts.append(f"Scout: {scout_txt}")
+        if date_txt:  info_parts.append(date_txt)
+        if info_parts:
+            ax_hdr.text(text_x, 0.25, "  |  ".join(info_parts),
+                        transform=ax_hdr.transAxes,
+                        fontsize=10, color="#a0aec0", va="top")
+
+        # Player photo (right side)
+        if logos.get("photo") is not None:
+            try:
+                arr = np.array(logos["photo"].convert("RGBA"))
+                im  = OffsetImage(arr, zoom=0.42)
+                ab  = AnnotationBbox(im, (0.97, 0.5),
+                                     xycoords="axes fraction",
+                                     frameon=False)
+                ax_hdr.add_artist(ab)
+            except Exception:
+                pass
+
+        # ── Chart slots ────────────────────────────────────────────────────
+        used_height = header_frac
+        for slot_idx, slot in enumerate(slots):
+            img_bytes = slot.get("img_bytes")
+            if not img_bytes:
+                continue
+
+            slot_frac = chart_h / total_h
+            y_pos = 1.0 - used_height - slot_frac
+            ax_chart = fig.add_axes([0.01, y_pos, 0.98, slot_frac])
+            ax_chart.set_facecolor(bg_color)
+            ax_chart.axis("off")
+
+            # Render the chart bytes as image in axes
+            try:
+                from PIL import Image as _PILImage
+                pil = _PILImage.open(io.BytesIO(img_bytes)).convert("RGBA")
+                ax_chart.imshow(np.array(pil), aspect="auto",
+                                extent=[0, 1, 0, 1],
+                                transform=ax_chart.transAxes,
+                                zorder=1)
+            except Exception:
+                ax_chart.text(0.5, 0.5, "Chart render error",
+                              transform=ax_chart.transAxes,
+                              ha="center", va="center", color="red")
+
+            # Slot label
+            lbl = slot.get("label", "")
+            if lbl:
+                ax_chart.text(0.01, 0.98, lbl,
+                              transform=ax_chart.transAxes,
+                              fontsize=9, color="#6b8cae",
+                              va="top", alpha=0.8, zorder=5)
+
+            # Draw annotations for this slot
+            for ann in (annotations_per_slot[slot_idx]
+                        if slot_idx < len(annotations_per_slot) else []):
+                try:
+                    _draw_annotation(ax_chart, ann, 0, 0)
+                except Exception:
+                    pass
+
+            used_height += slot_frac + spacing * (chart_h / total_h) * 0.15
+
+        # ── Extra images ───────────────────────────────────────────────────
+        for ei in extra_images:
+            try:
+                img = ei.get("img")
+                if img is None:
+                    continue
+                arr  = np.array(img.convert("RGBA"))
+                x_f  = ei.get("x", 0.5)
+                y_f  = ei.get("y", 0.5)
+                zoom = ei.get("zoom", 0.3)
+                alpha_val = ei.get("opacity", 1.0)
+                im   = OffsetImage(arr, zoom=zoom, alpha=alpha_val)
+                ab   = AnnotationBbox(im, (x_f, y_f),
+                                      xycoords="figure fraction",
+                                      frameon=False, zorder=20)
+                fig.add_artist(ab)
+            except Exception:
+                pass
+
+        # ── Notes ──────────────────────────────────────────────────────────
+        if has_notes:
+            notes_frac = notes_h / total_h
+            ax_notes = fig.add_axes([0.01, 0.01, 0.98, notes_frac])
+            ax_notes.set_facecolor("#0d1f35")
+            ax_notes.axis("off")
+            ax_notes.text(0.01, 0.88, "📝 Notes",
+                          transform=ax_notes.transAxes,
+                          fontsize=10, fontweight="bold",
+                          color="#00d4ff", va="top")
+            ax_notes.text(0.01, 0.60, meta["notes"],
+                          transform=ax_notes.transAxes,
+                          fontsize=9, color="#a0aec0",
+                          va="top", wrap=True)
+            ax_notes.add_patch(
+                plt.Rectangle((0, 0), 1, 1,
+                               transform=ax_notes.transAxes,
+                               fill=False, edgecolor="#1e3a5f", lw=1))
+
+        return fig
+
+    # ─────────────────────────────────────────────────────────────────────
+    # REPORT BUILDER UI
+    # ─────────────────────────────────────────────────────────────────────
+    tab_meta, tab_charts, tab_ann, tab_imgs, tab_export = st.tabs([
+        "📋 Report Info",
+        "📊 Charts",
+        "✏️ Annotations",
+        "🖼️ Extra Images",
+        "💾 Export",
+    ])
+
+    # ── TAB 1: REPORT INFO ────────────────────────────────────────────────
+    with tab_meta:
+        st.markdown("#### 📋 Report Information")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.session_state["rb_title"]    = st.text_input("Report title", st.session_state["rb_title"], key="rb_ti")
+            st.session_state["rb_subtitle"] = st.text_input("Subtitle",     st.session_state["rb_subtitle"], key="rb_su")
+            st.session_state["rb_match"]    = st.text_input("Match info (e.g. Arsenal 2-1 Chelsea)", st.session_state["rb_match"], key="rb_mi")
+        with c2:
+            st.session_state["rb_scout"]    = st.text_input("Scout name",   st.session_state["rb_scout"], key="rb_sc")
+            st.session_state["rb_date"]     = st.text_input("Date",         st.session_state["rb_date"],  key="rb_da")
+        st.session_state["rb_notes"] = st.text_area("Notes / Analysis", st.session_state["rb_notes"],
+                                                     height=120, key="rb_no")
+
+        st.markdown("#### 🖼️ Logos & Photos")
+        lc1, lc2, lc3, lc4 = st.columns(4)
+        with lc1:
+            club_f = st.file_uploader("Club logo", type=["png","jpg","jpeg","svg"], key="rb_lc")
+            if club_f:
+                try:
+                    st.session_state["rb_logo_club"] = Image.open(club_f).convert("RGBA")
+                except Exception: pass
+        with lc2:
+            comp_f = st.file_uploader("Competition logo", type=["png","jpg","jpeg","svg"], key="rb_lco")
+            if comp_f:
+                try:
+                    st.session_state["rb_logo_comp"] = Image.open(comp_f).convert("RGBA")
+                except Exception: pass
+        with lc3:
+            team_f = st.file_uploader("Team logo", type=["png","jpg","jpeg","svg"], key="rb_lt")
+            if team_f:
+                try:
+                    st.session_state["rb_logo_team"] = Image.open(team_f).convert("RGBA")
+                except Exception: pass
+        with lc4:
+            photo_f = st.file_uploader("Player photo", type=["png","jpg","jpeg"], key="rb_ph")
+            if photo_f:
+                try:
+                    st.session_state["rb_photo"] = Image.open(photo_f).convert("RGBA")
+                except Exception: pass
+
+        if st.button("🔄 Preview header", key="rb_prev_hdr"):
+            meta = dict(
+                title    = st.session_state["rb_title"],
+                subtitle = st.session_state["rb_subtitle"],
+                scout    = st.session_state["rb_scout"],
+                date     = st.session_state["rb_date"],
+                match    = st.session_state["rb_match"],
+                notes    = "",
+            )
+            logos = dict(
+                club  = st.session_state.get("rb_logo_club"),
+                comp  = st.session_state.get("rb_logo_comp"),
+                team  = st.session_state.get("rb_logo_team"),
+                photo = st.session_state.get("rb_photo"),
+            )
+            fig_prev = build_report_figure([], [], [], meta, logos)
+            st.image(_bytes(fig_prev, dpi=120), use_container_width=True)
+            plt.close(fig_prev)
+
+    # ── TAB 2: CHARTS ─────────────────────────────────────────────────────
+    with tab_charts:
+        st.markdown("#### 📊 Add Charts to Report")
+
+        if not available:
+            st.info("No charts saved yet. Generate charts in other sections first, then return here.")
+        else:
+            st.markdown("**Available saved charts:**")
+            add_cols = st.columns(4)
+            for i, (k, label) in enumerate(available.items()):
+                with add_cols[i % 4]:
+                    if st.button(f"＋ {label}", key=f"rb_add_{k}"):
+                        fig_obj = st.session_state.get(k)
+                        img_b = _fig_to_bytes(fig_obj)
+                        if img_b:
+                            st.session_state["rb_slots"].append({
+                                "key": k,
+                                "label": label,
+                                "img_bytes": img_b,
+                            })
+                            st.session_state["rb_annotations"].append([])
+                            st.rerun()
+
+        st.markdown("---")
+        slots = st.session_state["rb_slots"]
+        if not slots:
+            st.info("No charts added yet. Click a chart above to add it.")
+        else:
+            st.markdown(f"**Report contains {len(slots)} chart(s):**")
+            for i, slot in enumerate(slots):
+                sc1, sc2, sc3 = st.columns([3, 1, 1])
+                with sc1:
+                    new_lbl = st.text_input(f"Label #{i+1}", slot.get("label",""),
+                                            key=f"rb_slbl_{i}")
+                    st.session_state["rb_slots"][i]["label"] = new_lbl
+                with sc2:
+                    if st.button("🔃 Refresh", key=f"rb_ref_{i}"):
+                        fig_obj = st.session_state.get(slot["key"])
+                        if fig_obj:
+                            st.session_state["rb_slots"][i]["img_bytes"] = _fig_to_bytes(fig_obj)
+                            st.rerun()
+                with sc3:
+                    if st.button("🗑️ Remove", key=f"rb_del_{i}"):
+                        st.session_state["rb_slots"].pop(i)
+                        st.session_state["rb_annotations"].pop(i)
+                        st.rerun()
+                try:
+                    st.image(slot["img_bytes"], use_container_width=True)
+                except Exception:
+                    st.warning("Could not preview this chart.")
+
+    # ── TAB 3: ANNOTATIONS ────────────────────────────────────────────────
+    with tab_ann:
+        st.markdown("#### ✏️ Annotations")
+        slots = st.session_state["rb_slots"]
+        if not slots:
+            st.info("Add charts first in the Charts tab.")
+        else:
+            slot_labels = [f"#{i+1}: {s.get('label','Chart')}" for i, s in enumerate(slots)]
+            target_slot = st.selectbox("Apply annotation to chart", slot_labels, key="rb_ann_slot")
+            slot_idx = slot_labels.index(target_slot)
+
+            with st.expander("➕ Add New Annotation", expanded=True):
+                ann_type = st.selectbox("Annotation type", ANNOTATION_TYPES, key="rb_ann_type")
+
+                ac1, ac2, ac3 = st.columns(3)
+                with ac1:
+                    ax_ = st.slider("X position (%)", 0, 100, 10, key="rb_ann_x")
+                    ay_ = st.slider("Y position (%)", 0, 100, 10, key="rb_ann_y")
+                with ac2:
+                    aw_ = st.slider("Width (%)", 1, 80, 20, key="rb_ann_w")
+                    ah_ = st.slider("Height (%)", 1, 60, 10, key="rb_ann_h")
+                with ac3:
+                    ar_ = st.slider("Rotation °", -180, 180, 0, key="rb_ann_rot")
+                    az_ = st.slider("Z-order", 1, 20, 10, key="rb_ann_z")
+
+                bc1, bc2, bc3 = st.columns(3)
+                with bc1:
+                    fill_c  = st.color_picker("Fill color",   "#FF000033" if ann_type in ("Rectangle","Circle","Ellipse","Highlight Box","Number Label") else "#FFFFFF", key="rb_ann_fc")
+                    border_c= st.color_picker("Border/text color", "#FF4060", key="rb_ann_bc")
+                with bc2:
+                    border_w = st.slider("Border width", 0.5, 8.0, 2.0, 0.25, key="rb_ann_bw")
+                    opacity  = st.slider("Opacity", 0.05, 1.0, 0.75, 0.05, key="rb_ann_op")
+                with bc3:
+                    font_sz  = st.slider("Font size", 8, 36, 14, key="rb_ann_fsz")
+                    font_fam = st.selectbox("Font", ["sans-serif","serif","monospace","Arial","Georgia"], key="rb_ann_ff")
+
+                ann_text = ""
+                if ann_type in ("Text", "Rectangle", "Circle", "Ellipse",
+                                "Highlight Box", "Number Label"):
+                    if ann_type == "Number Label":
+                        label_n = st.number_input("Number", 1, 99, 1, key="rb_ann_ln")
+                        ann_text = str(label_n)
+                    else:
+                        ann_text = st.text_input("Text label (optional)", "", key="rb_ann_txt")
+
+                x2_ = y2_ = None
+                curve_ = 0.3
+                if ann_type in ("Straight Arrow", "Curved Arrow"):
+                    ec1, ec2 = st.columns(2)
+                    with ec1:
+                        x2_ = st.slider("Arrow end X (%)", 0, 100, 60, key="rb_ann_x2")
+                        y2_ = st.slider("Arrow end Y (%)", 0, 100, 60, key="rb_ann_y2")
+                    with ec2:
+                        if ann_type == "Curved Arrow":
+                            curve_ = st.slider("Curvature", -1.0, 1.0, 0.3, 0.05, key="rb_ann_cv")
+
+                if st.button("➕ Add annotation", key="rb_ann_add"):
+                    new_ann = dict(
+                        type=ann_type, x=ax_, y=ay_, w=aw_, h=ah_,
+                        rotation=ar_, fill_color=fill_c, border_color=border_c,
+                        border_width=border_w, opacity=opacity, zorder=az_,
+                        font_size=font_sz, font=font_fam, text=ann_text,
+                    )
+                    if ann_type == "Number Label":
+                        new_ann["label_n"] = int(ann_text) if ann_text.isdigit() else 1
+                    if x2_ is not None:
+                        new_ann["x2"] = x2_; new_ann["y2"] = y2_
+                    if ann_type == "Curved Arrow":
+                        new_ann["curvature"] = curve_
+                    st.session_state["rb_annotations"][slot_idx].append(new_ann)
+                    st.rerun()
+
+            # Show existing annotations for this slot
+            anns = st.session_state["rb_annotations"][slot_idx]
+            if anns:
+                st.markdown(f"**{len(anns)} annotation(s) on this chart:**")
+                for ai, ann in enumerate(anns):
+                    with st.expander(f"#{ai+1} — {ann.get('type','?')} | {ann.get('text','')}", expanded=False):
+                        ec1, ec2 = st.columns([3,1])
+                        with ec1:
+                            st.write({k: v for k, v in ann.items() if k not in ("fill_color","border_color")})
+                        with ec2:
+                            if st.button("🗑️ Delete", key=f"rb_del_ann_{slot_idx}_{ai}"):
+                                st.session_state["rb_annotations"][slot_idx].pop(ai)
+                                st.rerun()
+
+            # Live preview with annotations
+            if st.button("👁️ Preview with annotations", key=f"rb_prev_ann_{slot_idx}"):
+                slot = st.session_state["rb_slots"][slot_idx]
+                from PIL import Image as _PILImage
+                import numpy as np
+                fig_p, ax_p = plt.subplots(figsize=(12, 7))
+                fig_p.patch.set_facecolor("#0E1117")
+                ax_p.set_facecolor("#0E1117")
+                ax_p.axis("off")
+                try:
+                    pil = _PILImage.open(io.BytesIO(slot["img_bytes"])).convert("RGBA")
+                    ax_p.imshow(np.array(pil), aspect="auto",
+                                extent=[0, 1, 0, 1],
+                                transform=ax_p.transAxes, zorder=1)
+                except Exception:
+                    pass
+                for ann in st.session_state["rb_annotations"][slot_idx]:
+                    try:
+                        _draw_annotation(ax_p, ann, 0, 0)
+                    except Exception:
+                        pass
+                st.image(_bytes(fig_p, dpi=150), use_container_width=True)
+                plt.close(fig_p)
+
+    # ── TAB 4: EXTRA IMAGES ───────────────────────────────────────────────
+    with tab_imgs:
+        st.markdown("#### 🖼️ Insert Additional Images")
+        st.caption("Add watermarks, logos, photos, or custom graphics onto the report.")
+
+        n_imgs = st.number_input("Number of extra images", 0, 8, 0, key="rb_nimgs")
+        extra_images = []
+        for ii in range(int(n_imgs)):
+            with st.expander(f"Image #{ii+1}", expanded=(ii==0)):
+                img_f = st.file_uploader(f"Upload image #{ii+1}", type=["png","jpg","jpeg"], key=f"rb_ei_{ii}")
+                if img_f:
+                    try:
+                        pil_ei = Image.open(img_f).convert("RGBA")
+                        ic1, ic2 = st.columns(2)
+                        with ic1:
+                            ei_x = st.slider(f"X (fig %)", 0.0, 1.0, 0.5, 0.01, key=f"rb_ei_x_{ii}")
+                            ei_y = st.slider(f"Y (fig %)", 0.0, 1.0, 0.5, 0.01, key=f"rb_ei_y_{ii}")
+                        with ic2:
+                            ei_zoom = st.slider(f"Size (zoom)", 0.05, 1.0, 0.25, 0.01, key=f"rb_ei_z_{ii}")
+                            ei_op   = st.slider(f"Opacity", 0.05, 1.0, 1.0, 0.05, key=f"rb_ei_op_{ii}")
+                        extra_images.append(dict(img=pil_ei, x=ei_x, y=ei_y,
+                                                 zoom=ei_zoom, opacity=ei_op))
+                        st.image(img_f, width=120)
+                    except Exception as e:
+                        st.error(f"Could not load image: {e}")
+
+        # Persist extra_images in session state for export tab
+        st.session_state["rb_extra_images"] = extra_images
+
+    # ── TAB 5: EXPORT ─────────────────────────────────────────────────────
+    with tab_export:
+        st.markdown("#### 💾 Export Report")
+
+        slots = st.session_state["rb_slots"]
+        if not slots:
+            st.info("Add at least one chart in the Charts tab before exporting.")
+        else:
+            ec1, ec2 = st.columns(2)
+            with ec1:
+                exp_dpi = st.slider("Export DPI", 72, 400, 200, 10, key="rb_exp_dpi")
+                exp_spacing = st.slider("Chart spacing", 0.0, 0.1, 0.02, 0.005, key="rb_exp_sp")
+            with ec2:
+                exp_fmt = st.multiselect("Export format(s)", ["PNG","PDF"], default=["PNG"], key="rb_exp_fmt")
+
+            if st.button("🔨 Build report", key="rb_build"):
+                with st.spinner("Building report..."):
+                    meta = dict(
+                        title    = st.session_state["rb_title"],
+                        subtitle = st.session_state["rb_subtitle"],
+                        scout    = st.session_state["rb_scout"],
+                        date     = st.session_state["rb_date"],
+                        match    = st.session_state["rb_match"],
+                        notes    = st.session_state["rb_notes"],
+                    )
+                    logos = dict(
+                        club  = st.session_state.get("rb_logo_club"),
+                        comp  = st.session_state.get("rb_logo_comp"),
+                        team  = st.session_state.get("rb_logo_team"),
+                        photo = st.session_state.get("rb_photo"),
+                    )
+                    extra_imgs = st.session_state.get("rb_extra_images", [])
+                    try:
+                        fig_report = build_report_figure(
+                            slots,
+                            st.session_state["rb_annotations"],
+                            extra_imgs,
+                            meta,
+                            logos,
+                            spacing=exp_spacing,
+                            report_dpi=exp_dpi,
+                        )
+                        st.session_state["rb_report_fig"] = fig_report
+                        st.success("Report built successfully!")
+                    except Exception as e:
+                        st.error(f"Build error: {e}")
+
+            if "rb_report_fig" in st.session_state:
+                fig_report = st.session_state["rb_report_fig"]
+                st.image(_bytes(fig_report, dpi=min(exp_dpi, 150)),
+                         use_container_width=True)
+
+                dl1, dl2 = st.columns(2)
+                with dl1:
+                    if "PNG" in exp_fmt:
+                        png_bytes = _bytes(fig_report, dpi=exp_dpi)
+                        st.download_button(
+                            "⬇️ Download PNG",
+                            png_bytes,
+                            file_name="scouting_report.png",
+                            mime="image/png",
+                            key="rb_dl_png",
+                        )
+                with dl2:
+                    if "PDF" in exp_fmt:
+                        pdf_bytes = _pdf(fig_report)
+                        st.download_button(
+                            "⬇️ Download PDF",
+                            pdf_bytes,
+                            file_name="scouting_report.pdf",
+                            mime="application/pdf",
+                            key="rb_dl_pdf",
+                        )
+
+                if st.button("🗑️ Clear report", key="rb_clear"):
+                    del st.session_state["rb_report_fig"]
+                    st.rerun()
+
     st.stop()
