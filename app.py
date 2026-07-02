@@ -8,7 +8,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.patheffects as pe
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.lines import Line2D
 from PIL import Image
@@ -52,7 +51,6 @@ if charts:
     defensive_actions_map = getattr(charts, "defensive_actions_map", None)
     THEMES = getattr(charts, "THEMES", {})
     make_pitch = getattr(charts, "make_pitch", None)
-    place_legend_outside_axes = getattr(charts, "place_legend_outside_axes", None)
 
 # 3. Safely unpack features from charts_extra.py
 if charts_extra:
@@ -467,70 +465,6 @@ def preview(fig, name):
     st.image(_bytes(fig, dpi=180), use_container_width=True)
     dl_row(fig, name)
 
-def count_rendered_pass_events(fig):
-    """
-    Count every arrow/marker actually queued for drawing across ALL axes of
-    a figure, regardless of which pass-map function produced it (matplotlib
-    pitch.arrows()/pitch.scatter() -> Quiver/PathCollection; the
-    ax.annotate()-based arrows used by opta_pass_map_pro -> Annotation
-    objects with an arrow_patch). Used to prove, on-screen, that the number
-    of rendered items matches the number of valid events -- not by eye.
-    """
-    arrows = 0
-    markers = 0
-    for ax in fig.axes:
-        for c in ax.collections:
-            tname = type(c).__name__
-            n = c.get_offsets().shape[0] if hasattr(c, "get_offsets") else 0
-            if tname == "Quiver":
-                arrows += n
-            elif tname == "PathCollection":
-                markers += n
-        for t in ax.texts:
-            if getattr(t, "arrow_patch", None) is not None:
-                arrows += 1
-    return arrows, markers
-
-def draw_event_index_labels(ax, df_valid, id_col="_row_id"):
-    """
-    Debug overlay: stamp each plotted event with its exact source-file row
-    number, directly at its (x, y) coordinate, on top of everything else.
-    Lets a person check the chart against the spreadsheet 1:1 -- if a
-    number is missing on the pitch, that specific row is the one to
-    investigate; if every expected number is present, the chart is
-    complete and any remaining doubt is about legibility, not data loss.
-    """
-    if id_col not in df_valid.columns:
-        return
-    for _, row in df_valid.iterrows():
-        try:
-            x, y = float(row["x"]), float(row["y"])
-        except (TypeError, ValueError):
-            continue
-        label = str(int(row[id_col])) if pd.notna(row[id_col]) else "?"
-        ax.annotate(
-            label, (x, y), fontsize=6.5, color="black", weight="bold",
-            ha="center", va="center", zorder=50, clip_on=False,
-            path_effects=[pe.withStroke(linewidth=2.2, foreground="white")],
-        )
-
-def pass_event_audit(fig, valid_count, attack_dir_arrow=False):
-    """
-    Show a live, always-visible check comparing the number of valid pass
-    events in the data to the number actually rendered on the chart. Any
-    mismatch is surfaced immediately instead of requiring visual inspection.
-    """
-    arrows, markers = count_rendered_pass_events(fig)
-    if attack_dir_arrow and arrows > 0:
-        arrows -= 1  # exclude the attacking-direction arrow, which isn't a pass
-    ok = (arrows == valid_count) and (markers == valid_count)
-    if ok:
-        st.caption(f"✅ Rendered {markers}/{valid_count} pass events (arrows: {arrows}/{valid_count}).")
-    else:
-        st.warning(f"⚠️ Rendered {markers}/{valid_count} markers and {arrows}/{valid_count} arrows -- "
-                   f"counts don't match the dataset. Click Generate again to rebuild the chart "
-                   f"(a stale chart from before a settings/data change can remain cached).")
-
 def load_img(f):
     if f is None: return None
     try: return Image.open(f).convert("RGBA")
@@ -545,25 +479,9 @@ def load_ev(f):
     return pd.read_excel(f)
 
 def ensure_outcome(df):
-    """
-    Guarantee an 'outcome' (success/fail) column exists before the shared
-    prepare_df_for_charts()/validate_and_clean() pipeline runs.
-
-    IMPORTANT: only 'result' is a legitimate stand-in for 'outcome' -- it's
-    a common alternate name for the same success/fail signal (and
-    validate_and_clean() has matching rename logic for it). Columns like
-    'event', 'type', or 'event_type' describe the EVENT CATEGORY (Pass,
-    Shot, Tackle, ...), not whether it succeeded. Treating them as outcome
-    used to copy category labels (e.g. "pass") into 'outcome', which then
-    fails validate_and_clean()'s `outcome.isin(PASS_ORDER)` /
-    `isin(SHOT_ORDER)` checks and silently drops every pass/shot event from
-    every chart that consumes this dataframe -- even when a correct
-    'result' column was present elsewhere in the file.
-    """
-    if "outcome" in df.columns:
-        return df
+    if "outcome" in df.columns: return df
     for c in df.columns:
-        if c.lower().strip() == "result":
+        if c.lower().strip() in ["event","result","type","event_type"]:
             df = df.copy(); df["outcome"] = df[c]; return df
     df = df.copy(); df["outcome"] = "unknown"; return df
 
@@ -662,34 +580,33 @@ def legend_controls_full(prefix, all_items, default_active=None):
         with c5:
             ncol = st.number_input("Columns", 1, 8, min(4, max(1, len(all_items))), key=f"{prefix}_leg_ncol")
         markerscale = st.slider("Marker scale", 0.5, 3.0, 1.0, 0.1, key=f"{prefix}_leg_ms")
+        # ── Extended legend controls ──────────────────────────────────────────
+        st.markdown("**Extended style**")
+        c6, c7 = st.columns(2)
+        with c6:
+            font_color = st.color_picker("Font color", "#FFFFFF", key=f"{prefix}_leg_fc")
+            bg_color   = st.color_picker("Background", "#00000000" if True else "#111111",
+                                          key=f"{prefix}_leg_bg")
+        with c7:
+            opacity    = st.slider("Opacity", 0.0, 1.0, 1.0, 0.05, key=f"{prefix}_leg_op")
+            labelspacing = st.slider("Row spacing", 0.1, 2.0, 0.5, 0.1, key=f"{prefix}_leg_ls")
+        border_color = st.color_picker("Border color", "#333333", key=f"{prefix}_leg_bc")
+        border_lw    = st.slider("Border width", 0.0, 3.0, 0.0, 0.25, key=f"{prefix}_leg_blw")
     return dict(show=show, active=active, pos=pos, fontsize=fs,
                 title=title_txt or None, frame=frame, ncol=int(ncol),
-                markerscale=markerscale)
+                markerscale=markerscale,
+                font_color=font_color, bg_color=bg_color,
+                opacity=opacity, labelspacing=labelspacing,
+                border_color=border_color, border_lw=border_lw)
 
 def apply_legend_style(ax, legend_cfg, theme):
     """
-    Pull handles from the chart's existing legend (set by chart internals),
+    Pull handles from the axis legend (set by chart internals),
     filter by active items, then re-render with user-chosen style.
-
-    Chart functions (pass_map/shot_map/defensive_actions_map, and
-    draw_custom_legend in charts_pro.py) now attach their legend via
-    fig.legend(...) rather than ax.legend(...), so it survives later
-    axes-aspect adjustments (e.g. from draw_attack_direction expanding
-    ylim) without silently relocating. Look for it in both places for
-    backward compatibility, and re-place using the same aspect-safe helper
-    so this second styling pass can never reintroduce the old top/bottom
-    flip or chart-overlap bug.
     """
     active = legend_cfg.get("active", [])
-    # Prefer a figure-level legend (new, stable placement) if present,
-    # otherwise fall back to a legend attached directly to the axes.
-    existing_leg = None
-    fig = ax.figure
-    if getattr(fig, "legends", None):
-        existing_leg = fig.legends[-1]
-    if existing_leg is None:
-        existing_leg = ax.get_legend()
-
+    # Prefer handles already stored in the axis legend
+    existing_leg = ax.get_legend()
     if existing_leg is not None:
         handles = list(existing_leg.legend_handles)
         labels  = [txt.get_text() for txt in existing_leg.get_texts()]
@@ -709,32 +626,13 @@ def apply_legend_style(ax, legend_cfg, theme):
         return
 
     hs, ls = zip(*pairs)
-    for h, l in zip(hs, ls):
-        h.set_label(l)
-
-    _place = globals().get("place_legend_outside_axes")
-    if _place is not None:
-        _place(
-            ax, list(hs), theme,
-            loc=legend_cfg.get("pos", "lower center"),
-            legend_cfg={
-                "show": True,
-                "title": legend_cfg.get("title"),
-                "fontsize": legend_cfg.get("fontsize", 9),
-                "frame": legend_cfg.get("frame", False),
-                "ncol": int(legend_cfg.get("ncol") or min(4, len(hs))),
-                "markerscale": float(legend_cfg.get("markerscale", 1.0)),
-            },
-        )
-        return
-
-    # Fallback if charts.place_legend_outside_axes couldn't be imported.
     pos = legend_cfg.get("pos", "lower center")
     bbox = None
     if "upper" in pos and "center" in pos:
         bbox = (0.5, 0.98)
     elif "lower" in pos and "center" in pos:
         bbox = (0.5, 0.02)
+
     leg = ax.legend(list(hs), list(ls),
         loc=pos,
         fontsize=legend_cfg.get("fontsize", 9),
@@ -742,12 +640,395 @@ def apply_legend_style(ax, legend_cfg, theme):
         frameon=legend_cfg.get("frame", False),
         bbox_to_anchor=bbox,
         ncol=int(legend_cfg.get("ncol") or min(4, len(hs))),
-        markerscale=float(legend_cfg.get("markerscale", 1.0)))
+        markerscale=float(legend_cfg.get("markerscale", 1.0)),
+        labelspacing=float(legend_cfg.get("labelspacing", 0.5)))
     leg.set_in_layout(True)
+    fc = legend_cfg.get("font_color") or theme.get("text", "white")
     for txt in leg.get_texts():
-        txt.set_color(theme.get("text", "white"))
+        txt.set_color(fc)
     if leg.get_title():
-        leg.get_title().set_color(theme.get("muted","#888888"))
+        leg.get_title().set_color(legend_cfg.get("font_color") or theme.get("muted","#888888"))
+    # Background / border / opacity
+    frame_patch = leg.get_frame()
+    if frame_patch is not None:
+        bg_col = legend_cfg.get("bg_color", None)
+        if bg_col:
+            try:
+                frame_patch.set_facecolor(bg_col)
+            except Exception:
+                pass
+        blw = float(legend_cfg.get("border_lw", 0.0))
+        bc  = legend_cfg.get("border_color", "#333333")
+        frame_patch.set_linewidth(blw)
+        if blw > 0:
+            frame_patch.set_edgecolor(bc)
+    op = float(legend_cfg.get("opacity", 1.0))
+    leg.set_alpha(op)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ADVANCED CUSTOMIZATION SYSTEM
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Feature flags: which control groups are relevant for a given chart type.
+# Charts call advanced_customization_controls(prefix, features=[...]) to get
+# only the panels they need.  Everything not in `features` is silently omitted.
+_ADV_FEATURES_ALL = ["pitch","figure","markers","arrows","lines","text","title"]
+
+def advanced_customization_controls(prefix, features=None, theme=None):
+    """
+    Render professional-level customization expanders in the current column/
+    sidebar context.  Returns an adv_cfg dict consumed by apply_advanced_customization().
+
+    Parameters
+    ----------
+    prefix   : unique string key prefix (to avoid widget key collisions)
+    features : list of feature groups to show; None = all groups.
+               Valid values: "pitch", "figure", "markers", "arrows",
+                             "lines", "text", "title"
+    theme    : current theme dict (used as defaults for colors)
+    """
+    if features is None:
+        features = _ADV_FEATURES_ALL
+    features = set(features)
+    theme = theme or {}
+
+    cfg = {}
+
+    # ── PITCH ─────────────────────────────────────────────────────────────────
+    if "pitch" in features:
+        with st.expander("🟩 Pitch Customization", expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                pitch_color = st.color_picker("Pitch color",
+                    theme.get("pitch", "#1f5f3b"), key=f"{prefix}_adv_pc")
+                line_color  = st.color_picker("Line color",
+                    theme.get("pitch_lines", "#E6E6E6"), key=f"{prefix}_adv_lc")
+                goal_color  = st.color_picker("Goal color",
+                    theme.get("goal", "#E6E6E6"), key=f"{prefix}_adv_gc")
+            with c2:
+                line_width  = st.slider("Line width", 0.5, 4.0, 1.5, 0.1,
+                    key=f"{prefix}_adv_lw")
+                pitch_pad   = st.slider("Pitch padding", 0.0, 10.0, 2.0, 0.5,
+                    key=f"{prefix}_adv_pp")
+
+            # Stripes
+            stripe_on = st.checkbox("Show stripes", False, key=f"{prefix}_adv_st")
+            if stripe_on:
+                cs1, cs2, cs3 = st.columns(3)
+                with cs1:
+                    stripe_color = st.color_picker("Stripe color",
+                        theme.get("pitch_stripe", "#1a5c38"), key=f"{prefix}_adv_sc")
+                with cs2:
+                    stripe_alpha = st.slider("Stripe alpha", 0.0, 1.0, 0.35, 0.05,
+                        key=f"{prefix}_adv_sa")
+                with cs3:
+                    stripe_color2 = st.color_picker("Alt stripe color",
+                        pitch_color, key=f"{prefix}_adv_sc2")
+            else:
+                stripe_color = None; stripe_alpha = 0.35; stripe_color2 = None
+
+            st.markdown("**Show/hide pitch elements**")
+            el1, el2, el3 = st.columns(3)
+            with el1:
+                show_center_circle = st.checkbox("Centre circle", True, key=f"{prefix}_adv_cc")
+                show_penalty       = st.checkbox("Penalty areas", True, key=f"{prefix}_adv_pa")
+            with el2:
+                show_six_yard      = st.checkbox("Six-yard box", True, key=f"{prefix}_adv_sy")
+                show_corner_arcs   = st.checkbox("Corner arcs", True, key=f"{prefix}_adv_ca")
+            with el3:
+                show_halfway       = st.checkbox("Halfway line", True, key=f"{prefix}_adv_hl")
+
+        cfg["pitch"] = dict(
+            pitch_color=pitch_color, line_color=line_color, goal_color=goal_color,
+            line_width=line_width, pitch_pad=pitch_pad,
+            stripe=stripe_on, stripe_color=stripe_color,
+            stripe_alpha=stripe_alpha, stripe_color2=stripe_color2,
+            show_center_circle=show_center_circle, show_penalty=show_penalty,
+            show_six_yard=show_six_yard, show_corner_arcs=show_corner_arcs,
+            show_halfway=show_halfway,
+        )
+
+    # ── FIGURE ────────────────────────────────────────────────────────────────
+    if "figure" in features:
+        with st.expander("📐 Figure Settings", expanded=False):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                fig_w   = st.slider("Width (in)", 6.0, 24.0, 12.0, 0.5, key=f"{prefix}_adv_fw")
+                fig_dpi = st.slider("DPI", 72, 400, 180, 10, key=f"{prefix}_adv_dpi")
+            with c2:
+                fig_h   = st.slider("Height (in)", 4.0, 18.0, 8.0, 0.5, key=f"{prefix}_adv_fh")
+                fig_bg  = st.color_picker("Background",
+                    theme.get("bg", "#0E1117"), key=f"{prefix}_adv_fbg")
+            with c3:
+                transparent = st.checkbox("Transparent bg", False, key=f"{prefix}_adv_tr")
+
+            st.markdown("**Margins (fraction 0–0.3)**")
+            m1, m2, m3, m4 = st.columns(4)
+            with m1: mg_l = st.slider("Left",   0.0, 0.3, 0.05, 0.01, key=f"{prefix}_adv_ml")
+            with m2: mg_r = st.slider("Right",  0.0, 0.3, 0.05, 0.01, key=f"{prefix}_adv_mr")
+            with m3: mg_t = st.slider("Top",    0.0, 0.3, 0.05, 0.01, key=f"{prefix}_adv_mt")
+            with m4: mg_b = st.slider("Bottom", 0.0, 0.3, 0.05, 0.01, key=f"{prefix}_adv_mb")
+
+            pad_inches = st.slider("Export pad (in)", 0.0, 0.5, 0.18, 0.02,
+                key=f"{prefix}_adv_pad")
+
+        cfg["figure"] = dict(
+            width=fig_w, height=fig_h, dpi=fig_dpi,
+            bg=fig_bg, transparent=transparent,
+            margin_left=mg_l, margin_right=mg_r,
+            margin_top=mg_t, margin_bottom=mg_b,
+            pad_inches=pad_inches,
+        )
+
+    # ── MARKERS ───────────────────────────────────────────────────────────────
+    if "markers" in features:
+        with st.expander("🔵 Marker Style", expanded=False):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                mk_size   = st.slider("Size", 10, 600, 120, 5, key=f"{prefix}_adv_mksz")
+                mk_alpha  = st.slider("Alpha", 0.1, 1.0, 0.92, 0.02, key=f"{prefix}_adv_mkal")
+            with c2:
+                mk_fill   = st.color_picker("Fill color", "#00C2FF", key=f"{prefix}_adv_mkfc")
+                mk_edge   = st.color_picker("Edge color", "#FFFFFF", key=f"{prefix}_adv_mkec")
+            with c3:
+                mk_ew     = st.slider("Edge width", 0.0, 4.0, 1.2, 0.1, key=f"{prefix}_adv_mkew")
+                mk_zorder = st.slider("Z-order", 1, 10, 5, 1, key=f"{prefix}_adv_mkzo")
+            mk_shape = st.selectbox("Default shape", MKL, index=MKL.index("Circle"),
+                key=f"{prefix}_adv_mksh")
+        cfg["markers"] = dict(
+            size=mk_size, alpha=mk_alpha,
+            fill=mk_fill, edge=mk_edge,
+            edge_width=mk_ew, zorder=mk_zorder,
+            shape=MARKER_OPTS[mk_shape],
+        )
+
+    # ── ARROWS ────────────────────────────────────────────────────────────────
+    if "arrows" in features:
+        with st.expander("➡️ Arrow Style", expanded=False):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                arr_w      = st.slider("Width", 0.5, 6.0, 2.0, 0.1, key=f"{prefix}_adv_arw")
+                arr_alpha  = st.slider("Alpha", 0.1, 1.0, 0.85, 0.05, key=f"{prefix}_adv_aral")
+            with c2:
+                arr_color  = st.color_picker("Color", "#FFFFFF", key=f"{prefix}_adv_arc")
+                arr_hsize  = st.slider("Head size", 0.1, 1.5, 0.5, 0.05, key=f"{prefix}_adv_arhs")
+            with c3:
+                arr_hw     = st.slider("Head width", 0.1, 2.0, 0.8, 0.05, key=f"{prefix}_adv_arhw")
+                arr_zorder = st.slider("Z-order", 1, 10, 4, 1, key=f"{prefix}_adv_arzo")
+            arr_style  = st.selectbox("Line style",
+                ["solid","dashed","dotted","dashdot"],
+                key=f"{prefix}_adv_arls")
+            arr_curve  = st.slider("Curvature (-1 to 1)", -1.0, 1.0, 0.0, 0.05,
+                key=f"{prefix}_adv_arcv")
+        cfg["arrows"] = dict(
+            width=arr_w, alpha=arr_alpha, color=arr_color,
+            head_size=arr_hsize, head_width=arr_hw,
+            linestyle=arr_style, curvature=arr_curve, zorder=arr_zorder,
+        )
+
+    # ── LINES ─────────────────────────────────────────────────────────────────
+    if "lines" in features:
+        with st.expander("📏 Line Style", expanded=False):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                ln_w     = st.slider("Width", 0.5, 5.0, 1.5, 0.1, key=f"{prefix}_adv_lnw")
+            with c2:
+                ln_color = st.color_picker("Color", "#FFFFFF", key=f"{prefix}_adv_lnc")
+            with c3:
+                ln_alpha = st.slider("Alpha", 0.1, 1.0, 0.9, 0.05, key=f"{prefix}_adv_lnal")
+            ln_style = st.selectbox("Style", ["solid","dashed","dotted","dashdot"],
+                key=f"{prefix}_adv_lnst")
+        cfg["lines"] = dict(
+            width=ln_w, color=ln_color,
+            alpha=ln_alpha, style=ln_style,
+        )
+
+    # ── TEXT ──────────────────────────────────────────────────────────────────
+    if "text" in features:
+        with st.expander("🔤 Text Style", expanded=False):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                tx_family  = st.selectbox("Font family",
+                    ["sans-serif","serif","monospace","DejaVu Sans","Arial","Georgia"],
+                    key=f"{prefix}_adv_txfm")
+                tx_size    = st.slider("Font size", 7, 24, 11, 1, key=f"{prefix}_adv_txsz")
+            with c2:
+                tx_weight  = st.selectbox("Weight", ["normal","bold","light","semibold"],
+                    key=f"{prefix}_adv_txwt")
+                tx_color   = st.color_picker("Color",
+                    theme.get("text", "#FFFFFF"), key=f"{prefix}_adv_txc")
+            with c3:
+                tx_alpha   = st.slider("Opacity", 0.1, 1.0, 1.0, 0.05, key=f"{prefix}_adv_txal")
+                tx_align   = st.selectbox("Alignment", ["left","center","right"],
+                    key=f"{prefix}_adv_txali")
+            tx_outline   = st.checkbox("Outline", False, key=f"{prefix}_adv_txol")
+            tx_ol_width  = st.slider("Outline width", 0.5, 5.0, 2.0, 0.25,
+                key=f"{prefix}_adv_txolw") if tx_outline else 0.0
+        cfg["text"] = dict(
+            family=tx_family, size=tx_size, weight=tx_weight,
+            color=tx_color, alpha=tx_alpha, align=tx_align,
+            outline=tx_outline, outline_width=tx_ol_width,
+        )
+
+    # ── TITLE ─────────────────────────────────────────────────────────────────
+    if "title" in features:
+        with st.expander("🏷️ Title Style", expanded=False):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                ti_size   = st.slider("Font size", 10, 36, 16, 1, key=f"{prefix}_adv_tisz")
+                ti_weight = st.selectbox("Weight", ["bold","normal","light"],
+                    key=f"{prefix}_adv_tiwt")
+            with c2:
+                ti_color  = st.color_picker("Color",
+                    theme.get("text", "#FFFFFF"), key=f"{prefix}_adv_tic")
+                ti_pad    = st.slider("Padding", 0.0, 30.0, 8.0, 1.0,
+                    key=f"{prefix}_adv_tipd")
+            with c3:
+                ti_loc    = st.selectbox("Alignment", ["left","center","right"],
+                    key=f"{prefix}_adv_tiloc")
+                ti_y      = st.slider("Y position", 0.85, 1.05, 1.0, 0.01,
+                    key=f"{prefix}_adv_tiy")
+        cfg["title"] = dict(
+            size=ti_size, weight=ti_weight, color=ti_color,
+            pad=ti_pad, loc=ti_loc, y=ti_y,
+        )
+
+    return cfg
+
+
+def apply_advanced_customization(fig, adv_cfg, theme=None):
+    """
+    Post-process a matplotlib figure with advanced customization settings.
+    Safe to call with an empty or partial adv_cfg — only keys present are applied.
+    Does NOT touch chart internals (pitch drawing, data plotting).
+    """
+    if not adv_cfg:
+        return
+    theme = theme or {}
+
+    # ── Figure settings ───────────────────────────────────────────────────────
+    fc = adv_cfg.get("figure")
+    if fc:
+        try:
+            w = fc.get("width"); h = fc.get("height")
+            if w and h:
+                fig.set_size_inches(w, h)
+            dpi = fc.get("dpi")
+            if dpi:
+                fig.set_dpi(dpi)
+            bg = fc.get("bg")
+            if bg:
+                fig.patch.set_facecolor(bg)
+            if fc.get("transparent"):
+                fig.patch.set_alpha(0.0)
+            # Apply margins if any were changed from defaults
+            ml = fc.get("margin_left", 0.05)
+            mr = fc.get("margin_right", 0.05)
+            mt = fc.get("margin_top", 0.05)
+            mb = fc.get("margin_bottom", 0.05)
+            # Only adjust if user changed from defaults
+            try:
+                fig.subplots_adjust(left=ml, right=1-mr, top=1-mt, bottom=mb)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    # ── Pitch color overrides (applied to axes backgrounds) ──────────────────
+    pc = adv_cfg.get("pitch")
+    if pc:
+        try:
+            for ax in fig.axes:
+                ax.set_facecolor(pc.get("pitch_color", ax.get_facecolor()))
+                # Recolor all existing lines on the pitch
+                lc = pc.get("line_color")
+                lw = pc.get("line_width")
+                if lc or lw:
+                    for line in ax.get_lines():
+                        if lc:
+                            try: line.set_color(lc)
+                            except Exception: pass
+                        if lw:
+                            try: line.set_linewidth(lw)
+                            except Exception: pass
+        except Exception:
+            pass
+
+    # ── Title style ───────────────────────────────────────────────────────────
+    tc = adv_cfg.get("title")
+    if tc:
+        try:
+            for ax in fig.axes:
+                t = ax.title
+                if t.get_text():
+                    if tc.get("color"): t.set_color(tc["color"])
+                    if tc.get("size"):  t.set_fontsize(tc["size"])
+                    if tc.get("weight"): t.set_fontweight(tc["weight"])
+                    if tc.get("pad") is not None: t.set_position((0.5, 1.0))
+        except Exception:
+            pass
+
+    # ── Text style (axis labels, tick labels) ─────────────────────────────────
+    txc = adv_cfg.get("text")
+    if txc:
+        import matplotlib.patheffects as pe
+        effects = []
+        if txc.get("outline") and txc.get("outline_width", 0) > 0:
+            effects = [pe.withStroke(linewidth=txc["outline_width"], foreground="black")]
+        try:
+            for ax in fig.axes:
+                for txt in ax.texts:
+                    try:
+                        if txc.get("color"): txt.set_color(txc["color"])
+                        if txc.get("alpha") is not None: txt.set_alpha(txc["alpha"])
+                        if txc.get("family"): txt.set_fontfamily(txc["family"])
+                        if effects: txt.set_path_effects(effects)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+
+def pitch_kw_from_adv(adv_cfg, theme):
+    """
+    Extract pitch-related kwargs from adv_cfg to pass to make_pitch / mplsoccer Pitch.
+    Returns a dict of theme overrides.
+    """
+    pc = adv_cfg.get("pitch", {}) if adv_cfg else {}
+    overrides = {}
+    if pc.get("pitch_color"):
+        overrides["pitch"] = pc["pitch_color"]
+    if pc.get("line_color"):
+        overrides["pitch_lines"] = pc["line_color"]
+    if pc.get("stripe") and pc.get("stripe_color"):
+        overrides["pitch_stripe"] = pc["stripe_color"]
+    elif not pc.get("stripe"):
+        overrides["pitch_stripe"] = None
+    # Merge overrides into a copy of theme
+    merged = {**theme, **overrides}
+    return merged
+
+
+def apply_figure_adv(fig, adv_cfg):
+    """Apply only figure-level settings (size, DPI, bg, margins). Safe wrapper."""
+    fc = (adv_cfg or {}).get("figure")
+    if not fc:
+        return
+    try:
+        w = fc.get("width"); h = fc.get("height")
+        if w and h:
+            fig.set_size_inches(w, h)
+        dpi = fc.get("dpi")
+        if dpi:
+            fig.set_dpi(dpi)
+        bg = fc.get("bg")
+        if bg and not fc.get("transparent"):
+            fig.patch.set_facecolor(bg)
+        if fc.get("transparent"):
+            fig.patch.set_alpha(0.0)
+    except Exception:
+        pass
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # IMAGE OVERLAY CONTROLS
@@ -878,19 +1159,21 @@ def ev_sidebar(prefix):
         pm   = "rect" if ps == "Rectangular" else "square"
         pw   = st.slider("Pitch width", 50.0, 80.0, 68.0, 1.0,
                          key=f"{prefix}_pw") if pm == "rect" else 100.0
+        st.markdown('<div class="divd"></div>', unsafe_allow_html=True)
+        st.markdown("### 🔧 Advanced Customization")
+        current_theme = THEMES.get(tn, {})
+        adv_cfg = advanced_customization_controls(
+            prefix=f"{prefix}_adv",
+            features=["pitch", "figure", "markers", "arrows", "lines", "text", "title"],
+            theme=current_theme,
+        )
 
     S = dict(tn=tn, ad="ltr" if "Left" in adir else "rtl",
-             fy=fy, pm=pm, pw=pw)
+             fy=fy, pm=pm, pw=pw, adv=adv_cfg)
     if f is None:
         return None, S
     try:
         raw = load_ev(f)
-        # Stable identifier matching the row number as it appears in the
-        # source file (header = row 1, so first data row = row 2). Carried
-        # through the whole pipeline so a debug overlay can label each
-        # rendered marker with the exact source row for 1:1 verification.
-        raw = raw.reset_index(drop=True)
-        raw["_row_id"] = range(2, len(raw) + 2)
         raw = ensure_outcome(raw)
         df  = prepare_df_for_charts(raw, attack_direction=S["ad"],
                                     flip_y=S["fy"], pitch_mode=S["pm"],
@@ -1208,6 +1491,9 @@ if section == "🎯 Pro Shot Map":
                         other_override=oth_ov or None,
                         minutes_played=float(min_pl) if min_pl else None,
                     )
+                adv = S.get("adv", {})
+                apply_advanced_customization(fig, adv, theme)
+                apply_figure_adv(fig, adv)
                 st.session_state["psm_fig"] = fig
             except Exception as e:
                 st.error(f"Error: {e}")
@@ -1284,26 +1570,26 @@ if section == "📨 Pro Pass Map":
     with R:
         if gen:
             try:
+                adv = S.get("adv", {})
+                arr_cfg = adv.get("arrows", {})
                 fig = opta_pass_map_pro(
                     df, cfg=cfg,
                     successful_color=succ_col,
                     unsuccessful_color=unsucc_col,
-                    arrow_alpha=arrow_alpha,
-                    arrow_width=arrow_w,
+                    arrow_alpha=arr_cfg.get("alpha", arrow_alpha),
+                    arrow_width=arr_cfg.get("width", arrow_w),
                     pitch_mode=S["pm"], pitch_width=S["pw"],
                     successful_override=succ_ov or None,
                     unsuccessful_override=un_ov  or None,
                     accuracy_override=acc_ov    or None,
                 )
+                apply_advanced_customization(fig, adv, THEMES.get(cfg["theme_name"], {}))
+                apply_figure_adv(fig, adv)
                 st.session_state["ppm_fig"] = fig
-                st.session_state["ppm_valid_n"] = int((df["event_type"]=="pass").sum())
             except Exception as e:
                 st.error(f"Error: {e}")
         if "ppm_fig" in st.session_state:
             preview(st.session_state["ppm_fig"], "opta_pass_map")
-            pass_event_audit(st.session_state["ppm_fig"],
-                              st.session_state.get("ppm_valid_n", 0),
-                              attack_dir_arrow=cfg.get("show_attack_dir", True))
         else:
             empty("📨","Configure and generate","Replica of the Opta Analyst pass map style")
     st.stop()
@@ -1346,7 +1632,8 @@ if section == "⚔️ Attacking Charts":
                 st.markdown('</div>', unsafe_allow_html=True)
             with R:
                 if gen:
-                    theme = THEMES[S["tn"]]
+                    adv = S.get("adv", {})
+                    theme = {**THEMES[S["tn"]], **pitch_kw_from_adv(adv, THEMES[S["tn"]])}
                     sc_f  = {k:v for k,v in sc.items()   if k in leg_cfg["active"]}
                     sm_f  = {k:v for k,v in sm_m.items() if k in leg_cfg["active"]}
                     fig = shot_map(df, shot_colors=sc_f, shot_markers=sm_f,
@@ -1354,12 +1641,19 @@ if section == "⚔️ Attacking Charts":
                                    show_xg=show_xg, theme_name=S["tn"],
                                    legend_cfg=leg_cfg)
                     ax = fig.axes[0]
-                    ax.set_title(t, color=theme["text"], fontsize=16, weight="bold")
+                    tc_cfg = adv.get("title", {})
+                    ax.set_title(t,
+                        color=tc_cfg.get("color", theme["text"]),
+                        fontsize=tc_cfg.get("size", 16),
+                        fontweight=tc_cfg.get("weight", "bold"),
+                        loc=tc_cfg.get("loc", "center"))
                     draw_attack_direction(ax, cfg_sm, theme, S["pm"], S["pw"])
                     apply_legend_style(ax, leg_cfg, theme)
                     if blocks:
                         draw_stat_blocks_bottom(fig, blocks, theme, y=0.02)
                     apply_overlay(fig, ov)
+                    apply_advanced_customization(fig, adv, theme)
+                    apply_figure_adv(fig, adv)
                     st.session_state["atk_sm"] = fig
                 if "atk_sm" in st.session_state:
                     preview(st.session_state["atk_sm"], "shot_map")
@@ -1455,23 +1749,40 @@ if section == "⚔️ Attacking Charts":
                 st.markdown('</div>',unsafe_allow_html=True)
             with R:
                 if gen:
+                    adv = S.get("adv", {})
                     theme = THEMES[S["tn"]]
+                    mk_cfg = adv.get("markers", {})
+                    effective_size  = mk_cfg.get("size", tm_s)
+                    effective_alpha = mk_cfg.get("alpha", tm_a)
+                    effective_fill  = mk_cfg.get("fill", tm_c)
+                    effective_edge  = mk_cfg.get("edge", tm_e)
                     if tm_v:
                         fig,ax,vp = make_full_vertical_pitch(S["pm"],S["pw"],theme)
                         d2 = df.dropna(subset=["x","y"])
-                        vp.scatter(d2["x"],d2["y"],ax=ax,s=tm_s,
-                                   marker=MARKER_OPTS[tm_ml],color=tm_c,
-                                   edgecolors=tm_e,linewidth=2,alpha=tm_a,zorder=5)
-                        ax.set_title(tm_t,color=theme["text"],fontsize=16,weight="bold")
+                        vp.scatter(d2["x"],d2["y"],ax=ax,s=effective_size,
+                                   marker=MARKER_OPTS[tm_ml],color=effective_fill,
+                                   edgecolors=effective_edge,
+                                   linewidth=mk_cfg.get("edge_width",2),
+                                   alpha=effective_alpha,
+                                   zorder=mk_cfg.get("zorder",5))
+                        tc_c = adv.get("title",{}).get("color", theme["text"])
+                        ax.set_title(tm_t,color=tc_c,fontsize=adv.get("title",{}).get("size",16),
+                                     fontweight=adv.get("title",{}).get("weight","bold"))
                     else:
                         fig = touch_map(df,pitch_mode=S["pm"],pitch_width=S["pw"],
-                                        theme_name=S["tn"],dot_color=tm_c,edge_color=tm_e,
-                                        dot_size=tm_s,alpha=tm_a,marker=MARKER_OPTS[tm_ml],
+                                        theme_name=S["tn"],dot_color=effective_fill,
+                                        edge_color=effective_edge,
+                                        dot_size=effective_size,alpha=effective_alpha,
+                                        marker=MARKER_OPTS[tm_ml],
                                         legend_cfg=leg_cfg)
                         ax = fig.axes[0]
-                        ax.set_title(tm_t,color=theme["text"],fontsize=16,weight="bold")
+                        tc_c = adv.get("title",{}).get("color", theme["text"])
+                        ax.set_title(tm_t,color=tc_c,fontsize=adv.get("title",{}).get("size",16),
+                                     fontweight=adv.get("title",{}).get("weight","bold"))
                         draw_attack_direction(ax,cfg_tm,theme,S["pm"],S["pw"],tm_v)
                     apply_overlay(fig,ov)
+                    apply_advanced_customization(fig, adv, theme)
+                    apply_figure_adv(fig, adv)
                     st.session_state["atk_tm"] = fig
                 if "atk_tm" in st.session_state:
                     preview(st.session_state["atk_tm"],"touch_map")
@@ -1630,6 +1941,7 @@ if section == "🛡️ Defensive Charts":
                 st.markdown('</div>',unsafe_allow_html=True)
             with R:
                 if gen:
+                    adv = S.get("adv", {})
                     theme=THEMES[S["tn"]]
                     dc_f={k:v for k,v in dc.items() if k in leg_cfg["active"]}
                     dm_f={k:v for k,v in dm.items() if k in leg_cfg["active"]}
@@ -1638,11 +1950,17 @@ if section == "🛡️ Defensive Charts":
                                               theme_name=S["tn"],
                                               legend_cfg=leg_cfg)
                     ax=fig.axes[0]
-                    ax.set_title(t,color=theme["text"],fontsize=16,weight="bold")
+                    tc_cfg = adv.get("title", {})
+                    ax.set_title(t,
+                        color=tc_cfg.get("color", theme["text"]),
+                        fontsize=tc_cfg.get("size", 16),
+                        fontweight=tc_cfg.get("weight", "bold"))
                     draw_attack_direction(ax,cfg_da,theme,S["pm"],S["pw"],dv)
                     apply_legend_style(ax,leg_cfg,theme)
                     if blocks: draw_stat_blocks_bottom(fig,blocks,theme,y=0.02)
                     apply_overlay(fig,ov)
+                    apply_advanced_customization(fig, adv, theme)
+                    apply_figure_adv(fig, adv)
                     st.session_state["def_da"]=fig
                 if "def_da" in st.session_state: preview(st.session_state["def_da"],"defensive_actions")
                 else: empty("🛡️","Configure and generate")
@@ -1800,13 +2118,13 @@ if section == "🔄 Distribution Charts":
                 cfg_pm["attack_dir"]=S["ad"]
                 cfg_pm["attack_dir_color"]=st.color_picker("Arrow color","#888888",key="pm_adc")
                 dv=st.checkbox("Vertical",False,key="pm_v2")
-                show_idx=st.checkbox("🔍 Debug: label each pass with its source row #",False,key="pm_dbgidx")
                 blocks=stat_blocks_ui("pm")
                 ov=img_overlay_controls("pm_ov")
                 gen=st.button("Generate",key="pm_gen")
                 st.markdown('</div>',unsafe_allow_html=True)
             with R:
                 if gen:
+                    adv = S.get("adv", {})
                     theme=THEMES[S["tn"]]
                     al=leg_cfg["active"]
                     pc_f={k:v for k,v in pc.items() if k in al}
@@ -1817,25 +2135,20 @@ if section == "🔄 Distribution Charts":
                                   result_scope=ps,min_packing=ppk,
                                   legend_cfg=leg_cfg)
                     ax=fig.axes[0]
-                    ax.set_title(t,color=theme["text"],fontsize=16,weight="bold")
+                    tc_cfg = adv.get("title", {})
+                    ax.set_title(t,
+                        color=tc_cfg.get("color", theme["text"]),
+                        fontsize=tc_cfg.get("size", 16),
+                        fontweight=tc_cfg.get("weight", "bold"),
+                        loc=tc_cfg.get("loc", "center"))
                     draw_attack_direction(ax,cfg_pm,theme,S["pm"],S["pw"],dv)
                     apply_legend_style(ax,leg_cfg,theme)
-                    # Ground truth: how many pass events SHOULD render given the
-                    # chosen Pass view / Result scope / min packing filters.
-                    _valid = charts._filter_passes_for_map(
-                        df[df["event_type"]=="pass"], pass_view=pv,
-                        result_scope=ps, min_packing=ppk)
-                    if show_idx:
-                        draw_event_index_labels(ax, _valid)
                     if blocks: draw_stat_blocks_bottom(fig,blocks,theme,y=0.02)
                     apply_overlay(fig,ov)
+                    apply_advanced_customization(fig, adv, theme)
+                    apply_figure_adv(fig, adv)
                     st.session_state["dist_pm"]=fig
-                    st.session_state["dist_pm_valid_n"] = len(_valid)
-                if "dist_pm" in st.session_state:
-                    preview(st.session_state["dist_pm"],"pass_map")
-                    pass_event_audit(st.session_state["dist_pm"],
-                                      st.session_state.get("dist_pm_valid_n", 0),
-                                      attack_dir_arrow=cfg_pm.get("show_attack_dir", True))
+                if "dist_pm" in st.session_state: preview(st.session_state["dist_pm"],"pass_map")
                 else: empty("➡️","Configure and generate")
 
     with tabs[1]:
@@ -1857,14 +2170,19 @@ if section == "🔄 Distribution Charts":
                 st.markdown('</div>',unsafe_allow_html=True)
             with R:
                 if gen:
+                    adv = S.get("adv", {})
                     theme=THEMES[S["tn"]]
+                    arr_cfg = adv.get("arrows", {})
                     fig=progressive_carries_map(df,title=t,theme_name=S["tn"],
                                                  pitch_mode=S["pm"],pitch_width=S["pw"],
-                                                 carry_color=cc,min_distance=md,
+                                                 carry_color=arr_cfg.get("color", cc),
+                                                 min_distance=md,
                                                  vertical_pitch=dv)
                     ax=fig.axes[0]
                     draw_attack_direction(ax,cfg_pc,theme,S["pm"],S["pw"],dv)
                     apply_overlay(fig,ov)
+                    apply_advanced_customization(fig, adv, theme)
+                    apply_figure_adv(fig, adv)
                     st.session_state["dist_pc"]=fig
                 if "dist_pc" in st.session_state: preview(st.session_state["dist_pc"],"progressive_carries")
                 else: empty("🏃","Configure and generate")
@@ -1888,12 +2206,16 @@ if section == "🔄 Distribution Charts":
                 st.markdown('</div>',unsafe_allow_html=True)
             with R:
                 if gen and plcol:
+                    adv = S.get("adv", {})
+                    theme = THEMES[S["tn"]]
                     fig=passing_network(df,player_col=plcol,
                                          recipient_col=rccol or "recipient",
                                          title=t,theme_name=S["tn"],
                                          pitch_mode=S["pm"],pitch_width=S["pw"],
                                          node_color=nc,edge_color=ec,min_passes=mp)
                     apply_overlay(fig,ov)
+                    apply_advanced_customization(fig, adv, theme)
+                    apply_figure_adv(fig, adv)
                     st.session_state["dist_pn"]=fig
                 if "dist_pn" in st.session_state: preview(st.session_state["dist_pn"],"passing_network")
                 else: empty("🕸️","Configure and generate")
@@ -2642,8 +2964,6 @@ if section == "🖱️ Tagging Tool":
                               color=mc,fontsize=8,ha="center",va="top",clip_on=False)
 
                     st.image(_bytes(fig,dpi=150),use_container_width=True)
-                    if tag_chart_mode == "Passes":
-                        pass_event_audit(fig, int(et_counts.get("pass", 0)), attack_dir_arrow=True)
                     plt.close(fig)
                 except Exception as e:
                     st.error(f"Chart error: {e}")
