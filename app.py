@@ -420,6 +420,39 @@ def _pdf(fig):
                   bbox_extra_artists=extras or None)
     b.seek(0); return b.read()
 
+def _store_fig(key, fig, dpi=180):
+    """Store figure as PNG bytes in session state, then close it.
+    Prevents matplotlib figures from being pickled by Streamlit (which crashes the app).
+    """
+    try:
+        b = io.BytesIO()
+        fig.canvas.draw()
+        extras = list(fig.legends)
+        for ax in fig.axes:
+            leg = ax.get_legend()
+            if leg is not None:
+                extras.append(leg)
+        fig.savefig(b, format="png", dpi=dpi, bbox_inches="tight", pad_inches=.18,
+                    bbox_extra_artists=extras or None)
+        b.seek(0)
+        st.session_state[key] = b.read()
+    except Exception as e:
+        st.error(f"Figure save error: {e}")
+    finally:
+        try:
+            plt.close(fig)
+        except Exception:
+            pass
+
+def _preview_stored(key):
+    """Show a stored PNG bytes figure."""
+    val = st.session_state.get(key)
+    if val is not None and isinstance(val, bytes):
+        st.image(val, use_container_width=True)
+        return val
+    return None
+
+
 def _clean(s):
     return pd.to_numeric(
         s.astype(str).str.replace("%","",regex=False)
@@ -451,19 +484,51 @@ def req_badge(cols):
         f"<b style='color:#6b8cae;font-size:.78rem'>Requires:</b> {badges}</div>",
         unsafe_allow_html=True)
 
-def dl_row(fig, name):
+def dl_row(fig_or_bytes, name):
     c1, c2 = st.columns(2)
-    with c1:
-        st.download_button("⬇ PNG", _bytes(fig), f"{name}.png",
-                           "image/png", key=f"p_{name}_{id(fig)}")
-    with c2:
-        st.download_button("⬇ PDF", _pdf(fig), f"{name}.pdf",
-                           "application/pdf", key=f"f_{name}_{id(fig)}")
-    plt.close(fig)
+    if isinstance(fig_or_bytes, bytes):
+        # Already rendered bytes — create PDF from bytes via PIL
+        with c1:
+            st.download_button("⬇ PNG", fig_or_bytes, f"{name}.png",
+                               "image/png", key=f"p_{name}_{hash(fig_or_bytes)}")
+        with c2:
+            # Build a quick PDF from the PNG bytes
+            try:
+                import io as _io
+                from matplotlib.backends.backend_pdf import PdfPages as _PP
+                from PIL import Image as _PILI
+                import matplotlib.pyplot as _plt
+                import numpy as _np
+                pil_img = _PILI.open(_io.BytesIO(fig_or_bytes))
+                w_in = pil_img.width / 180; h_in = pil_img.height / 180
+                fig_tmp = _plt.figure(figsize=(w_in, h_in))
+                ax_tmp = fig_tmp.add_axes([0,0,1,1])
+                ax_tmp.imshow(_np.array(pil_img)); ax_tmp.axis("off")
+                pdf_b = _io.BytesIO()
+                with _PP(pdf_b) as pp:
+                    pp.savefig(fig_tmp, bbox_inches="tight", pad_inches=0)
+                _plt.close(fig_tmp)
+                pdf_b.seek(0)
+                st.download_button("⬇ PDF", pdf_b.read(), f"{name}.pdf",
+                                   "application/pdf", key=f"f_{name}_{hash(fig_or_bytes)}")
+            except Exception:
+                pass
+    else:
+        with c1:
+            st.download_button("⬇ PNG", _bytes(fig_or_bytes), f"{name}.png",
+                               "image/png", key=f"p_{name}_{id(fig_or_bytes)}")
+        with c2:
+            st.download_button("⬇ PDF", _pdf(fig_or_bytes), f"{name}.pdf",
+                               "application/pdf", key=f"f_{name}_{id(fig_or_bytes)}")
+        plt.close(fig_or_bytes)
 
-def preview(fig, name):
-    st.image(_bytes(fig, dpi=180), use_container_width=True)
-    dl_row(fig, name)
+def preview(fig_or_bytes, name):
+    if isinstance(fig_or_bytes, bytes):
+        st.image(fig_or_bytes, use_container_width=True)
+        dl_row(fig_or_bytes, name)
+    else:
+        st.image(_bytes(fig_or_bytes, dpi=180), use_container_width=True)
+        dl_row(fig_or_bytes, name)
 
 def load_img(f):
     if f is None: return None
@@ -1494,7 +1559,7 @@ if section == "🎯 Pro Shot Map":
                 adv = S.get("adv", {})
                 apply_advanced_customization(fig, adv, theme)
                 apply_figure_adv(fig, adv)
-                st.session_state["psm_fig"] = fig
+                _store_fig("psm_fig", fig)
             except Exception as e:
                 st.error(f"Error: {e}")
         if "psm_fig" in st.session_state:
@@ -1585,7 +1650,7 @@ if section == "📨 Pro Pass Map":
                 )
                 apply_advanced_customization(fig, adv, THEMES.get(cfg["theme_name"], {}))
                 apply_figure_adv(fig, adv)
-                st.session_state["ppm_fig"] = fig
+                _store_fig("ppm_fig", fig)
             except Exception as e:
                 st.error(f"Error: {e}")
         if "ppm_fig" in st.session_state:
@@ -1654,7 +1719,7 @@ if section == "⚔️ Attacking Charts":
                     apply_overlay(fig, ov)
                     apply_advanced_customization(fig, adv, theme)
                     apply_figure_adv(fig, adv)
-                    st.session_state["atk_sm"] = fig
+                    _store_fig("atk_sm", fig)
                 if "atk_sm" in st.session_state:
                     preview(st.session_state["atk_sm"], "shot_map")
                 else:
@@ -1693,7 +1758,7 @@ if section == "⚔️ Attacking Charts":
                     fig = _opta_goal_combo(df,gl_title,gl_sub,
                         player_ov.get("img"),logo_ov.get("img"),
                         gl_color,gl_edge,gl_ds,gl_tn,S["pm"],S["pw"],stats or None)
-                    st.session_state["atk_gl"] = fig
+                    _store_fig("atk_gl", fig)
                 if "atk_gl" in st.session_state:
                     preview(st.session_state["atk_gl"],"opta_goal_location")
                 else:
@@ -1716,7 +1781,7 @@ if section == "⚔️ Attacking Charts":
                     fig = shot_zone_map(df,theme_name=S["tn"],pitch_mode=S["pm"],
                                         pitch_width=S["pw"],title=sz_t)
                     apply_overlay(fig,ov)
-                    st.session_state["atk_sz"] = fig
+                    _store_fig("atk_sz", fig)
                 if "atk_sz" in st.session_state:
                     preview(st.session_state["atk_sz"],"shot_zones")
                 else:
@@ -1783,7 +1848,7 @@ if section == "⚔️ Attacking Charts":
                     apply_overlay(fig,ov)
                     apply_advanced_customization(fig, adv, theme)
                     apply_figure_adv(fig, adv)
-                    st.session_state["atk_tm"] = fig
+                    _store_fig("atk_tm", fig)
                 if "atk_tm" in st.session_state:
                     preview(st.session_state["atk_tm"],"touch_map")
                 else:
@@ -1822,7 +1887,7 @@ if section == "⚔️ Attacking Charts":
                         ax.set_title(ht_t,color=theme["text"],fontsize=16,weight="bold")
                         draw_attack_direction(ax,cfg_ht,theme,S["pm"],S["pw"],ht_v)
                     apply_overlay(fig,ov)
-                    st.session_state["atk_ht"] = fig
+                    _store_fig("atk_ht", fig)
                 if "atk_ht" in st.session_state:
                     preview(st.session_state["atk_ht"],"start_heatmap")
                 else:
@@ -1855,7 +1920,7 @@ if section == "⚔️ Attacking Charts":
                                       title=xt_t,color_a=xt_ca,color_b=xt_cb,
                                       theme_name=S["tn"])
                     apply_overlay(fig,ov)
-                    st.session_state["atk_xt"] = fig
+                    _store_fig("atk_xt", fig)
                 if "atk_xt" in st.session_state:
                     preview(st.session_state["atk_xt"],"xg_timeline")
                 else:
@@ -1961,7 +2026,7 @@ if section == "🛡️ Defensive Charts":
                     apply_overlay(fig,ov)
                     apply_advanced_customization(fig, adv, theme)
                     apply_figure_adv(fig, adv)
-                    st.session_state["def_da"]=fig
+                    _store_fig("def_da", fig)
                 if "def_da" in st.session_state: preview(st.session_state["def_da"],"defensive_actions")
                 else: empty("🛡️","Configure and generate")
 
@@ -1990,7 +2055,7 @@ if section == "🛡️ Defensive Charts":
                                               theme_name=S["tn"],marker_size=bms,
                                               show_zone_values=bz)
                     apply_overlay(fig,ov)
-                    st.session_state["def_br"]=fig
+                    _store_fig("def_br", fig)
                 if "def_br" in st.session_state: preview(st.session_state["def_br"],"ball_regains")
                 else: empty("🗺️","Configure and generate")
 
@@ -2020,7 +2085,7 @@ if section == "🛡️ Defensive Charts":
                     ax=fig.axes[0]
                     draw_attack_direction(ax,cfg_pr,theme,S["pm"],S["pw"],pv)
                     apply_overlay(fig,ov)
-                    st.session_state["def_pr"]=fig
+                    _store_fig("def_pr", fig)
                 if "def_pr" in st.session_state: preview(st.session_state["def_pr"],"pressure_map")
                 else: empty("⚡","Configure and generate")
 
@@ -2050,7 +2115,7 @@ if section == "🛡️ Defensive Charts":
                                         title=mm_t,color_a=mm_ca,color_b=mm_cb,
                                         theme_name=S["tn"])
                     apply_overlay(fig,ov)
-                    st.session_state["def_mm"]=fig
+                    _store_fig("def_mm", fig)
                 if "def_mm" in st.session_state: preview(st.session_state["def_mm"],"momentum")
                 else: empty("📊","Configure and generate")
 
@@ -2085,7 +2150,7 @@ if section == "🛡️ Defensive Charts":
                                     theme_name=S["tn"])
                     fig.axes[0].set_title(t,color=THEMES[S["tn"]]["text"],fontsize=16,weight="bold")
                     apply_overlay(fig,ov)
-                    st.session_state["def_ob"]=fig
+                    _store_fig("def_ob", fig)
                 if "def_ob" in st.session_state: preview(st.session_state["def_ob"],"outcome_distribution")
                 else: empty("📊","Configure and generate")
     st.stop()
@@ -2147,7 +2212,7 @@ if section == "🔄 Distribution Charts":
                     apply_overlay(fig,ov)
                     apply_advanced_customization(fig, adv, theme)
                     apply_figure_adv(fig, adv)
-                    st.session_state["dist_pm"]=fig
+                    _store_fig("dist_pm", fig)
                 if "dist_pm" in st.session_state: preview(st.session_state["dist_pm"],"pass_map")
                 else: empty("➡️","Configure and generate")
 
@@ -2183,7 +2248,7 @@ if section == "🔄 Distribution Charts":
                     apply_overlay(fig,ov)
                     apply_advanced_customization(fig, adv, theme)
                     apply_figure_adv(fig, adv)
-                    st.session_state["dist_pc"]=fig
+                    _store_fig("dist_pc", fig)
                 if "dist_pc" in st.session_state: preview(st.session_state["dist_pc"],"progressive_carries")
                 else: empty("🏃","Configure and generate")
 
@@ -2216,7 +2281,7 @@ if section == "🔄 Distribution Charts":
                     apply_overlay(fig,ov)
                     apply_advanced_customization(fig, adv, theme)
                     apply_figure_adv(fig, adv)
-                    st.session_state["dist_pn"]=fig
+                    _store_fig("dist_pn", fig)
                 if "dist_pn" in st.session_state: preview(st.session_state["dist_pn"],"passing_network")
                 else: empty("🕸️","Configure and generate")
     st.stop()
@@ -2274,7 +2339,7 @@ if section == "🎯 Specialist Charts":
                                         logo_w=logo_ov["w"],logo_h=logo_ov["h"],
                                         footer_left=fl,footer_right=fr,
                                         active_legend_items=leg_cfg_gm["active"])
-                    st.session_state["spec_gm"]=fig
+                    _store_fig("spec_gm", fig)
                 if "spec_gm" in st.session_state: preview(st.session_state["spec_gm"],"goal_mouth_map")
                 else: empty("🥅","Configure and generate")
 
@@ -2310,7 +2375,7 @@ if section == "🎯 Specialist Charts":
                                               logo_x=logo_ov["x"],logo_y=logo_ov["y"],
                                               logo_w=logo_ov["w"],logo_h=logo_ov["h"],
                                               active_legend_items=leg_cfg_gsr["active"])
-                    st.session_state["spec_gsr"]=fig
+                    _store_fig("spec_gsr", fig)
                 if "spec_gsr" in st.session_state: preview(st.session_state["spec_gsr"],"shot_report")
                 else: empty("🎯","Configure and generate")
 
@@ -2372,7 +2437,7 @@ if section == "🎯 Specialist Charts":
                                     edgecolors="white",linewidth=0.8,alpha=0.9,zorder=5)
                     ax.set_title(t,color=theme["text"],fontsize=16,weight="bold")
                     apply_overlay(fig,ov)
-                    st.session_state["spec_vp"]=fig
+                    _store_fig("spec_vp", fig)
                 if "spec_vp" in st.session_state: preview(st.session_state["spec_vp"],"vertical_map")
                 else: empty("📍","Configure and generate")
 
@@ -2409,7 +2474,7 @@ if section == "🎯 Specialist Charts":
                                                shot_colors=sc_f,shot_markers=sm_f,
                                                theme_name=S["tn"])
                         apply_overlay(fig,ov)
-                        st.session_state["spec_sc"]=fig
+                        _store_fig("spec_sc", fig)
                     if "spec_sc" in st.session_state: preview(st.session_state["spec_sc"],"shot_detail_card")
                     else: empty("🃏","Select a shot and generate")
     st.stop()
@@ -2539,7 +2604,7 @@ if section == "🍕 Radars & Pizza":
                                 ax.tick_params(colors="#6b8cae")
                                 for sp2 in ax.spines.values(): sp2.set_color("#1e3a5f")
                             apply_overlay(fig,ov)
-                            st.session_state[fk]=fig
+                            _store_fig(fk, fig)
                         except Exception as e: st.error(str(e))
                     if fk in st.session_state: preview(st.session_state[fk],ck)
                     else: empty("🍕","Configure and generate")
@@ -2580,7 +2645,7 @@ if section == "🍕 Radars & Pizza":
                         ax.tick_params(colors="#6b8cae")
                         for sp3 in ax.spines.values(): sp3.set_color("#1e3a5f")
                         apply_overlay(fig,ov)
-                        st.session_state["piz_sc_fig"]=fig
+                        _store_fig("piz_sc_fig", fig)
                     if "piz_sc_fig" in st.session_state: preview(st.session_state["piz_sc_fig"],"scatter")
                     else: empty("📈","Configure and generate")
     st.stop()
@@ -3029,7 +3094,7 @@ if section == "📄 Report Builder":
     available = {k: v for k, v in FIGURE_CATALOG.items()
                  if k in st.session_state and st.session_state[k] is not None}
 
-    # ── helper: convert a session-state figure (matplotlib fig) to bytes ──────
+    # ── helper: convert a session-state figure (now bytes) to bytes ──────────
     def _fig_to_bytes(fig_or_bytes):
         if isinstance(fig_or_bytes, bytes):
             return fig_or_bytes
@@ -3044,11 +3109,12 @@ if section == "📄 Report Builder":
         "Straight Arrow", "Curved Arrow", "Highlight Box", "Number Label",
     ]
 
-    # ── helper: draw a single annotation onto a matplotlib Axes ──────────────
+    # ── helper: draw a single annotation onto a matplotlib Axes ──────────
     def _draw_annotation(ax, ann, ax_w_pts, ax_h_pts):
         """Draw one annotation dict onto ax. Coords are 0-100 % of axes."""
         import matplotlib.patches as mpatches
         import matplotlib.patheffects as pe
+        from matplotlib.transforms import blended_transform_factory
 
         atype  = ann.get("type", "Text")
         x_pct  = ann.get("x", 50) / 100.0
@@ -3056,8 +3122,8 @@ if section == "📄 Report Builder":
         w_pct  = ann.get("w", 20) / 100.0
         h_pct  = ann.get("h", 10) / 100.0
         rot    = ann.get("rotation", 0)
-        fc     = ann.get("fill_color",   "#FF000044")
-        bc     = ann.get("border_color", "#FF0000")
+        fc     = ann.get("fill_color",   "#FF0000")
+        bc     = ann.get("border_color", "#FF4060")
         bw     = ann.get("border_width", 1.5)
         alpha  = ann.get("opacity", 0.7)
         zorder = ann.get("zorder", 10)
@@ -3066,88 +3132,113 @@ if section == "📄 Report Builder":
         text   = ann.get("text", "")
         label_n = ann.get("label_n", 1)
 
-        transform = ax.transAxes
+        tr = ax.transAxes
 
         if atype == "Text":
             ha = ann.get("ha", "left")
-            txt = ax.text(x_pct, y_pct, text,
-                          transform=transform,
-                          fontsize=fsize, fontfamily=ffam,
-                          color=bc, alpha=alpha, zorder=zorder,
-                          rotation=rot, ha=ha, va="top",
-                          fontweight="bold")
-            txt.set_path_effects([pe.withStroke(linewidth=2, foreground="black")])
+            try:
+                txt = ax.text(x_pct, y_pct, text,
+                              transform=tr,
+                              fontsize=fsize, fontfamily=ffam,
+                              color=bc, alpha=alpha, zorder=zorder,
+                              rotation=rot, ha=ha, va="top",
+                              fontweight="bold")
+                txt.set_path_effects([pe.withStroke(linewidth=2, foreground="black")])
+            except Exception:
+                pass
 
         elif atype in ("Rectangle", "Highlight Box"):
-            patch = mpatches.FancyBboxPatch(
-                (x_pct, y_pct - h_pct), w_pct, h_pct,
-                boxstyle="round,pad=0.01",
-                transform=transform,
-                facecolor=fc, edgecolor=bc,
-                linewidth=bw, alpha=alpha, zorder=zorder,
-                angle=rot,
-            )
-            ax.add_patch(patch)
-            if text:
-                ax.text(x_pct + w_pct/2, y_pct - h_pct/2, text,
-                        transform=transform,
-                        fontsize=fsize, fontfamily=ffam,
-                        color=bc, alpha=min(1.0, alpha+0.3),
-                        zorder=zorder+1, ha="center", va="center")
+            try:
+                # Use a regular Rectangle — FancyBboxPatch angle param unreliable
+                patch = mpatches.Rectangle(
+                    (x_pct, y_pct - h_pct), w_pct, h_pct,
+                    transform=tr,
+                    facecolor=fc, edgecolor=bc,
+                    linewidth=bw, alpha=alpha, zorder=zorder,
+                    angle=rot, rotation_point="xy",
+                )
+                ax.add_patch(patch)
+                if text:
+                    ax.text(x_pct + w_pct / 2, y_pct - h_pct / 2, text,
+                            transform=tr,
+                            fontsize=fsize, fontfamily=ffam,
+                            color=bc, alpha=min(1.0, alpha + 0.3),
+                            zorder=zorder + 1, ha="center", va="center")
+            except Exception:
+                pass
 
         elif atype in ("Circle", "Ellipse"):
-            is_circle = (atype == "Circle")
-            ew = w_pct if not is_circle else min(w_pct, h_pct)
-            eh = h_pct if not is_circle else min(w_pct, h_pct)
-            patch = mpatches.Ellipse(
-                (x_pct + ew/2, y_pct - eh/2), ew, eh,
-                transform=transform,
-                facecolor=fc, edgecolor=bc,
-                linewidth=bw, alpha=alpha, zorder=zorder,
-                angle=rot,
-            )
-            ax.add_patch(patch)
-            if text:
-                ax.text(x_pct + ew/2, y_pct - eh/2, text,
-                        transform=transform,
-                        fontsize=fsize, color=bc,
-                        zorder=zorder+1, ha="center", va="center")
+            try:
+                is_circle = (atype == "Circle")
+                ew = min(w_pct, h_pct) if is_circle else w_pct
+                eh = min(w_pct, h_pct) if is_circle else h_pct
+                patch = mpatches.Ellipse(
+                    (x_pct + ew / 2, y_pct - eh / 2), ew, eh,
+                    transform=tr,
+                    facecolor=fc, edgecolor=bc,
+                    linewidth=bw, alpha=alpha, zorder=zorder,
+                    angle=rot,
+                )
+                ax.add_patch(patch)
+                if text:
+                    ax.text(x_pct + ew / 2, y_pct - eh / 2, text,
+                            transform=tr,
+                            fontsize=fsize, color=bc,
+                            zorder=zorder + 1, ha="center", va="center")
+            except Exception:
+                pass
 
         elif atype == "Straight Arrow":
-            x2_pct = ann.get("x2", x_pct*100 + w_pct*100) / 100.0
-            y2_pct = 1.0 - ann.get("y2", ann.get("y", 50) + h_pct*100) / 100.0
-            ax.annotate("", xy=(x2_pct, y2_pct), xytext=(x_pct, y_pct),
-                        xycoords=transform, textcoords=transform,
-                        arrowprops=dict(
-                            arrowstyle=f"-|>,head_width={bw*0.4},head_length={bw*0.3}",
-                            color=bc, lw=bw, alpha=alpha),
-                        zorder=zorder)
+            try:
+                x2_pct = ann.get("x2", min(100, ann.get("x", 50) + ann.get("w", 20))) / 100.0
+                y2_pct = 1.0 - ann.get("y2", min(100, ann.get("y", 50) + ann.get("h", 10))) / 100.0
+                ax.annotate("",
+                            xy=(x2_pct, y2_pct),
+                            xytext=(x_pct, y_pct),
+                            xycoords=tr, textcoords=tr,
+                            arrowprops=dict(
+                                arrowstyle="-|>",
+                                color=bc, lw=bw, alpha=alpha,
+                                mutation_scale=bw * 8),
+                            zorder=zorder)
+            except Exception:
+                pass
 
         elif atype == "Curved Arrow":
-            x2_pct = ann.get("x2", x_pct*100 + w_pct*100) / 100.0
-            y2_pct = 1.0 - ann.get("y2", ann.get("y", 50) + h_pct*100) / 100.0
-            curve  = ann.get("curvature", 0.3)
-            ax.annotate("", xy=(x2_pct, y2_pct), xytext=(x_pct, y_pct),
-                        xycoords=transform, textcoords=transform,
-                        arrowprops=dict(
-                            arrowstyle=f"-|>,head_width={bw*0.4}",
-                            connectionstyle=f"arc3,rad={curve}",
-                            color=bc, lw=bw, alpha=alpha),
-                        zorder=zorder)
+            try:
+                x2_pct = ann.get("x2", min(100, ann.get("x", 50) + ann.get("w", 20))) / 100.0
+                y2_pct = 1.0 - ann.get("y2", min(100, ann.get("y", 50) + ann.get("h", 10))) / 100.0
+                curve  = ann.get("curvature", 0.3)
+                ax.annotate("",
+                            xy=(x2_pct, y2_pct),
+                            xytext=(x_pct, y_pct),
+                            xycoords=tr, textcoords=tr,
+                            arrowprops=dict(
+                                arrowstyle="-|>",
+                                connectionstyle=f"arc3,rad={curve}",
+                                color=bc, lw=bw, alpha=alpha,
+                                mutation_scale=bw * 8),
+                            zorder=zorder)
+            except Exception:
+                pass
 
         elif atype == "Number Label":
-            circle = mpatches.Circle(
-                (x_pct, y_pct), radius=min(w_pct, h_pct)/2,
-                transform=transform,
-                facecolor=fc, edgecolor=bc,
-                linewidth=bw, alpha=alpha, zorder=zorder,
-            )
-            ax.add_patch(circle)
-            ax.text(x_pct, y_pct, str(label_n),
-                    transform=transform,
-                    fontsize=fsize, fontfamily=ffam,
-                    color=bc, zorder=zorder+1,
-                    ha="center", va="center", fontweight="bold")
+            try:
+                r = min(w_pct, h_pct) / 2
+                circle = mpatches.Circle(
+                    (x_pct, y_pct), radius=r,
+                    transform=tr,
+                    facecolor=fc, edgecolor=bc,
+                    linewidth=bw, alpha=alpha, zorder=zorder,
+                )
+                ax.add_patch(circle)
+                ax.text(x_pct, y_pct, str(label_n),
+                        transform=tr,
+                        fontsize=fsize, fontfamily=ffam,
+                        color=bc, zorder=zorder + 1,
+                        ha="center", va="center", fontweight="bold")
+            except Exception:
+                pass
 
     # ── helper: build the full report figure ──────────────────────────────────
     def build_report_figure(slots, annotations_per_slot, extra_images,
@@ -3260,11 +3351,10 @@ if section == "📄 Report Builder":
             # Render the chart bytes as image in axes
             try:
                 from PIL import Image as _PILImage
-                pil = _PILImage.open(io.BytesIO(img_bytes)).convert("RGBA")
-                ax_chart.imshow(np.array(pil), aspect="auto",
-                                extent=[0, 1, 0, 1],
-                                transform=ax_chart.transAxes,
-                                zorder=1)
+                pil = _PILImage.open(io.BytesIO(img_bytes)).convert("RGB")
+                ax_chart.imshow(np.array(pil), aspect="auto", zorder=1)
+                ax_chart.set_xlim(0, np.array(pil).shape[1])
+                ax_chart.set_ylim(np.array(pil).shape[0], 0)
             except Exception:
                 ax_chart.text(0.5, 0.5, "Chart render error",
                               transform=ax_chart.transAxes,
@@ -3395,9 +3485,13 @@ if section == "📄 Report Builder":
                 team  = st.session_state.get("rb_logo_team"),
                 photo = st.session_state.get("rb_photo"),
             )
-            fig_prev = build_report_figure([], [], [], meta, logos)
-            st.image(_bytes(fig_prev, dpi=120), use_container_width=True)
-            plt.close(fig_prev)
+            try:
+                fig_prev = build_report_figure([], [], [], meta, logos)
+                prev_bytes = _bytes(fig_prev, dpi=120)
+                plt.close(fig_prev)
+                st.image(prev_bytes, use_container_width=True)
+            except Exception as e:
+                st.error(f"Preview error: {e}")
 
     # ── TAB 2: CHARTS ─────────────────────────────────────────────────────
     with tab_charts:
@@ -3546,10 +3640,11 @@ if section == "📄 Report Builder":
                 ax_p.set_facecolor("#0E1117")
                 ax_p.axis("off")
                 try:
-                    pil = _PILImage.open(io.BytesIO(slot["img_bytes"])).convert("RGBA")
-                    ax_p.imshow(np.array(pil), aspect="auto",
-                                extent=[0, 1, 0, 1],
-                                transform=ax_p.transAxes, zorder=1)
+                    pil = _PILImage.open(io.BytesIO(slot["img_bytes"])).convert("RGB")
+                    arr = np.array(pil)
+                    ax_p.imshow(arr, aspect="auto", zorder=1)
+                    ax_p.set_xlim(0, arr.shape[1])
+                    ax_p.set_ylim(arr.shape[0], 0)
                 except Exception:
                     pass
                 for ann in st.session_state["rb_annotations"][slot_idx]:
@@ -3631,40 +3726,42 @@ if section == "📄 Report Builder":
                             spacing=exp_spacing,
                             report_dpi=exp_dpi,
                         )
-                        st.session_state["rb_report_fig"] = fig_report
+                        # Store as bytes immediately — keeps figure from being GC'd
+                        _rb_png = _bytes(fig_report, dpi=exp_dpi)
+                        _rb_pdf = _pdf(fig_report)
+                        plt.close(fig_report)
+                        st.session_state["rb_report_png"] = _rb_png
+                        st.session_state["rb_report_pdf"] = _rb_pdf
                         st.success("Report built successfully!")
                     except Exception as e:
                         st.error(f"Build error: {e}")
 
-            if "rb_report_fig" in st.session_state:
-                fig_report = st.session_state["rb_report_fig"]
-                st.image(_bytes(fig_report, dpi=min(exp_dpi, 150)),
-                         use_container_width=True)
+            if "rb_report_png" in st.session_state:
+                st.image(st.session_state["rb_report_png"], use_container_width=True)
 
                 dl1, dl2 = st.columns(2)
                 with dl1:
                     if "PNG" in exp_fmt:
-                        png_bytes = _bytes(fig_report, dpi=exp_dpi)
                         st.download_button(
                             "⬇️ Download PNG",
-                            png_bytes,
+                            st.session_state["rb_report_png"],
                             file_name="scouting_report.png",
                             mime="image/png",
                             key="rb_dl_png",
                         )
                 with dl2:
                     if "PDF" in exp_fmt:
-                        pdf_bytes = _pdf(fig_report)
                         st.download_button(
                             "⬇️ Download PDF",
-                            pdf_bytes,
+                            st.session_state["rb_report_pdf"],
                             file_name="scouting_report.pdf",
                             mime="application/pdf",
                             key="rb_dl_pdf",
                         )
 
                 if st.button("🗑️ Clear report", key="rb_clear"):
-                    del st.session_state["rb_report_fig"]
+                    st.session_state.pop("rb_report_png", None)
+                    st.session_state.pop("rb_report_pdf", None)
                     st.rerun()
 
     st.stop()
