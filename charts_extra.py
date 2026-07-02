@@ -46,9 +46,9 @@ except ImportError:
                 "Dark": {"bg": "#121212", "pitch": "#1e1e1e", "line": "#444444", "text": "#ffffff", "accent": "#00ffcc"},
                 "Light": {"bg": "#ffffff", "pitch": "#f0f0f0", "line": "#cccccc", "text": "#000000", "accent": "#ff0055"}
             }
-            def make_pitch(theme_name="Dark", pitch_type="statsbomb", orientation="horizontal", view="full"):
-                t = THEMES.get(theme_name, THEMES["Dark"])
-                return Pitch(pitch_color=t["pitch"], line_color=t["line"])
+            def make_pitch(theme_name="The Athletic Dark", pitch_type="statsbomb", orientation="horizontal", view="full"):
+                t = THEMES.get(theme_name) or list(THEMES.values())[0] if THEMES else {"pitch": "#1e1e1e", "pitch_lines": "#ffffff"}
+                return Pitch(pitch_color=t.get("pitch", "#1e1e1e"), line_color=t.get("pitch_lines", t.get("lines", "#ffffff")))
 # ──────────────────────────────────────────────────────────────────────────
 
 # Setup fonts
@@ -82,9 +82,11 @@ def _yes_col(s: pd.Series) -> pd.Series:
     return xs.isin({"yes", "y", "true", "t", "1", "نعم"}).astype(bool)
 
 
-def draw_pass_sonar(df, player_name, theme_name="Dark"):
+def draw_pass_sonar(df, player_name, theme_name="The Athletic Dark"):
     """Draws a Pass Sonar chart for a specific player."""
-    t = THEMES.get(theme_name, THEMES.get("Dark", {"bg": "#121212", "text": "#ffffff", "accent": "#00ffcc"}))
+    _fallback = {"bg": "#121212", "pitch": "#1e1e1e", "lines": "#444444", "pitch_lines": "#444444", "text": "#ffffff", "muted": "#A0A7B4", "accent": "#00C2FF"}
+    t = THEMES.get(theme_name) or THEMES.get("The Athletic Dark") or _fallback
+    t = {**_fallback, **t}  # ensure all keys exist
     
     p_df = df[(df['type_name'] == 'Pass') & (df['player_name'] == player_name)].copy()
     if p_df.empty:
@@ -120,7 +122,9 @@ def draw_pass_sonar(df, player_name, theme_name="Dark"):
     ax.set_facecolor(t["bg"])
     
     widths = np.ones(num_bins) * (2 * np.pi / num_bins) * 0.9
-    cmap = LinearSegmentedColormap.from_list("sonar", [t.get("line", "#444444"), t["accent"]])
+    line_col = t.get("pitch_lines", t.get("lines", "#444444"))
+    accent_col = t.get("accent", t.get("muted", "#00C2FF"))
+    cmap = LinearSegmentedColormap.from_list("sonar", [line_col, accent_col])
     norm = plt.Normalize(vmin=0, vmax=max(lengths) if max(lengths)>0 else 40)
     
     ax.bar(angles, counts, width=widths, bottom=0.0, color=cmap(norm(lengths)), edgecolor=t["bg"], linewidth=1)
@@ -132,7 +136,7 @@ def draw_pass_sonar(df, player_name, theme_name="Dark"):
     ax.set_xticks([0, np.pi/2, np.pi, 3*np.pi/2])
     
     ax.spines['polar'].set_visible(False)
-    ax.grid(True, color=t.get("line", "#444444"), alpha=0.5, linestyle='--')
+    ax.grid(True, color=line_col, alpha=0.5, linestyle='--')
     ax.tick_params(colors=t["text"], labelsize=9)
     
     ax.set_title(f"PASS SONAR: {player_name.upper()}\nBar length = Frequency | Color = Avg Distance", 
@@ -142,11 +146,15 @@ def draw_pass_sonar(df, player_name, theme_name="Dark"):
     return fig
 
 
-def draw_pass_network_advanced(df, team_name, theme_name="Dark"):
+def draw_pass_network_advanced(df, team_name, theme_name="The Athletic Dark"):
     """Draws an advanced Pass Network with convex hulls / positioning variance."""
-    t = THEMES.get(theme_name, THEMES.get("Dark", {"bg": "#121212", "pitch": "#1e1e1e", "line": "#444444", "text": "#ffffff", "accent": "#00ffcc"}))
+    _fallback = {"bg": "#121212", "pitch": "#1e1e1e", "lines": "#444444", "pitch_lines": "#444444", "text": "#ffffff", "muted": "#A0A7B4", "accent": "#00C2FF"}
+    t = THEMES.get(theme_name) or THEMES.get("The Athletic Dark") or _fallback
+    t = {**_fallback, **t}
+    line_col = t.get("pitch_lines", t.get("lines", "#444444"))
+    accent_col = t.get("accent", t.get("muted", "#00C2FF"))
     
-    pitch = Pitch(pitch_type='statsbomb', pitch_color=t["pitch"], line_color=t["line"], goal_type='line')
+    pitch = Pitch(pitch_type='statsbomb', pitch_color=t["pitch"], line_color=line_col, goal_type='line')
     fig, ax = pitch.draw(figsize=(10, 7), facecolor=t["bg"])
     
     team_df = df[df['team_name'] == team_name].copy()
@@ -170,7 +178,7 @@ def draw_pass_network_advanced(df, team_name, theme_name="Dark"):
             try:
                 hull = ConvexHull(p_locs.values)
                 hull_pts = p_locs.values[hull.vertices]
-                poly = plt.Polygon(hull_pts, facecolor=t["accent"], alpha=0.05, edgecolor=t["accent"], linestyle=':', linewidth=1)
+                poly = plt.Polygon(hull_pts, facecolor=accent_col, alpha=0.05, edgecolor=accent_col, linestyle=':', linewidth=1)
                 ax.add_patch(poly)
             except:
                 pass
@@ -189,13 +197,13 @@ def draw_pass_network_advanced(df, team_name, theme_name="Dark"):
             x2, y2 = loc_dict[p2]['x'], loc_dict[p2]['y']
             alpha = max(0.2, row['count'] / max_count)
             lw = (row['count'] / max_count) * 5 + 1
-            pitch.lines(x1, y1, x2, y2, color=t["accent"], alpha=alpha, lw=lw, ax=ax, zorder=2)
+            pitch.lines(x1, y1, x2, y2, color=accent_col, alpha=alpha, lw=lw, ax=ax, zorder=2)
             
     for _, row in avg_locs.iterrows():
         p = row['player_name']
         p_events_count = len(net_df[net_df['player_name'] == p])
         size = max(100, min(600, p_events_count * 10))
-        pitch.scatter(row['x'], row['y'], s=size, color=t["bg"], edgecolor=t["accent"], linewidth=2, zorder=3, ax=ax)
+        pitch.scatter(row['x'], row['y'], s=size, color=t["bg"], edgecolor=accent_col, linewidth=2, zorder=3, ax=ax)
         
         display_name = p.split(' ')[-1]
         ax.text(row['x'], row['y'] - 3, display_name, color=t["text"], fontname=FONT_NAME, fontsize=9, ha='center', zorder=4)
@@ -206,11 +214,15 @@ def draw_pass_network_advanced(df, team_name, theme_name="Dark"):
     return fig
 
 
-def draw_defensive_territory(df, team_name, theme_name="Dark"):
+def draw_defensive_territory(df, team_name, theme_name="The Athletic Dark"):
     """Draws a visual heatmap overlay showcasing defensive interventions."""
-    t = THEMES.get(theme_name, THEMES.get("Dark", {"bg": "#121212", "pitch": "#1e1e1e", "line": "#444444", "text": "#ffffff", "accent": "#00ffcc"}))
+    _fallback = {"bg": "#121212", "pitch": "#1e1e1e", "lines": "#444444", "pitch_lines": "#444444", "text": "#ffffff", "muted": "#A0A7B4", "accent": "#00C2FF"}
+    t = THEMES.get(theme_name) or THEMES.get("The Athletic Dark") or _fallback
+    t = {**_fallback, **t}
+    line_col = t.get("pitch_lines", t.get("lines", "#444444"))
+    accent_col = t.get("accent", t.get("muted", "#00C2FF"))
     
-    pitch = Pitch(pitch_type='statsbomb', pitch_color=t["pitch"], line_color=t["line"])
+    pitch = Pitch(pitch_type='statsbomb', pitch_color=t["pitch"], line_color=line_col)
     fig, ax = pitch.draw(figsize=(10, 7), facecolor=t["bg"])
     
     def_actions = ['Ball Recovery', 'Block', 'Clearance', 'Interception', 'Tackle']
@@ -222,10 +234,10 @@ def draw_defensive_territory(df, team_name, theme_name="Dark"):
         
     try:
         pitch.kdeplot(def_df['x'], def_df['y'], ax=ax,
-                      cmap=LinearSegmentedColormap.from_list("def", [t["pitch"], t["accent"]]),
+                      cmap=LinearSegmentedColormap.from_list("def", [t["pitch"], accent_col]),
                       fill=True, alpha=0.4, levels=8, thresh=0.1)
     except:
-        pitch.scatter(def_df['x'], def_df['y'], color=t["accent"], alpha=0.5, s=60, ax=ax)
+        pitch.scatter(def_df['x'], def_df['y'], color=accent_col, alpha=0.5, s=60, ax=ax)
         
     markers = {'Tackle': 'o', 'Interception': 's', 'Block': '^', 'Clearance': 'x', 'Ball Recovery': 'D'}
     for act in def_actions:
@@ -239,7 +251,7 @@ def draw_defensive_territory(df, team_name, theme_name="Dark"):
     avg_y = def_df['y'].mean()
     pitch.scatter(avg_x, avg_y, color='#ff0055', marker='*', s=300, edgecolors=t["text"], zorder=5, ax=ax, label='Defensive Center')
     
-    ax.legend(facecolor=t["bg"], edgecolor=t["line"], labelcolor=t["text"], loc='lower left', prop={'size': 9})
+    ax.legend(facecolor=t["bg"], edgecolor=line_col, labelcolor=t["text"], loc='lower left', prop={'size': 9})
     ax.set_title(f"DEFENSIVE ACTIONS TERRITORY & ENGAGEMENT BLOCKS\n{team_name.upper()} Heatmap Overlay", 
                  color=t["text"], fontname=FONT_NAME, fontsize=13, pad=15)
                  
