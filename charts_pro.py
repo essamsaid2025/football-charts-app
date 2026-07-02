@@ -21,10 +21,18 @@ from mplsoccer import Pitch, VerticalPitch
 
 # ── Import from existing modules ──────────────────────────────────────────────
 try:
-    from charts import THEMES, make_pitch
+    from charts import THEMES, make_pitch, _pitch_figsize, _set_pitch_bounds, _draw_pitch
 except Exception:
     THEMES = {}
     def make_pitch(**kw): return Pitch()
+    def _pitch_figsize(vertical_pitch=False, pitch_width=64.0):
+        return (7.6, 4.8) if not vertical_pitch else (7.2, 9.5)
+    def _set_pitch_bounds(ax, pitch_mode="rect", pitch_width=64.0, vertical_pitch=False):
+        y_max = pitch_width if pitch_mode == "rect" else 100.0
+        ax.set_xlim(-2, 102); ax.set_ylim(-2, y_max + 2)
+    def _draw_pitch(ax, pitch, theme):
+        pitch.draw(ax=ax)
+        ax.set_facecolor(theme.get("pitch", "#1f5f3b"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EXTENDED THEME REGISTRY
@@ -974,7 +982,7 @@ def opta_pass_map_pro(
     successful_color: str = "#C8102E",
     unsuccessful_color: str = "#888888",
     arrow_alpha: float = 0.85,
-    arrow_width: float = 1.8,
+    arrow_width: float = 2.0,
     pitch_mode: str = "rect",
     pitch_width: float = 68.0,
     successful_override: str = None,
@@ -982,47 +990,39 @@ def opta_pass_map_pro(
     accuracy_override: str = None,
 ):
     """
-    Opta Analyst style pass map — mplsoccer Pitch for correct proportions,
-    arrows + dots fully aligned, header legend, stat footer.
+    Opta Analyst style pass map. Pitch is drawn with the EXACT same
+    make_pitch()/_pitch_figsize()/_set_pitch_bounds() + pitch.arrows()/
+    pitch.scatter() calls used by the normal pass_map(), so scale and
+    proportions match exactly. Header (title/legend) and footer (stats)
+    bands are added around that unchanged pitch as extra axes.
     """
-    from mplsoccer import Pitch as MplPitch
     cfg = cfg or default_layout_cfg()
     theme_name = cfg.get("theme_name", "Opta Analyst Light")
     theme = THEMES.get(theme_name, PRO_THEMES.get("Opta Analyst Light", PRO_THEMES["The Athletic Dark"]))
 
     bg        = theme.get("bg",          "#F3F3F4")
-    pitch_bg  = theme.get("pitch",       "#F3F3F4")
     text_col  = theme.get("text",        "#151326")
     muted_col = theme.get("muted",       "#77727F")
-    line_col  = theme.get("pitch_lines", "#9B9B9B")
     panel_col = theme.get("panel",       "#ECEDEF")
     lines_col = theme.get("lines",       "#D4D4D7")
-
-    is_dark = bg.startswith("#0") or bg.startswith("#1") or text_col in ("#FFFFFF", "white")
-    if is_dark and pitch_bg in ("#F3F3F4", "#FAFAFA", "#F0F0F0"):
-        pitch_bg = theme.get("pitch", "#1A3A2A")
-    if is_dark and panel_col in ("#ECEDEF", "#F0F0F0"):
-        panel_col = theme.get("panel", "#141A22")
 
     kp_col = "#FFB300"
     as_col = "#7B2D8B"
 
-    # ── Data prep ──────────────────────────────────────────────────────────
+    # ── Data prep (identical to pass_map) ────────────────────────────────────
     d = df.copy()
     if "event_type" in d.columns:
         d = d[d["event_type"].astype(str).str.lower() == "pass"].copy()
-
     if "outcome" not in d.columns:
         d["outcome"] = "successful"
     d["outcome"] = d["outcome"].astype(str).str.strip().str.lower()
-
     for c in ["x", "y", "x2", "y2"]:
         if c in d.columns:
             d[c] = pd.to_numeric(d[c], errors="coerce")
 
-    # mplsoccer Pitch uses statsbomb coords by default: x=0-120, y=0-80
-    # But our data is 0-100 (x), 0-pitch_width (y). We use pitch_type='custom'.
-    y_max = float(pitch_width if pitch_mode == "rect" else 100.0)
+    y_max  = float(pitch_width if pitch_mode == "rect" else 100.0)
+    has_end = d["x2"].notna() & d["y2"].notna() if "x2" in d.columns else pd.Series(False, index=d.index)
+    d_end = d[has_end].copy()
 
     succ   = d[d["outcome"].isin(["successful", "key pass", "assist"])].dropna(subset=["x","y"])
     unsucc = d[d["outcome"] == "unsuccessful"].dropna(subset=["x","y"])
@@ -1034,29 +1034,18 @@ def opta_pass_map_pro(
     n_total  = n_succ + n_unsucc
     accuracy_pct = float(accuracy_override) if accuracy_override else round(n_succ / max(1, n_total) * 100, 1)
 
-    # ── mplsoccer Pitch (custom coordinate system matching our data) ────────
-    pitch = MplPitch(
-        pitch_type="custom",
-        pitch_length=100,
-        pitch_width=y_max,
-        pitch_color=pitch_bg,
-        line_color=line_col,
-        linewidth=1.5,
-        goal_type="box",
-        goal_alpha=1.0,
-        line_alpha=1.0,
-        corner_arcs=True,
-    )
+    # ── Pitch — EXACT same construction as the normal pass_map() ────────────
+    pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme, vertical_pitch=False)
+    base_w, base_h = _pitch_figsize(False, pitch_width)   # same fixed pitch figsize used elsewhere
 
-    # ── Figure: compute height so pitch fills space at true 105:68 ratio ───
-    # mplsoccer draws pitch at its natural data ratio. We add header + footer.
-    fig_w       = 14.0
-    header_h    = 1.6   # inches
-    footer_h    = 1.9   # inches
-    # True pitch ratio is pitch_length/pitch_width in data units = 100/y_max
-    # pitch area occupies 90% of figure width
-    pitch_in_w  = fig_w * 0.90
-    pitch_in_h  = pitch_in_w * (y_max / 100.0)
+    # Scale the base pitch figsize up for a higher-res pro chart, keeping the
+    # exact same aspect ratio, then add fixed header/footer bands around it.
+    scale       = 1.7
+    pitch_in_w  = base_w * scale
+    pitch_in_h  = base_h * scale
+    header_h    = 1.5
+    footer_h    = 1.8
+    fig_w       = pitch_in_w
     fig_h       = pitch_in_h + header_h + footer_h
 
     fig = plt.figure(figsize=(fig_w, fig_h), facecolor=bg)
@@ -1065,91 +1054,68 @@ def opta_pass_map_pro(
     foot_frac = footer_h / fig_h
     pit_frac  = pitch_in_h / fig_h
 
-    # ── Draw pitch using mplsoccer ──────────────────────────────────────────
-    left, bot = 0.04, foot_frac
-    w,   h    = 0.92, pit_frac
-    ax = fig.add_axes([left, bot, w, h])
-    pitch.draw(ax=ax)
-    ax.set_facecolor(pitch_bg)
+    # ── Pitch axes — placed in the middle band, same draw calls as pass_map ──
+    ax = fig.add_axes([0.0, foot_frac, 1.0, pit_frac])
+    ax.set_facecolor(bg)
+    _draw_pitch(ax, pitch, theme)   # identical helper used by pass_map()
 
-    # ── Arrows + dots — all drawn via pitch methods (same coord system) ─────
-    def _draw_pass_group(subset, color, alpha, lw, dot_s, zorder):
-        sub = subset.dropna(subset=["x","y"]).copy()
-        if sub.empty:
+    # Arrows first (same PASS_ORDER draw approach as pass_map)
+    def _arrows(subset, color, alpha):
+        valid = subset.dropna(subset=["x2", "y2"]) if "x2" in subset.columns else subset.iloc[0:0]
+        if not valid.empty:
+            pitch.arrows(
+                valid["x"], valid["y"], valid["x2"], valid["y2"],
+                ax=ax, width=arrow_width, alpha=alpha, color=color,
+            )
+
+    def _dots(subset, color, alpha, size):
+        if subset.empty:
             return
-        has_end = "x2" in sub.columns and "y2" in sub.columns and sub["x2"].notna().any()
-        if has_end:
-            vsub = sub.dropna(subset=["x2","y2"])
-            if not vsub.empty:
-                pitch.arrows(
-                    vsub["x"], vsub["y"], vsub["x2"], vsub["y2"],
-                    ax=ax,
-                    color=color,
-                    alpha=alpha,
-                    width=lw,
-                    headwidth=lw * 4,
-                    headlength=lw * 3,
-                    headaxislength=lw * 2.5,
-                    zorder=zorder,
-                )
-            # Dot exactly at arrow tail — same coords as arrow start
-            pitch.scatter(
-                sub["x"], sub["y"],
-                ax=ax,
-                s=dot_s,
-                color=color,
-                edgecolors="none",
-                alpha=min(1.0, alpha + 0.05),
-                zorder=zorder + 0.5,
-            )
-        else:
-            pitch.scatter(
-                sub["x"], sub["y"],
-                ax=ax,
-                s=dot_s + 10,
-                color=color,
-                edgecolors="white",
-                linewidth=0.5,
-                alpha=alpha,
-                zorder=zorder,
-            )
+        pitch.scatter(
+            subset["x"], subset["y"],
+            ax=ax, s=size, marker="o",
+            color=color, edgecolors="white", linewidth=1.0,
+            alpha=alpha, zorder=6,
+        )
 
-    _draw_pass_group(unsucc, unsuccessful_color, arrow_alpha * 0.7, arrow_width * 0.9, 20, 3)
-    _draw_pass_group(succ,   successful_color,   arrow_alpha,        arrow_width,       24, 4)
-    _draw_pass_group(key_p,  kp_col,             min(1.0, arrow_alpha + 0.1), arrow_width * 1.1, 32, 5)
-    _draw_pass_group(assist, as_col,             1.0,                arrow_width * 1.2, 38, 6)
+    _arrows(unsucc, unsuccessful_color, arrow_alpha * 0.7)
+    _arrows(succ,   successful_color,   arrow_alpha)
+    _arrows(key_p,  kp_col,             min(1.0, arrow_alpha + 0.1))
+    _arrows(assist, as_col,             1.0)
 
-    # Thirds
+    _dots(unsucc, unsuccessful_color, 0.9, 60)
+    _dots(succ,   successful_color,   0.95, 75)
+    _dots(key_p,  kp_col,             1.0, 90)
+    _dots(assist, as_col,             1.0, 100)
+
+    # Same bounds-setting helper as pass_map — guarantees identical scale
+    _set_pitch_bounds(ax, pitch_mode, pitch_width, vertical_pitch=False)
+
+    # Thirds overlay (subtle dashed) — matches pass_map's optional thirds style
     for xv in [100/3, 200/3]:
-        ax.plot([xv, xv], [0, y_max], color=line_col, lw=0.9, ls="--", alpha=0.4, zorder=2)
+        ax.plot([xv, xv], [0, y_max], color=theme.get("pitch_lines", "#9B9B9B"),
+                lw=0.8, ls="--", alpha=0.35, zorder=2)
 
-    # Attacking direction arrow (below pitch, in figure space)
+    # Attacking direction arrow, drawn just under the pitch axes
     show_adir  = cfg.get("show_attack_dir", True)
     adir_col   = cfg.get("attack_dir_color", muted_col)
     adir_label = cfg.get("attack_dir_label", "Attacking Direction")
     if show_adir:
-        # Draw below the pitch in the gap between pitch and footer
-        gap_cx = 0.50   # figure x centre
-        gap_y  = foot_frac + pit_frac * 0.02   # just below pitch bottom
-        # Arrow from 30% to 70% of figure width
+        arr_y_fig = foot_frac + pit_frac * 0.015
         fig.add_artist(plt.matplotlib.patches.FancyArrowPatch(
-            (0.28, gap_y - 0.01), (0.72, gap_y - 0.01),
+            (0.30, arr_y_fig), (0.70, arr_y_fig),
             transform=fig.transFigure,
-            arrowstyle="-|>",
-            mutation_scale=12,
-            color=adir_col,
-            lw=1.8,
-            clip_on=False,
+            arrowstyle="-|>", mutation_scale=12,
+            color=adir_col, lw=1.8, clip_on=False,
         ))
-        fig.text(gap_cx, gap_y - foot_frac * 0.28, adir_label,
+        fig.text(0.50, arr_y_fig - footer_h * 0.09 / fig_h, adir_label,
                  ha="center", va="top", fontsize=9, color=adir_col)
 
-    # ── Header band ─────────────────────────────────────────────────────────
+    # ── Header band ───────────────────────────────────────────────────────
     ax_hdr = fig.add_axes([0.0, 1.0 - hdr_frac, 1.0, hdr_frac])
     ax_hdr.set_facecolor(bg); ax_hdr.axis("off")
     ax_hdr.set_xlim(0, 1); ax_hdr.set_ylim(0, 1)
 
-    # Accent bar at very top
     ax_hdr.add_patch(plt.Rectangle((0, 0.90), 1, 0.10,
                                     facecolor=successful_color,
                                     transform=ax_hdr.transAxes, zorder=10, clip_on=False))
@@ -1159,30 +1125,29 @@ def opta_pass_map_pro(
     sub_line    = "  ·  ".join(sub_parts[:3])
     team_name   = cfg.get("team_name", "")
 
-    ax_hdr.text(0.02, 0.80, player_name, fontsize=26, weight="900",
+    ax_hdr.text(0.02, 0.80, player_name, fontsize=24, weight="900",
                 color=text_col, va="top", transform=ax_hdr.transAxes)
     if sub_line:
-        ax_hdr.text(0.02, 0.42, sub_line, fontsize=10, color=muted_col,
+        ax_hdr.text(0.02, 0.40, sub_line, fontsize=10, color=muted_col,
                     va="top", transform=ax_hdr.transAxes)
     if team_name:
-        ax_hdr.text(0.02, 0.18, team_name, fontsize=9.5, color=muted_col,
+        ax_hdr.text(0.02, 0.16, team_name, fontsize=9.5, color=muted_col,
                     va="top", transform=ax_hdr.transAxes, style="italic")
 
-    # Legend — two rows, right side
-    def _legend_arrow(ax, x0, y, color, label, lx_label):
-        ax.annotate("", xy=(x0 + 0.055, y), xytext=(x0 + 0.008, y),
+    def _legend_arrow(x0, y, color, label, lx_label):
+        ax_hdr.annotate("", xy=(x0 + 0.055, y), xytext=(x0 + 0.008, y),
                     xycoords="axes fraction",
                     arrowprops=dict(arrowstyle="-|>", color=color, lw=2.0))
-        ax.scatter([x0 + 0.008], [y], s=40, color=color,
-                   transform=ax.transAxes, zorder=5, clip_on=False)
-        ax.text(lx_label, y, label, fontsize=9.5, color=text_col,
-                va="center", transform=ax.transAxes)
+        ax_hdr.scatter([x0 + 0.008], [y], s=40, color=color,
+                   transform=ax_hdr.transAxes, zorder=5, clip_on=False)
+        ax_hdr.text(lx_label, y, label, fontsize=9.5, color=text_col,
+                va="center", transform=ax_hdr.transAxes)
 
     lx_a, lx_b = 0.56, 0.79
-    _legend_arrow(ax_hdr, lx_a, 0.70, successful_color,   "Successful pass", lx_a + 0.063)
-    _legend_arrow(ax_hdr, lx_b, 0.70, unsuccessful_color, "Unsuccessful",    lx_b + 0.063)
-    _legend_arrow(ax_hdr, lx_a, 0.30, kp_col,             "Key pass",        lx_a + 0.063)
-    _legend_arrow(ax_hdr, lx_b, 0.30, as_col,             "Assist",          lx_b + 0.063)
+    _legend_arrow(lx_a, 0.70, successful_color,   "Successful pass", lx_a + 0.063)
+    _legend_arrow(lx_b, 0.70, unsuccessful_color, "Unsuccessful",    lx_b + 0.063)
+    _legend_arrow(lx_a, 0.30, kp_col,             "Key pass",        lx_a + 0.063)
+    _legend_arrow(lx_b, 0.30, as_col,             "Assist",          lx_b + 0.063)
 
     if cfg.get("logo_img"):
         draw_logo(fig, cfg["logo_img"],
@@ -1195,7 +1160,7 @@ def opta_pass_map_pro(
                   cfg.get("player_w", 0.08),  cfg.get("player_h", hdr_frac * 0.88),
                   circle_crop=True, border_lw=2.0, border_color=successful_color)
 
-    # ── Footer stats ────────────────────────────────────────────────────────
+    # ── Footer stats band ────────────────────────────────────────────────
     ax_foot = fig.add_axes([0.0, 0.0, 1.0, foot_frac])
     ax_foot.set_facecolor(panel_col); ax_foot.axis("off")
     ax_foot.set_xlim(0, 1); ax_foot.set_ylim(0, 1)
@@ -1203,10 +1168,10 @@ def opta_pass_map_pro(
 
     def _stat(x, val, label, color=None):
         ax_foot.text(x, 0.70, str(val), ha="center", va="top",
-                     fontsize=28, weight="900", color=color or text_col,
+                     fontsize=26, weight="900", color=color or text_col,
                      transform=ax_foot.transAxes)
         ax_foot.text(x, 0.32, label, ha="center", va="top",
-                     fontsize=9, color=muted_col, transform=ax_foot.transAxes, weight="bold")
+                     fontsize=8.5, color=muted_col, transform=ax_foot.transAxes, weight="bold")
 
     acc_str   = f"{accuracy_pct}%" if isinstance(accuracy_pct, (int, float)) else str(accuracy_pct)
     total_str = str(n_total)
