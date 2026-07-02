@@ -51,6 +51,10 @@ if charts:
     defensive_actions_map = getattr(charts, "defensive_actions_map", None)
     THEMES = getattr(charts, "THEMES", {})
     make_pitch = getattr(charts, "make_pitch", None)
+    build_report_from_prepared_df = getattr(charts, "build_report_from_prepared_df", None)
+    add_report_header = getattr(charts, "add_report_header", None)
+    carry_map = getattr(charts, "carry_map", None)
+    zone_heatmap = getattr(charts, "zone_heatmap", None)
 
 # 3. Safely unpack features from charts_extra.py
 if charts_extra:
@@ -115,19 +119,8 @@ if draw_tagging_pitch is None:
 
         y_max = float(pitch_width if pitch_mode == "rect" else 100.0)
         aspect = y_max / 100.0
-
-        # Coordinate space: X spans -4..104 (108 units), Y spans Y_MIN..Y_MAX
-        # Size the figure so its aspect ratio EXACTLY matches the coord range ratio
-        # — this eliminates letterboxing from set_aspect("equal") and makes pixel
-        #   mapping perfectly linear across the whole image.
-        X_MIN_pre, X_MAX_pre = -4.0, 104.0
-        Y_MIN_pre = -y_max * 0.18
-        Y_MAX_pre =  y_max * 1.05
-        coord_x_range = X_MAX_pre - X_MIN_pre    # 108
-        coord_y_range = Y_MAX_pre - Y_MIN_pre
-
         fig_w = display_width / 100.0
-        fig_h = fig_w * (coord_y_range / coord_x_range)
+        fig_h = fig_w * aspect
 
         fig, ax = plt.subplots(figsize=(fig_w, fig_h))
         fig.patch.set_facecolor(t["bg"])
@@ -238,14 +231,12 @@ if draw_tagging_pitch is None:
 
         # Use FIXED axis limits — no tight bbox so pixel mapping is exact
         # xlim and ylim define the full coordinate space rendered
-        X_MIN, X_MAX = X_MIN_pre, X_MAX_pre
-        Y_MIN, Y_MAX = Y_MIN_pre, Y_MAX_pre
+        X_MIN, X_MAX = -4.0, 104.0
+        Y_MIN = -y_max * 0.18
+        Y_MAX =  y_max * 1.05
         ax.set_xlim(X_MIN, X_MAX)
         ax.set_ylim(Y_MIN, Y_MAX)
-        # Do NOT use set_aspect("equal") — it letterboxes the axes inside the
-        # figure and breaks the linear pixel→coord mapping.  Instead the figure
-        # size is pre-computed to match the coordinate aspect ratio exactly.
-        ax.set_aspect("auto")
+        ax.set_aspect("equal", adjustable="box")
         ax.axis("off")
         fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
 
@@ -918,6 +909,7 @@ with st.sidebar:
         "🍕 Radars & Pizza",
         "🧠 Player Scouting",
         "🖱️ Tagging Tool",
+        "📋 Report Builder",
     ], key="nav")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2353,11 +2345,15 @@ if section == "🖱️ Tagging Tool":
                 if key_c!=st.session_state["tag_last_click"]:
                     st.session_state["tag_last_click"]=key_c
                     # ── Exact pixel → pitch coordinate mapping ──────────────
-                    # pad_tag is a tuple (X_MIN, X_MAX, Y_MIN, Y_MAX).
-                    # The figure height is pre-computed to exactly match the
-                    # coordinate aspect ratio, and set_aspect("auto") is used
-                    # so there is zero letterboxing — pixels map linearly to
-                    # pitch coordinates across the entire image.
+                    # pad_tag is now a tuple (X_MIN, X_MAX, Y_MIN, Y_MAX)
+                    # The figure was saved with set_aspect("equal") and
+                    # subplots_adjust(left=0,right=1,top=1,bottom=0) so the
+                    # rendered pixel space maps linearly to figure coords,
+                    # but set_aspect("equal") adds whitespace padding inside
+                    # the axes.  We must account for that.
+                    #
+                    # Strategy: use the known figure size + dpi to get canvas
+                    # pixels, then map linearly within those bounds.
                     if isinstance(pad_tag, tuple) and len(pad_tag)==4:
                         X_MIN_c, X_MAX_c, Y_MIN_c, Y_MAX_c = pad_tag
                     else:
@@ -2367,6 +2363,13 @@ if section == "🖱️ Tagging Tool":
                     x_coord_range = X_MAX_c - X_MIN_c   # 108.0
                     y_coord_range = Y_MAX_c - Y_MIN_c
 
+                    # Because set_aspect("equal") is used, the axes are
+                    # letterboxed inside the figure.  The figure is drawn at
+                    # fig_w×fig_h inches @100 dpi; axis limits set
+                    # pitch coords; aspect=equal means the shorter dimension
+                    # is fully used and the longer has padding.
+                    # Simplest robust fix: treat the full image as the mapped
+                    # region (the pitch drawing fills ~100% with no tight bbox).
                     x_pitch = round(X_MIN_c + (int(click["x"]) / max(img_w, 1)) * x_coord_range, 2)
                     y_pitch = round(Y_MAX_c - (int(click["y"]) / max(img_h, 1)) * y_coord_range, 2)
                     # Clamp to valid pitch range
@@ -2509,4 +2512,392 @@ if section == "🖱️ Tagging Tool":
                     st.error(f"Chart error: {e}")
         else:
             st.info("No events tagged yet. Click the pitch above to start tagging.")
+    st.stop()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 📋  REPORT BUILDER
+# ─────────────────────────────────────────────────────────────────────────────
+if section == "📋 Report Builder":
+    hdr("📋", "Report Builder",
+        "Pick charts · configure · export as a branded multi-page PDF")
+
+    # ── All available chart slots ─────────────────────────────────────────────
+    ALL_REPORT_CHARTS = [
+        "Outcome Bar",
+        "Touch Map (Scatter)",
+        "Start Heatmap",
+        "Pass Map",
+        "Shot Map",
+        "Defensive Actions Map",
+        "Carry Map",
+        "Zone Heatmap",
+    ]
+
+    # ── Sidebar ───────────────────────────────────────────────────────────────
+    with st.sidebar:
+        st.markdown("### 📂 Event Data")
+        rb_f = st.file_uploader("CSV / Excel", type=["csv","xlsx","xls"], key="rb_f")
+        st.markdown('<div class="divd"></div>', unsafe_allow_html=True)
+        st.markdown("### 🎨 Theme & Pitch")
+        rb_tn  = st.selectbox("Theme", ALL_THEMES,
+                               index=ALL_THEMES.index("The Athletic Dark") if "The Athletic Dark" in ALL_THEMES else 0,
+                               key="rb_tn")
+        rb_ad  = st.selectbox("Attack direction", ["Left → Right","Right → Left"], key="rb_ad")
+        rb_fy  = st.checkbox("Flip Y axis", False, key="rb_fy")
+        rb_ps  = st.selectbox("Pitch shape", ["Rectangular","Square"], key="rb_ps")
+        rb_pm  = "rect" if rb_ps == "Rectangular" else "square"
+        rb_pw  = st.slider("Pitch width", 50.0, 80.0, 68.0, 1.0, key="rb_pw") if rb_pm=="rect" else 100.0
+
+    # ── Load & prepare data ───────────────────────────────────────────────────
+    rb_df = None
+    if rb_f is not None:
+        try:
+            raw = load_ev(rb_f)
+            raw = ensure_outcome(raw)
+            rb_df = prepare_df_for_charts(
+                raw,
+                attack_direction="ltr" if "Left" in rb_ad else "rtl",
+                flip_y=rb_fy, pitch_mode=rb_pm, pitch_width=rb_pw, xg_method="zone",
+            )
+        except Exception as e:
+            st.error(f"Load error: {e}")
+
+    # ── Main layout ───────────────────────────────────────────────────────────
+    tab_cfg, tab_prev, tab_exp = st.tabs(["⚙️ Configure", "👁️ Preview", "⬇️ Export"])
+
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 1 — CONFIGURE
+    # ════════════════════════════════════════════════════════════════════════
+    with tab_cfg:
+        if rb_df is None:
+            nofile()
+        else:
+            st.markdown("#### Report info")
+            c1, c2 = st.columns(2)
+            with c1:
+                rb_title    = st.text_input("Report title",    "Match Report",  key="rb_title")
+                rb_subtitle = st.text_input("Subtitle / info", "",              key="rb_sub")
+            with c2:
+                rb_player   = st.text_input("Player / team",   "",              key="rb_player")
+                rb_analyst  = st.text_input("Analyst credit",  "",              key="rb_analyst")
+
+            st.markdown("#### Cover page branding")
+            cl, cr = st.columns(2)
+            with cl:
+                rb_logo_f   = st.file_uploader("Club / org logo", type=["png","jpg","jpeg","webp"], key="rb_logo")
+            with cr:
+                rb_player_f = st.file_uploader("Player photo",    type=["png","jpg","jpeg","webp"], key="rb_photo")
+            rb_logo_img   = load_img(rb_logo_f)
+            rb_player_img = load_img(rb_player_f)
+
+            st.markdown("#### Chart selection & order")
+            st.caption("Drag to reorder isn't available in the browser — use the number inputs below to set position, or just pick the ones you want.")
+
+            # Multi-select then let user set order with number inputs
+            rb_selected = st.multiselect(
+                "Charts to include",
+                ALL_REPORT_CHARTS,
+                default=["Touch Map (Scatter)", "Pass Map", "Shot Map"],
+                key="rb_charts",
+            )
+
+            if rb_selected:
+                st.caption("Set position (1 = first page):")
+                order_map = {}
+                cols_o = st.columns(min(len(rb_selected), 4))
+                for i, ch in enumerate(rb_selected):
+                    with cols_o[i % 4]:
+                        order_map[ch] = st.number_input(
+                            ch[:18], min_value=1, max_value=len(rb_selected),
+                            value=i+1, step=1, key=f"rb_ord_{i}"
+                        )
+                # Sort by user-defined position
+                rb_ordered = sorted(rb_selected, key=lambda c: order_map.get(c, 99))
+            else:
+                rb_ordered = []
+
+            st.markdown("#### Page settings")
+            c3, c4, c5 = st.columns(3)
+            with c3:
+                rb_dpi = st.select_slider("Export DPI", options=[100,150,200,220,300], value=220, key="rb_dpi")
+            with c4:
+                rb_two_col = st.checkbox("2-column layout (2 charts per page)", False, key="rb_2col")
+            with c5:
+                rb_cover   = st.checkbox("Add cover page", True, key="rb_cover")
+
+            st.session_state["rb_config"] = dict(
+                title=rb_title, subtitle=rb_subtitle,
+                player=rb_player, analyst=rb_analyst,
+                charts=rb_ordered, dpi=rb_dpi,
+                two_col=rb_two_col, cover=rb_cover,
+                logo=rb_logo_img, player_img=rb_player_img,
+            )
+            st.success(f"✅ {len(rb_ordered)} chart(s) selected — go to **Preview** or **Export**.")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 2 — PREVIEW
+    # ════════════════════════════════════════════════════════════════════════
+    with tab_prev:
+        if rb_df is None:
+            nofile()
+        elif not st.session_state.get("rb_config", {}).get("charts"):
+            st.info("Select at least one chart in Configure first.")
+        else:
+            cfg_p = st.session_state["rb_config"]
+            theme = THEMES.get(rb_tn, THEMES.get("The Athletic Dark", {}))
+
+            if st.button("🔄 Generate Previews", key="rb_gen_prev"):
+                preview_figs = {}
+                prog = st.progress(0, text="Generating charts…")
+                chart_fns = {
+                    "Outcome Bar":          lambda: outcome_bar(rb_df, theme_name=rb_tn) if outcome_bar else None,
+                    "Touch Map (Scatter)":  lambda: touch_map(rb_df, pitch_mode=rb_pm, pitch_width=rb_pw, theme_name=rb_tn) if touch_map else None,
+                    "Start Heatmap":        lambda: start_location_heatmap(rb_df, pitch_mode=rb_pm, pitch_width=rb_pw, theme_name=rb_tn) if start_location_heatmap else None,
+                    "Pass Map":             lambda: pass_map(rb_df, pitch_mode=rb_pm, pitch_width=rb_pw, theme_name=rb_tn) if pass_map else None,
+                    "Shot Map":             lambda: shot_map(rb_df, pitch_mode=rb_pm, pitch_width=rb_pw, theme_name=rb_tn, show_xg=True) if shot_map else None,
+                    "Defensive Actions Map":lambda: defensive_actions_map(rb_df, pitch_mode=rb_pm, pitch_width=rb_pw, theme_name=rb_tn) if defensive_actions_map else None,
+                    "Carry Map":            lambda: carry_map(rb_df, pitch_mode=rb_pm, pitch_width=rb_pw, theme_name=rb_tn) if carry_map else None,
+                    "Zone Heatmap":         lambda: zone_heatmap(rb_df, pitch_mode=rb_pm, pitch_width=rb_pw, theme_name=rb_tn) if zone_heatmap else None,
+                }
+                for idx, ch in enumerate(cfg_p["charts"]):
+                    prog.progress((idx) / max(len(cfg_p["charts"]),1), text=f"Building {ch}…")
+                    fn = chart_fns.get(ch)
+                    if fn:
+                        try:
+                            fig = fn()
+                            if fig and add_report_header:
+                                add_report_header(
+                                    fig,
+                                    title=cfg_p["title"] or "Match Report",
+                                    subtitle="  ·  ".join(filter(None, [cfg_p["subtitle"], cfg_p["player"]])),
+                                    theme_name=rb_tn,
+                                )
+                            preview_figs[ch] = fig
+                        except Exception as e:
+                            st.warning(f"{ch}: {e}")
+                prog.progress(1.0, text="Done.")
+                st.session_state["rb_preview_figs"] = preview_figs
+
+            if "rb_preview_figs" in st.session_state and st.session_state["rb_preview_figs"]:
+                pfigs = st.session_state["rb_preview_figs"]
+                ordered_keys = [c for c in cfg_p.get("charts",[]) if c in pfigs]
+                if cfg_p.get("two_col"):
+                    pairs = [ordered_keys[i:i+2] for i in range(0, len(ordered_keys), 2)]
+                    for pair in pairs:
+                        cols_pr = st.columns(len(pair))
+                        for j, ch in enumerate(pair):
+                            with cols_pr[j]:
+                                st.caption(f"**{ch}**")
+                                st.image(_bytes(pfigs[ch], dpi=100), use_container_width=True)
+                else:
+                    for ch in ordered_keys:
+                        st.markdown(f"**{ch}**")
+                        st.image(_bytes(pfigs[ch], dpi=100), use_container_width=True)
+                        st.markdown("---")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 3 — EXPORT
+    # ════════════════════════════════════════════════════════════════════════
+    with tab_exp:
+        if rb_df is None:
+            nofile()
+        elif not st.session_state.get("rb_config", {}).get("charts"):
+            st.info("Select charts in Configure first.")
+        else:
+            cfg_e = st.session_state["rb_config"]
+            st.markdown("#### Export options")
+            c6, c7 = st.columns(2)
+            with c6:
+                rb_export_dpi = st.select_slider("PDF DPI", options=[150,200,220,300], value=220, key="rb_exp_dpi")
+            with c7:
+                rb_pad = st.slider("Page padding (inches)", 0.1, 0.5, 0.25, 0.05, key="rb_pad")
+
+            if st.button("📄 Build PDF", key="rb_build_pdf", use_container_width=True):
+                with st.spinner("Rendering all charts and assembling PDF…"):
+                    try:
+                        import tempfile, os as _os
+                        tmp_dir = tempfile.mkdtemp()
+
+                        chart_fns_exp = {
+                            "Outcome Bar":          lambda: outcome_bar(rb_df, theme_name=rb_tn) if outcome_bar else None,
+                            "Touch Map (Scatter)":  lambda: touch_map(rb_df, pitch_mode=rb_pm, pitch_width=rb_pw, theme_name=rb_tn) if touch_map else None,
+                            "Start Heatmap":        lambda: start_location_heatmap(rb_df, pitch_mode=rb_pm, pitch_width=rb_pw, theme_name=rb_tn) if start_location_heatmap else None,
+                            "Pass Map":             lambda: pass_map(rb_df, pitch_mode=rb_pm, pitch_width=rb_pw, theme_name=rb_tn) if pass_map else None,
+                            "Shot Map":             lambda: shot_map(rb_df, pitch_mode=rb_pm, pitch_width=rb_pw, theme_name=rb_tn, show_xg=True) if shot_map else None,
+                            "Defensive Actions Map":lambda: defensive_actions_map(rb_df, pitch_mode=rb_pm, pitch_width=rb_pw, theme_name=rb_tn) if defensive_actions_map else None,
+                            "Carry Map":            lambda: carry_map(rb_df, pitch_mode=rb_pm, pitch_width=rb_pw, theme_name=rb_tn) if carry_map else None,
+                            "Zone Heatmap":         lambda: zone_heatmap(rb_df, pitch_mode=rb_pm, pitch_width=rb_pw, theme_name=rb_tn) if zone_heatmap else None,
+                        }
+
+                        pdf_buf = io.BytesIO()
+                        n_charts = len(cfg_e["charts"])
+
+                        with PdfPages(pdf_buf) as pdf:
+
+                            # ── Optional cover page ───────────────────────────
+                            if cfg_e.get("cover"):
+                                theme_cv = THEMES.get(rb_tn, THEMES.get("The Athletic Dark", {}))
+                                bg_cv  = theme_cv.get("bg",    "#0E1117")
+                                tx_cv  = theme_cv.get("text",  "#FFFFFF")
+                                mu_cv  = theme_cv.get("muted", "#A0A7B4")
+                                ac_cv  = theme_cv.get("accent","#C8102E")
+
+                                fig_cv, ax_cv = plt.subplots(figsize=(11.69, 8.27))  # A4 landscape
+                                fig_cv.patch.set_facecolor(bg_cv)
+                                ax_cv.set_facecolor(bg_cv)
+                                ax_cv.axis("off")
+
+                                # Accent bar top
+                                fig_cv.add_axes([0, 0.93, 1, 0.07]).set_facecolor(ac_cv)
+                                fig_cv.axes[-1].axis("off")
+                                # Accent bar bottom
+                                fig_cv.add_axes([0, 0, 1, 0.04]).set_facecolor(ac_cv)
+                                fig_cv.axes[-1].axis("off")
+
+                                # Title
+                                fig_cv.text(0.50, 0.62, cfg_e["title"] or "Match Report",
+                                             ha="center", va="center",
+                                             fontsize=44, weight="900", color=tx_cv)
+                                if cfg_e["subtitle"]:
+                                    fig_cv.text(0.50, 0.50, cfg_e["subtitle"],
+                                                 ha="center", va="center",
+                                                 fontsize=20, color=mu_cv)
+                                if cfg_e["player"]:
+                                    fig_cv.text(0.50, 0.42, cfg_e["player"],
+                                                 ha="center", va="center",
+                                                 fontsize=16, color=mu_cv, style="italic")
+
+                                n_txt = f"{n_charts} chart{'s' if n_charts!=1 else ''}"
+                                fig_cv.text(0.50, 0.30, n_txt,
+                                             ha="center", va="center",
+                                             fontsize=13, color=mu_cv)
+                                if cfg_e.get("analyst"):
+                                    fig_cv.text(0.96, 0.06, cfg_e["analyst"],
+                                                 ha="right", va="bottom",
+                                                 fontsize=11, color=mu_cv, weight="bold")
+
+                                # Logos on cover
+                                if cfg_e.get("logo") and add_report_header:
+                                    try:
+                                        from charts_pro import draw_logo as _draw_logo
+                                        _draw_logo(fig_cv, cfg_e["logo"], 0.04, 0.86, 0.12, 0.10)
+                                    except Exception:
+                                        pass
+                                if cfg_e.get("player_img") and add_report_header:
+                                    try:
+                                        from charts_pro import draw_logo as _draw_logo
+                                        _draw_logo(fig_cv, cfg_e["player_img"], 0.84, 0.86, 0.12, 0.10, circle_crop=True)
+                                    except Exception:
+                                        pass
+
+                                pdf.savefig(fig_cv, bbox_inches="tight", pad_inches=0)
+                                plt.close(fig_cv)
+
+                            # ── Chart pages ───────────────────────────────────
+                            if cfg_e.get("two_col"):
+                                pairs = [cfg_e["charts"][i:i+2] for i in range(0, len(cfg_e["charts"]), 2)]
+                                for pair in pairs:
+                                    figs_pair = []
+                                    for ch in pair:
+                                        fn = chart_fns_exp.get(ch)
+                                        if fn:
+                                            try:
+                                                f = fn()
+                                                if f: figs_pair.append((ch, f))
+                                            except Exception:
+                                                pass
+                                    if not figs_pair:
+                                        continue
+                                    # Stitch two charts side-by-side on one A4 page
+                                    fig_pg, axes_pg = plt.subplots(1, len(figs_pair),
+                                                                     figsize=(11.69, 8.27))
+                                    fig_pg.patch.set_facecolor(THEMES.get(rb_tn, {}).get("bg","#0E1117"))
+                                    if len(figs_pair) == 1:
+                                        axes_pg = [axes_pg]
+                                    for ax_pg in axes_pg:
+                                        ax_pg.axis("off")
+
+                                    # Render each sub-fig to image and paste
+                                    for idx_p, (ch, sub_fig) in enumerate(figs_pair):
+                                        if add_report_header:
+                                            add_report_header(sub_fig,
+                                                title=cfg_e["title"],
+                                                subtitle="  ·  ".join(filter(None,[cfg_e["subtitle"],cfg_e["player"]])),
+                                                theme_name=rb_tn)
+                                        buf_p = io.BytesIO()
+                                        sub_fig.savefig(buf_p, format="png",
+                                                        dpi=rb_export_dpi,
+                                                        bbox_inches="tight",
+                                                        pad_inches=rb_pad)
+                                        buf_p.seek(0)
+                                        img_p = Image.open(buf_p).convert("RGBA")
+                                        axes_pg[idx_p].imshow(img_p, aspect="auto")
+                                        axes_pg[idx_p].set_title(ch, fontsize=8,
+                                            color=THEMES.get(rb_tn,{}).get("muted","#888"))
+                                        plt.close(sub_fig)
+                                    plt.tight_layout(pad=0.2)
+                                    pdf.savefig(fig_pg, bbox_inches="tight", pad_inches=rb_pad)
+                                    plt.close(fig_pg)
+                            else:
+                                # One chart per page
+                                for ch in cfg_e["charts"]:
+                                    fn = chart_fns_exp.get(ch)
+                                    if not fn:
+                                        continue
+                                    try:
+                                        fig_ch = fn()
+                                        if fig_ch is None:
+                                            continue
+                                        if add_report_header:
+                                            add_report_header(
+                                                fig_ch,
+                                                title=cfg_e["title"],
+                                                subtitle="  ·  ".join(filter(None, [cfg_e["subtitle"], cfg_e["player"]])),
+                                                theme_name=rb_tn,
+                                            )
+                                        pdf.savefig(fig_ch,
+                                                    bbox_inches="tight",
+                                                    pad_inches=rb_pad)
+                                        plt.close(fig_ch)
+                                    except Exception as ex:
+                                        st.warning(f"Skipped {ch}: {ex}")
+
+                        pdf_buf.seek(0)
+                        pdf_bytes = pdf_buf.read()
+                        st.session_state["rb_pdf_bytes"] = pdf_bytes
+                        st.success(f"✅ PDF built — {n_charts} chart pages + {'cover' if cfg_e.get('cover') else 'no cover'}.")
+
+                    except Exception as e:
+                        st.error(f"PDF build failed: {e}")
+
+            # Download button (persists after build)
+            if st.session_state.get("rb_pdf_bytes"):
+                safe_name = (cfg_e.get("title") or "report").replace(" ","_").lower()
+                st.download_button(
+                    "⬇️ Download PDF",
+                    data=st.session_state["rb_pdf_bytes"],
+                    file_name=f"{safe_name}.pdf",
+                    mime="application/pdf",
+                    key="rb_dl_pdf",
+                    use_container_width=True,
+                )
+
+                # Also offer individual PNGs
+                with st.expander("⬇️ Download individual chart PNGs"):
+                    if "rb_preview_figs" in st.session_state:
+                        for ch, fig_dl in st.session_state["rb_preview_figs"].items():
+                            safe_ch = ch.lower().replace(" ","_").replace("(","").replace(")","")
+                            try:
+                                st.download_button(
+                                    f"⬇ {ch}",
+                                    data=_bytes(fig_dl, dpi=rb_export_dpi),
+                                    file_name=f"{safe_ch}.png",
+                                    mime="image/png",
+                                    key=f"rb_dl_{safe_ch}",
+                                )
+                            except Exception:
+                                pass
+                    else:
+                        st.info("Generate previews first (Preview tab) to enable PNG downloads.")
+
     st.stop()
