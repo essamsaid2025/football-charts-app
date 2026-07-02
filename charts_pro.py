@@ -21,10 +21,11 @@ from mplsoccer import Pitch, VerticalPitch
 
 # ── Import from existing modules ──────────────────────────────────────────────
 try:
-    from charts import THEMES, make_pitch
+    from charts import THEMES, make_pitch, place_legend_outside_axes
 except Exception:
     THEMES = {}
     def make_pitch(**kw): return Pitch()
+    place_legend_outside_axes = None
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EXTENDED THEME REGISTRY
@@ -349,37 +350,41 @@ def draw_stat_blocks_right(ax_stats, blocks: List[dict], theme: dict):
 
 
 def draw_custom_legend(ax, handles: list, cfg: dict, theme: dict):
-    """Draw a fully configurable legend onto an axis."""
+    """Draw a fully configurable legend onto an axis.
+
+    Delegates to charts.place_legend_outside_axes, which anchors the legend
+    to the axes' figure position AFTER aspect-ratio ('equal'/adjustable=
+    'box') correction is resolved, and renders it outside the plotted area.
+    The previous implementation here anchored via
+    ax.legend(bbox_to_anchor=<axes-fraction>) before that correction ran,
+    which could place the legend at the top of the chart even when "lower
+    center" was requested, overlapping titles/labels.
+    """
     if not cfg.get("show_legend", True) or not handles:
         return
-    active_labels = None  # all
-    title = cfg.get("legend_title", "") or None
-    pos = cfg.get("legend_pos", "lower center")
-    fs = cfg.get("legend_fontsize", 9)
-    ms = cfg.get("legend_markerscale", 1.0)
-    ncol = cfg.get("legend_ncol") or min(4, len(handles))
-    frame = cfg.get("legend_frame", False)
-
-    bbox = None
-    if "upper" in pos and "center" in pos:
-        bbox = (0.5, 0.98)
-    elif "lower" in pos and "center" in pos:
-        bbox = (0.5, 0.02)
-
-    leg = ax.legend(
-        handles=handles, loc=pos, fontsize=fs,
-        markerscale=ms, ncol=ncol, frameon=frame,
-        title=title, bbox_to_anchor=bbox,
+    if place_legend_outside_axes is None:
+        # Fallback if charts.py couldn't be imported for some reason.
+        leg = ax.legend(handles=handles, loc=cfg.get("legend_pos", "lower center"),
+                         fontsize=cfg.get("legend_fontsize", 9),
+                         markerscale=cfg.get("legend_markerscale", 1.0),
+                         ncol=cfg.get("legend_ncol") or min(4, len(handles)),
+                         frameon=cfg.get("legend_frame", False),
+                         title=cfg.get("legend_title", "") or None)
+        for t in leg.get_texts():
+            t.set_color(theme.get("text", "white"))
+        return
+    place_legend_outside_axes(
+        ax, handles, theme,
+        loc=cfg.get("legend_pos", "lower center"),
+        legend_cfg={
+            "show": cfg.get("show_legend", True),
+            "title": cfg.get("legend_title", "") or None,
+            "fontsize": cfg.get("legend_fontsize", 9),
+            "markerscale": cfg.get("legend_markerscale", 1.0),
+            "ncol": cfg.get("legend_ncol") or min(4, len(handles)),
+            "frame": cfg.get("legend_frame", False),
+        },
     )
-    leg.set_in_layout(True)
-    text_col = theme.get("text", "white")
-    for t in leg.get_texts():
-        t.set_color(text_col)
-    if leg.get_title():
-        leg.get_title().set_color(theme.get("muted", "#888888"))
-    if frame:
-        leg.get_frame().set_facecolor(theme.get("panel", "#111827"))
-        leg.get_frame().set_edgecolor(theme.get("lines", "#333333"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -680,7 +685,7 @@ def athletic_shot_map_pro(
         lw_dot = 0 if is_goal else 1.5
         ax_pitch.scatter([float(row["y"])], [float(row["x"])],
                          s=sz, color=fc, edgecolors=ec,
-                         linewidth=lw_dot, alpha=0.92, zorder=6)
+                         linewidth=lw_dot, alpha=0.92, zorder=6, clip_on=False)
 
     # ── Average distance indicator ─────────────────────────────────────────
     if not shots.empty and avg_dist > 0:
@@ -912,7 +917,8 @@ def athletic_compact_shot_map(
         size = max(min_dot_size, min(max_dot_size, size))
         ax_pitch.scatter([float(row["y"])], [float(row["x"])],
                          s=size, color=accent if is_goal else no_goal_color,
-                         edgecolors=edge_color, linewidth=0.9, alpha=0.82, zorder=5)
+                         edgecolors=edge_color, linewidth=0.9, alpha=0.82, zorder=5,
+                         clip_on=False)
 
     ax_stats = fig.add_axes([0, 0.18, 1, 0.07])
     ax_stats.set_facecolor(bg)
@@ -1148,11 +1154,12 @@ def opta_pass_map_pro(
             # Start dots
             ax_pitch.scatter(valid["x"], valid["y"], s=dot_size,
                              color=color, alpha=min(1.0, alpha_val + 0.1),
-                             edgecolors="none", zorder=zorder + 1)
+                             edgecolors="none", zorder=zorder + 1, clip_on=False)
         else:
             ax_pitch.scatter(subset["x"], subset["y"], s=dot_size + 20,
                              color=color, alpha=alpha_val,
-                             edgecolors=panel_col, linewidth=0.5, zorder=zorder)
+                             edgecolors=panel_col, linewidth=0.5, zorder=zorder,
+                             clip_on=False)
 
     # Draw in order: unsucc (bottom), succ, key_pass, assist (top)
     _draw_arrows(unsucc, unsuccessful_color, arrow_alpha * 0.65, dot_size=22, zorder=3)
@@ -1287,13 +1294,16 @@ def pro_pass_map(
             if not valid.empty:
                 if vertical:
                     pitch.arrows(valid["x"], valid["y"], valid["x2"], valid["y2"],
-                                 ax=ax_pitch, color=col, width=1.8, alpha=0.82)
+                                 ax=ax_pitch, color=col, width=1.8, alpha=0.82,
+                                 zorder=3, clip_on=False)
                 else:
                     pitch.arrows(valid["x"], valid["y"], valid["x2"], valid["y2"],
-                                 ax=ax_pitch, color=col, width=1.8, alpha=0.82)
+                                 ax=ax_pitch, color=col, width=1.8, alpha=0.82,
+                                 zorder=3, clip_on=False)
         if mk and str(mk).lower() not in {"none", ""}:
             pitch.scatter(sub["x"], sub["y"], ax=ax_pitch, s=70, marker=mk,
-                          color=col, edgecolors="white", linewidth=0.8, zorder=5)
+                          color=col, edgecolors="white", linewidth=0.8, zorder=5,
+                          clip_on=False)
             handles.append(Line2D([0], [0], marker=mk, color="none",
                 markerfacecolor=col, markeredgecolor="white",
                 markersize=8, label=outc))
@@ -1379,7 +1389,8 @@ def pro_shot_map(
             sizes = 160
 
         pitch.scatter(sub["x"], sub["y"], ax=ax_pitch, s=sizes, marker=mk,
-                      color=col, edgecolors="white", linewidth=1.4, alpha=0.95, zorder=5)
+                      color=col, edgecolors="white", linewidth=1.4, alpha=0.95, zorder=5,
+                      clip_on=False)
 
         if show_xg and "xg" in sub.columns:
             for _, row in sub.iterrows():
