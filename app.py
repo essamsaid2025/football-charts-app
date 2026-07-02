@@ -466,6 +466,47 @@ def preview(fig, name):
     st.image(_bytes(fig, dpi=180), use_container_width=True)
     dl_row(fig, name)
 
+def count_rendered_pass_events(fig):
+    """
+    Count every arrow/marker actually queued for drawing across ALL axes of
+    a figure, regardless of which pass-map function produced it (matplotlib
+    pitch.arrows()/pitch.scatter() -> Quiver/PathCollection; the
+    ax.annotate()-based arrows used by opta_pass_map_pro -> Annotation
+    objects with an arrow_patch). Used to prove, on-screen, that the number
+    of rendered items matches the number of valid events -- not by eye.
+    """
+    arrows = 0
+    markers = 0
+    for ax in fig.axes:
+        for c in ax.collections:
+            tname = type(c).__name__
+            n = c.get_offsets().shape[0] if hasattr(c, "get_offsets") else 0
+            if tname == "Quiver":
+                arrows += n
+            elif tname == "PathCollection":
+                markers += n
+        for t in ax.texts:
+            if getattr(t, "arrow_patch", None) is not None:
+                arrows += 1
+    return arrows, markers
+
+def pass_event_audit(fig, valid_count, attack_dir_arrow=False):
+    """
+    Show a live, always-visible check comparing the number of valid pass
+    events in the data to the number actually rendered on the chart. Any
+    mismatch is surfaced immediately instead of requiring visual inspection.
+    """
+    arrows, markers = count_rendered_pass_events(fig)
+    if attack_dir_arrow and arrows > 0:
+        arrows -= 1  # exclude the attacking-direction arrow, which isn't a pass
+    ok = (arrows == valid_count) and (markers == valid_count)
+    if ok:
+        st.caption(f"✅ Rendered {markers}/{valid_count} pass events (arrows: {arrows}/{valid_count}).")
+    else:
+        st.warning(f"⚠️ Rendered {markers}/{valid_count} markers and {arrows}/{valid_count} arrows -- "
+                   f"counts don't match the dataset. Click Generate again to rebuild the chart "
+                   f"(a stale chart from before a settings/data change can remain cached).")
+
 def load_img(f):
     if f is None: return None
     try: return Image.open(f).convert("RGBA")
@@ -1225,10 +1266,14 @@ if section == "📨 Pro Pass Map":
                     accuracy_override=acc_ov    or None,
                 )
                 st.session_state["ppm_fig"] = fig
+                st.session_state["ppm_valid_n"] = int((df["event_type"]=="pass").sum())
             except Exception as e:
                 st.error(f"Error: {e}")
         if "ppm_fig" in st.session_state:
             preview(st.session_state["ppm_fig"], "opta_pass_map")
+            pass_event_audit(st.session_state["ppm_fig"],
+                              st.session_state.get("ppm_valid_n", 0),
+                              attack_dir_arrow=cfg.get("show_attack_dir", True))
         else:
             empty("📨","Configure and generate","Replica of the Opta Analyst pass map style")
     st.stop()
@@ -1747,7 +1792,17 @@ if section == "🔄 Distribution Charts":
                     if blocks: draw_stat_blocks_bottom(fig,blocks,theme,y=0.02)
                     apply_overlay(fig,ov)
                     st.session_state["dist_pm"]=fig
-                if "dist_pm" in st.session_state: preview(st.session_state["dist_pm"],"pass_map")
+                    # Ground truth: how many pass events SHOULD render given the
+                    # chosen Pass view / Result scope / min packing filters.
+                    _valid = charts._filter_passes_for_map(
+                        df[df["event_type"]=="pass"], pass_view=pv,
+                        result_scope=ps, min_packing=ppk)
+                    st.session_state["dist_pm_valid_n"] = len(_valid)
+                if "dist_pm" in st.session_state:
+                    preview(st.session_state["dist_pm"],"pass_map")
+                    pass_event_audit(st.session_state["dist_pm"],
+                                      st.session_state.get("dist_pm_valid_n", 0),
+                                      attack_dir_arrow=cfg_pm.get("show_attack_dir", True))
                 else: empty("➡️","Configure and generate")
 
     with tabs[1]:
@@ -2554,6 +2609,8 @@ if section == "🖱️ Tagging Tool":
                               color=mc,fontsize=8,ha="center",va="top",clip_on=False)
 
                     st.image(_bytes(fig,dpi=150),use_container_width=True)
+                    if tag_chart_mode == "Passes":
+                        pass_event_audit(fig, int(et_counts.get("pass", 0)), attack_dir_arrow=True)
                     plt.close(fig)
                 except Exception as e:
                     st.error(f"Chart error: {e}")
