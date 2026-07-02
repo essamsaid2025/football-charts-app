@@ -585,8 +585,7 @@ def legend_controls_full(prefix, all_items, default_active=None):
         c6, c7 = st.columns(2)
         with c6:
             font_color = st.color_picker("Font color", "#FFFFFF", key=f"{prefix}_leg_fc")
-            bg_color   = st.color_picker("Background", "#00000000" if True else "#111111",
-                                          key=f"{prefix}_leg_bg")
+            bg_color   = st.color_picker("Background", "#111111", key=f"{prefix}_leg_bg")
         with c7:
             opacity    = st.slider("Opacity", 0.0, 1.0, 1.0, 0.05, key=f"{prefix}_leg_op")
             labelspacing = st.slider("Row spacing", 0.1, 2.0, 0.5, 0.1, key=f"{prefix}_leg_ls")
