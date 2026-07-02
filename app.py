@@ -101,155 +101,140 @@ if draw_tagging_pitch is None:
         current_size=9,
     ):
         """
-        Renders an interactive tagging pitch as a PIL Image.
-        Returns (PIL.Image, img_w, img_h, y_max, pad).
+        Renders an interactive tagging pitch using mplsoccer — identical coordinate
+        system to all chart functions.  Pitch coords: x=0-100, y=0-pitch_width
+        (or 0-100 for square).  Returns (PIL.Image, img_w, img_h, y_max, coord_bounds).
         """
         import math as _math
         from PIL import Image as _Image
         import io as _io
+        from mplsoccer import Pitch
 
         t = THEMES.get(theme_name, THEMES.get("The Athletic Dark", {
             "bg": "#0E1117", "pitch": "#1f5f3b", "pitch_lines": "#E6E6E6",
             "text": "#FFFFFF", "muted": "#A0A7B4", "lines": "#2A3240",
         }))
 
-        y_max = float(pitch_width if pitch_mode == "rect" else 100.0)
-        aspect = y_max / 100.0
-        fig_w = display_width / 100.0
-        fig_h = fig_w * aspect
+        y_max    = float(pitch_width if pitch_mode == "rect" else 100.0)
+        pitch_color  = t.get("pitch", "#1f5f3b")
+        line_color   = t.get("pitch_lines", "#E6E6E6")
+        stripe_color = t.get("pitch_stripe", None)
+        bg_color     = t.get("bg", "#0E1117")
+        muted        = t.get("muted", "#A0A7B4")
 
-        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
-        fig.patch.set_facecolor(t["bg"])
-        ax.set_facecolor(t.get("pitch", "#1f5f3b"))
+        # ── Build mplsoccer pitch (same as make_pitch() in charts.py) ─────────
+        pitch_obj = Pitch(
+            pitch_type="custom",
+            pitch_length=100,
+            pitch_width=y_max,
+            pitch_color=pitch_color,
+            line_color=line_color,
+            line_zorder=2,
+            stripe=bool(stripe_color),
+            stripe_color=stripe_color or pitch_color,
+            goal_type="box",
+            goal_alpha=0.9,
+            linewidth=1.8,
+            spot_scale=0.003,
+        )
 
-        lc = t.get("pitch_lines", "#E6E6E6")
-        lw = 1.6
-        mid = y_max / 2.0
+        # Figure sized to match display_width at DPI=100
+        DPI    = 100
+        fig_w  = display_width / DPI          # inches
+        fig_h  = fig_w * (y_max / 100.0) * 0.72   # ~pitch aspect + room for arrow
 
-        # ── Pitch outline ──────────────────────────────────────────────────
-        ax.plot([0,100,100,0,0], [0,0,y_max,y_max,0], color=lc, lw=lw)
-        # Halfway line
-        ax.plot([50,50],[0,y_max], color=lc, lw=lw)
-        # Centre circle
-        theta = np.linspace(0, 2*np.pi, 100)
-        rx = 9.15; ry = 9.15 / 100.0 * y_max
-        ax.plot(50 + rx*np.cos(theta), mid + ry*np.sin(theta), color=lc, lw=lw)
-        ax.plot(50, mid, "o", color=lc, ms=3)
+        fig, ax = pitch_obj.draw(figsize=(fig_w, fig_h), constrained_layout=False)
+        fig.patch.set_facecolor(bg_color)
+        ax.set_facecolor(pitch_color)
 
-        # ── Penalty areas ──────────────────────────────────────────────────
-        pa_w = y_max * 40.32/68.0; sa_w = y_max * 18.32/68.0
-        goal_w = y_max * 7.32/68.0
-        pa_l = 16.5/105.0 * 100; sa_l = 5.5/105.0 * 100
-        for x0, x1 in [(0, pa_l), (100-pa_l, 100)]:
-            ax.plot([x0,x1,x1,x0,x0],
-                    [mid-pa_w/2,mid-pa_w/2,mid+pa_w/2,mid+pa_w/2,mid-pa_w/2],
-                    color=lc, lw=lw)
-        for x0, x1 in [(0, sa_l), (100-sa_l, 100)]:
-            ax.plot([x0,x1,x1,x0,x0],
-                    [mid-sa_w/2,mid-sa_w/2,mid+sa_w/2,mid+sa_w/2,mid-sa_w/2],
-                    color=lc, lw=lw)
-        # Goals
-        for x0, x1 in [(-2.5, 0), (100, 102.5)]:
-            ax.plot([x0,x1,x1,x0,x0],
-                    [mid-goal_w/2,mid-goal_w/2,mid+goal_w/2,mid+goal_w/2,mid-goal_w/2],
-                    color=lc, lw=lw)
-        # Penalty spots
-        for px in [11.0/105.0*100, 100 - 11.0/105.0*100]:
-            ax.plot(px, mid, "o", color=lc, ms=3)
-        # Penalty arcs
-        for cx, sign in [(pa_l, 1), (100-pa_l, -1)]:
-            arc_r_x = rx; arc_r_y = ry
-            th = np.linspace(0, 2*np.pi, 200)
-            xs = cx + arc_r_x*np.cos(th)*sign
-            ys = mid + arc_r_y*np.sin(th)
-            mask = xs*sign >= cx*sign
-            ax.plot(xs[mask], ys[mask], color=lc, lw=lw)
-
-        # ── Thirds ────────────────────────────────────────────────────────
+        # ── Thirds overlay ─────────────────────────────────────────────────────
         if show_thirds:
-            for x in [100/3, 200/3]:
-                ax.plot([x,x],[0,y_max], color=lc, lw=0.8, ls="--", alpha=0.4)
-            text_kw = dict(color=t.get("muted","#A0A7B4"), fontsize=8,
-                           alpha=0.7, ha="center", va="top")
-            ax.text(100/6, y_max*0.98, "Defensive Third", **text_kw)
-            ax.text(50,    y_max*0.98, "Middle Third",    **text_kw)
-            ax.text(500/6, y_max*0.98, "Attacking Third", **text_kw)
+            for xv in [100/3, 200/3]:
+                ax.plot([xv, xv], [0, y_max], color=line_color,
+                        lw=0.9, ls="--", alpha=0.4, zorder=3)
+            tkw = dict(color=muted, fontsize=7.5, alpha=0.75,
+                       ha="center", va="top", zorder=4)
+            ax.text(100/6,  y_max*0.985, "Defensive Third",  **tkw)
+            ax.text(50,     y_max*0.985, "Middle Third",     **tkw)
+            ax.text(500/6,  y_max*0.985, "Attacking Third",  **tkw)
 
-        # ── Attacking direction arrow ──────────────────────────────────────
-        arrow_y = -y_max * 0.06
-        ax.annotate("", xy=(75, arrow_y), xytext=(25, arrow_y),
-                    arrowprops=dict(arrowstyle="-|>", color=t.get("muted","#A0A7B4"), lw=1.8),
+        # ── Attacking direction arrow ──────────────────────────────────────────
+        arrow_y = -y_max * 0.055
+        ax.annotate("",
+                    xy=(78, arrow_y), xytext=(22, arrow_y),
+                    arrowprops=dict(arrowstyle="-|>", color=muted, lw=1.6),
                     annotation_clip=False)
-        ax.text(50, arrow_y - y_max*0.04, "Attacking Direction",
-                color=t.get("muted","#A0A7B4"), fontsize=8, ha="center",
-                va="top", clip_on=False)
+        ax.text(50, arrow_y - y_max * 0.035, "Attacking Direction",
+                color=muted, fontsize=7.5, ha="center", va="top",
+                clip_on=False)
 
-        # ── Draw existing events ───────────────────────────────────────────
+        # ── Draw existing events ───────────────────────────────────────────────
         for ev in (events or []):
             try:
-                ex = float(ev.get("x", 0)); ey = float(ev.get("y", 0))
+                ex  = float(ev.get("x", 0))
+                ey  = float(ev.get("y", 0))
                 col  = str(ev.get("start_color",  current_color) or current_color)
                 edge = str(ev.get("start_edge",   current_edge)  or current_edge)
                 mk   = ev.get("start_marker", "o") or "o"
-                sz   = float(ev.get("start_size", 9) or 9) * 15
-                # Arrow for pass/carry/cross/dribble
-                et = str(ev.get("event_type","")).lower()
-                if et in ("pass","carry","cross","dribble"):
+                sz   = float(ev.get("start_size", current_size) or current_size) * 18
+
+                et = str(ev.get("event_type", "")).lower()
+                if et in ("pass", "carry", "cross", "dribble"):
                     ex2 = ev.get("x2"); ey2 = ev.get("y2")
                     if ex2 is not None and ey2 is not None:
                         try:
-                            if not (_math.isnan(float(ex2)) or _math.isnan(float(ey2))):
+                            fx2, fy2 = float(ex2), float(ey2)
+                            if not (_math.isnan(fx2) or _math.isnan(fy2)):
                                 arr_col = str(ev.get("arrow_color", col) or col)
-                                ax.annotate("", xy=(float(ex2), float(ey2)),
-                                            xytext=(ex, ey),
-                                            arrowprops=dict(arrowstyle="-|>",
-                                                            color=arr_col, lw=1.8))
+                                pitch_obj.arrows(ex, ey, fx2, fy2,
+                                                 ax=ax, color=arr_col,
+                                                 width=2.2, headwidth=4,
+                                                 headlength=3, alpha=0.92,
+                                                 zorder=5)
                         except Exception:
                             pass
-                ax.scatter([ex], [ey], s=sz, marker=mk, color=col,
-                           edgecolors=edge, linewidth=1.5, zorder=6)
+
+                pitch_obj.scatter(ex, ey, ax=ax, s=sz, marker=mk,
+                                  color=col, edgecolors=edge,
+                                  linewidth=1.4, alpha=0.95, zorder=6)
             except Exception:
                 pass
 
-        # ── Pending start point ────────────────────────────────────────────
+        # ── Pending start point (half-opacity crosshair) ───────────────────────
         if start_point is not None:
             try:
                 spx, spy = float(start_point[0]), float(start_point[1])
                 mk = current_marker if current_marker else "o"
-                ax.scatter([spx], [spy], s=float(current_size)*15,
-                           marker=mk, color=current_color, edgecolors=current_edge,
-                           linewidth=2, zorder=7, alpha=0.6)
-                # Crosshair
-                ax.plot([spx-2, spx+2], [spy, spy], color=current_color, lw=1, alpha=0.5)
-                ax.plot([spx, spx], [spy-2*aspect, spy+2*aspect], color=current_color, lw=1, alpha=0.5)
+                pitch_obj.scatter(spx, spy, ax=ax,
+                                  s=float(current_size) * 18,
+                                  marker=mk, color=current_color,
+                                  edgecolors=current_edge,
+                                  linewidth=2, zorder=7, alpha=0.55)
+                arm = y_max * 0.025
+                ax.plot([spx - arm*1.5, spx + arm*1.5], [spy, spy],
+                        color=current_color, lw=1.2, alpha=0.6, zorder=7)
+                ax.plot([spx, spx], [spy - arm, spy + arm],
+                        color=current_color, lw=1.2, alpha=0.6, zorder=7)
             except Exception:
                 pass
 
-        # Use FIXED axis limits — no tight bbox so pixel mapping is exact
-        # xlim and ylim define the full coordinate space rendered
-        X_MIN, X_MAX = -4.0, 104.0
-        Y_MIN = -y_max * 0.18
-        Y_MAX =  y_max * 1.05
-        ax.set_xlim(X_MIN, X_MAX)
-        ax.set_ylim(Y_MIN, Y_MAX)
-        ax.set_aspect("equal", adjustable="box")
-        ax.axis("off")
-        fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+        # ── Fix axis limits for pixel mapping (must match what mplsoccer drew) ─
+        # mplsoccer sets xlim/ylim to include some padding around the pitch.
+        # Capture those limits BEFORE saving so the pixel mapper is exact.
+        ax.figure.canvas.draw()
+        X_MIN, X_MAX = ax.get_xlim()
+        Y_MIN, Y_MAX = ax.get_ylim()
 
-        # Save at EXACT figure size — no bbox_inches='tight' to preserve mapping
-        DPI = 100
+        # Save at EXACT figure size, no tight bbox (preserves pixel↔coord mapping)
         buf = _io.BytesIO()
         fig.savefig(buf, format="PNG", dpi=DPI,
                     bbox_inches=None, pad_inches=0,
-                    facecolor=t["bg"])
+                    facecolor=bg_color)
         buf.seek(0)
         plt.close(fig)
 
         pil_img = _Image.open(buf).convert("RGB")
         img_w, img_h = pil_img.size
-
-        # Return the axis coordinate bounds so the click mapper can use them
-        # We pass X_MIN, X_MAX, Y_MIN, Y_MAX via the pad slot (as a tuple)
         coord_bounds = (X_MIN, X_MAX, Y_MIN, Y_MAX)
         return pil_img, img_w, img_h, y_max, coord_bounds
 
@@ -1102,7 +1087,10 @@ def tagged_events_map(events_df, pitch_mode="rect", pitch_width=68.0,
                       legend_cfg=None, title="Tagged Events"):
     theme = THEMES.get(theme_name, THEMES.get("The Athletic Dark", {}))
     pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
-    fig, ax = plt.subplots(figsize=(12, 7.2))
+    y_max = float(pitch_width if pitch_mode == "rect" else 100.0)
+    fig_w = 12.0
+    fig_h = fig_w * (y_max / 100.0) * 0.72   # same ratio as tagging pitch
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     fig.patch.set_facecolor(theme.get("bg", "#0E1117"))
     pitch.draw(ax=ax)
     ax.set_facecolor(theme.get("pitch", "#1f5f3b"))
@@ -1145,8 +1133,8 @@ def tagged_events_map(events_df, pitch_mode="rect", pitch_width=68.0,
                                     markersize=8, label=label)
 
     y_max = float(pitch_width if pitch_mode == "rect" else 100.0)
-    ax.set_xlim(-2, 102)
-    ax.set_ylim(-2, y_max + 2)
+    # Don't override mplsoccer's axis limits — it sets them correctly
+    # for the pitch type. Just set title and legend.
     if show_thirds and charts and hasattr(charts, "_add_pitch_thirds"):
         charts._add_pitch_thirds(ax, pitch_mode, pitch_width, theme, False)
     ax.set_title(title, color=theme.get("text", "white"), fontsize=16, weight="bold")
@@ -2866,37 +2854,29 @@ if section == "🖱️ Tagging Tool":
                 key_c=(int(click["x"]),int(click["y"]))
                 if key_c!=st.session_state["tag_last_click"]:
                     st.session_state["tag_last_click"]=key_c
-                    # ── Exact pixel → pitch coordinate mapping ──────────────
-                    # pad_tag is now a tuple (X_MIN, X_MAX, Y_MIN, Y_MAX)
-                    # The figure was saved with set_aspect("equal") and
-                    # subplots_adjust(left=0,right=1,top=1,bottom=0) so the
-                    # rendered pixel space maps linearly to figure coords,
-                    # but set_aspect("equal") adds whitespace padding inside
-                    # the axes.  We must account for that.
-                    #
-                    # Strategy: use the known figure size + dpi to get canvas
-                    # pixels, then map linearly within those bounds.
+
+                    # ── Precise pixel → pitch coordinate mapping ──────────────
+                    # coord_bounds = (X_MIN, X_MAX, Y_MIN, Y_MAX) captured from
+                    # ax.get_xlim() / ax.get_ylim() AFTER mplsoccer draws the pitch.
+                    # The figure was saved with bbox_inches=None, pad_inches=0,
+                    # so pixel (0,0) = figure top-left = (X_MIN, Y_MAX) in axis coords
+                    # and pixel (img_w-1, img_h-1) = (X_MAX, Y_MIN).
                     if isinstance(pad_tag, tuple) and len(pad_tag)==4:
                         X_MIN_c, X_MAX_c, Y_MIN_c, Y_MAX_c = pad_tag
                     else:
-                        X_MIN_c, X_MAX_c = -4.0, 104.0
-                        Y_MIN_c, Y_MAX_c = -float(y_max_tag)*0.18, float(y_max_tag)*1.05
+                        X_MIN_c, X_MAX_c = -3.0, 103.0
+                        Y_MIN_c = -float(y_max_tag) * 0.08
+                        Y_MAX_c =  float(y_max_tag) * 1.08
 
-                    x_coord_range = X_MAX_c - X_MIN_c   # 108.0
-                    y_coord_range = Y_MAX_c - Y_MIN_c
+                    px = int(click["x"]); py = int(click["y"])
+                    # x: left→right  maps X_MIN→X_MAX
+                    x_pitch = X_MIN_c + (px / max(img_w - 1, 1)) * (X_MAX_c - X_MIN_c)
+                    # y: top→bottom  maps Y_MAX→Y_MIN  (image origin is top-left)
+                    y_pitch = Y_MAX_c - (py / max(img_h - 1, 1)) * (Y_MAX_c - Y_MIN_c)
 
-                    # Because set_aspect("equal") is used, the axes are
-                    # letterboxed inside the figure.  The figure is drawn at
-                    # fig_w×fig_h inches @100 dpi; axis limits set
-                    # pitch coords; aspect=equal means the shorter dimension
-                    # is fully used and the longer has padding.
-                    # Simplest robust fix: treat the full image as the mapped
-                    # region (the pitch drawing fills ~100% with no tight bbox).
-                    x_pitch = round(X_MIN_c + (int(click["x"]) / max(img_w, 1)) * x_coord_range, 2)
-                    y_pitch = round(Y_MAX_c - (int(click["y"]) / max(img_h, 1)) * y_coord_range, 2)
-                    # Clamp to valid pitch range
-                    x_pitch = max(0.0, min(100.0, x_pitch))
-                    y_pitch = max(0.0, min(float(y_max_tag), y_pitch))
+                    # Clamp to valid pitch playing surface
+                    x_pitch = round(max(0.0, min(100.0, x_pitch)), 2)
+                    y_pitch = round(max(0.0, min(float(y_max_tag), y_pitch)), 2)
                     if two_click and st.session_state["tag_start"] is None:
                         st.session_state["tag_start"]=(x_pitch,y_pitch)
                     else:
