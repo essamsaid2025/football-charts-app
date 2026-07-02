@@ -8,6 +8,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as pe
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.lines import Line2D
 from PIL import Image
@@ -490,6 +491,29 @@ def count_rendered_pass_events(fig):
                 arrows += 1
     return arrows, markers
 
+def draw_event_index_labels(ax, df_valid, id_col="_row_id"):
+    """
+    Debug overlay: stamp each plotted event with its exact source-file row
+    number, directly at its (x, y) coordinate, on top of everything else.
+    Lets a person check the chart against the spreadsheet 1:1 -- if a
+    number is missing on the pitch, that specific row is the one to
+    investigate; if every expected number is present, the chart is
+    complete and any remaining doubt is about legibility, not data loss.
+    """
+    if id_col not in df_valid.columns:
+        return
+    for _, row in df_valid.iterrows():
+        try:
+            x, y = float(row["x"]), float(row["y"])
+        except (TypeError, ValueError):
+            continue
+        label = str(int(row[id_col])) if pd.notna(row[id_col]) else "?"
+        ax.annotate(
+            label, (x, y), fontsize=6.5, color="black", weight="bold",
+            ha="center", va="center", zorder=50, clip_on=False,
+            path_effects=[pe.withStroke(linewidth=2.2, foreground="white")],
+        )
+
 def pass_event_audit(fig, valid_count, attack_dir_arrow=False):
     """
     Show a live, always-visible check comparing the number of valid pass
@@ -861,6 +885,12 @@ def ev_sidebar(prefix):
         return None, S
     try:
         raw = load_ev(f)
+        # Stable identifier matching the row number as it appears in the
+        # source file (header = row 1, so first data row = row 2). Carried
+        # through the whole pipeline so a debug overlay can label each
+        # rendered marker with the exact source row for 1:1 verification.
+        raw = raw.reset_index(drop=True)
+        raw["_row_id"] = range(2, len(raw) + 2)
         raw = ensure_outcome(raw)
         df  = prepare_df_for_charts(raw, attack_direction=S["ad"],
                                     flip_y=S["fy"], pitch_mode=S["pm"],
@@ -1770,6 +1800,7 @@ if section == "🔄 Distribution Charts":
                 cfg_pm["attack_dir"]=S["ad"]
                 cfg_pm["attack_dir_color"]=st.color_picker("Arrow color","#888888",key="pm_adc")
                 dv=st.checkbox("Vertical",False,key="pm_v2")
+                show_idx=st.checkbox("🔍 Debug: label each pass with its source row #",False,key="pm_dbgidx")
                 blocks=stat_blocks_ui("pm")
                 ov=img_overlay_controls("pm_ov")
                 gen=st.button("Generate",key="pm_gen")
@@ -1789,14 +1820,16 @@ if section == "🔄 Distribution Charts":
                     ax.set_title(t,color=theme["text"],fontsize=16,weight="bold")
                     draw_attack_direction(ax,cfg_pm,theme,S["pm"],S["pw"],dv)
                     apply_legend_style(ax,leg_cfg,theme)
-                    if blocks: draw_stat_blocks_bottom(fig,blocks,theme,y=0.02)
-                    apply_overlay(fig,ov)
-                    st.session_state["dist_pm"]=fig
                     # Ground truth: how many pass events SHOULD render given the
                     # chosen Pass view / Result scope / min packing filters.
                     _valid = charts._filter_passes_for_map(
                         df[df["event_type"]=="pass"], pass_view=pv,
                         result_scope=ps, min_packing=ppk)
+                    if show_idx:
+                        draw_event_index_labels(ax, _valid)
+                    if blocks: draw_stat_blocks_bottom(fig,blocks,theme,y=0.02)
+                    apply_overlay(fig,ov)
+                    st.session_state["dist_pm"]=fig
                     st.session_state["dist_pm_valid_n"] = len(_valid)
                 if "dist_pm" in st.session_state:
                     preview(st.session_state["dist_pm"],"pass_map")
