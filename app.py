@@ -101,140 +101,168 @@ if draw_tagging_pitch is None:
         current_size=9,
     ):
         """
-        Renders an interactive tagging pitch using mplsoccer — identical coordinate
-        system to all chart functions.  Pitch coords: x=0-100, y=0-pitch_width
-        (or 0-100 for square).  Returns (PIL.Image, img_w, img_h, y_max, coord_bounds).
+        Renders an interactive tagging pitch as a PIL Image.
+        Returns (PIL.Image, img_w, img_h, y_max, pad).
         """
         import math as _math
         from PIL import Image as _Image
         import io as _io
-        from mplsoccer import Pitch
 
         t = THEMES.get(theme_name, THEMES.get("The Athletic Dark", {
             "bg": "#0E1117", "pitch": "#1f5f3b", "pitch_lines": "#E6E6E6",
             "text": "#FFFFFF", "muted": "#A0A7B4", "lines": "#2A3240",
         }))
 
-        y_max    = float(pitch_width if pitch_mode == "rect" else 100.0)
-        pitch_color  = t.get("pitch", "#1f5f3b")
-        line_color   = t.get("pitch_lines", "#E6E6E6")
-        stripe_color = t.get("pitch_stripe", None)
-        bg_color     = t.get("bg", "#0E1117")
-        muted        = t.get("muted", "#A0A7B4")
+        y_max = float(pitch_width if pitch_mode == "rect" else 100.0)
+        aspect = y_max / 100.0
 
-        # ── Build mplsoccer pitch (same as make_pitch() in charts.py) ─────────
-        pitch_obj = Pitch(
-            pitch_type="custom",
-            pitch_length=100,
-            pitch_width=y_max,
-            pitch_color=pitch_color,
-            line_color=line_color,
-            line_zorder=2,
-            stripe=bool(stripe_color),
-            stripe_color=stripe_color or pitch_color,
-            goal_type="box",
-            goal_alpha=0.9,
-            linewidth=1.8,
-            spot_scale=0.003,
-        )
+        # Coordinate space: X spans -4..104 (108 units), Y spans Y_MIN..Y_MAX
+        # Size the figure so its aspect ratio EXACTLY matches the coord range ratio
+        # — this eliminates letterboxing from set_aspect("equal") and makes pixel
+        #   mapping perfectly linear across the whole image.
+        X_MIN_pre, X_MAX_pre = -4.0, 104.0
+        Y_MIN_pre = -y_max * 0.18
+        Y_MAX_pre =  y_max * 1.05
+        coord_x_range = X_MAX_pre - X_MIN_pre    # 108
+        coord_y_range = Y_MAX_pre - Y_MIN_pre
 
-        # Figure sized to match display_width at DPI=100
-        DPI    = 100
-        fig_w  = display_width / DPI          # inches
-        fig_h  = fig_w * (y_max / 100.0) * 0.72   # ~pitch aspect + room for arrow
+        fig_w = display_width / 100.0
+        fig_h = fig_w * (coord_y_range / coord_x_range)
 
-        fig, ax = pitch_obj.draw(figsize=(fig_w, fig_h), constrained_layout=False)
-        fig.patch.set_facecolor(bg_color)
-        ax.set_facecolor(pitch_color)
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+        fig.patch.set_facecolor(t["bg"])
+        ax.set_facecolor(t.get("pitch", "#1f5f3b"))
 
-        # ── Thirds overlay ─────────────────────────────────────────────────────
+        lc = t.get("pitch_lines", "#E6E6E6")
+        lw = 1.6
+        mid = y_max / 2.0
+
+        # ── Pitch outline ──────────────────────────────────────────────────
+        ax.plot([0,100,100,0,0], [0,0,y_max,y_max,0], color=lc, lw=lw)
+        # Halfway line
+        ax.plot([50,50],[0,y_max], color=lc, lw=lw)
+        # Centre circle
+        theta = np.linspace(0, 2*np.pi, 100)
+        rx = 9.15; ry = 9.15 / 100.0 * y_max
+        ax.plot(50 + rx*np.cos(theta), mid + ry*np.sin(theta), color=lc, lw=lw)
+        ax.plot(50, mid, "o", color=lc, ms=3)
+
+        # ── Penalty areas ──────────────────────────────────────────────────
+        pa_w = y_max * 40.32/68.0; sa_w = y_max * 18.32/68.0
+        goal_w = y_max * 7.32/68.0
+        pa_l = 16.5/105.0 * 100; sa_l = 5.5/105.0 * 100
+        for x0, x1 in [(0, pa_l), (100-pa_l, 100)]:
+            ax.plot([x0,x1,x1,x0,x0],
+                    [mid-pa_w/2,mid-pa_w/2,mid+pa_w/2,mid+pa_w/2,mid-pa_w/2],
+                    color=lc, lw=lw)
+        for x0, x1 in [(0, sa_l), (100-sa_l, 100)]:
+            ax.plot([x0,x1,x1,x0,x0],
+                    [mid-sa_w/2,mid-sa_w/2,mid+sa_w/2,mid+sa_w/2,mid-sa_w/2],
+                    color=lc, lw=lw)
+        # Goals
+        for x0, x1 in [(-2.5, 0), (100, 102.5)]:
+            ax.plot([x0,x1,x1,x0,x0],
+                    [mid-goal_w/2,mid-goal_w/2,mid+goal_w/2,mid+goal_w/2,mid-goal_w/2],
+                    color=lc, lw=lw)
+        # Penalty spots
+        for px in [11.0/105.0*100, 100 - 11.0/105.0*100]:
+            ax.plot(px, mid, "o", color=lc, ms=3)
+        # Penalty arcs
+        for cx, sign in [(pa_l, 1), (100-pa_l, -1)]:
+            arc_r_x = rx; arc_r_y = ry
+            th = np.linspace(0, 2*np.pi, 200)
+            xs = cx + arc_r_x*np.cos(th)*sign
+            ys = mid + arc_r_y*np.sin(th)
+            mask = xs*sign >= cx*sign
+            ax.plot(xs[mask], ys[mask], color=lc, lw=lw)
+
+        # ── Thirds ────────────────────────────────────────────────────────
         if show_thirds:
-            for xv in [100/3, 200/3]:
-                ax.plot([xv, xv], [0, y_max], color=line_color,
-                        lw=0.9, ls="--", alpha=0.4, zorder=3)
-            tkw = dict(color=muted, fontsize=7.5, alpha=0.75,
-                       ha="center", va="top", zorder=4)
-            ax.text(100/6,  y_max*0.985, "Defensive Third",  **tkw)
-            ax.text(50,     y_max*0.985, "Middle Third",     **tkw)
-            ax.text(500/6,  y_max*0.985, "Attacking Third",  **tkw)
+            for x in [100/3, 200/3]:
+                ax.plot([x,x],[0,y_max], color=lc, lw=0.8, ls="--", alpha=0.4)
+            text_kw = dict(color=t.get("muted","#A0A7B4"), fontsize=8,
+                           alpha=0.7, ha="center", va="top")
+            ax.text(100/6, y_max*0.98, "Defensive Third", **text_kw)
+            ax.text(50,    y_max*0.98, "Middle Third",    **text_kw)
+            ax.text(500/6, y_max*0.98, "Attacking Third", **text_kw)
 
-        # ── Attacking direction arrow ──────────────────────────────────────────
-        arrow_y = -y_max * 0.055
-        ax.annotate("",
-                    xy=(78, arrow_y), xytext=(22, arrow_y),
-                    arrowprops=dict(arrowstyle="-|>", color=muted, lw=1.6),
+        # ── Attacking direction arrow ──────────────────────────────────────
+        arrow_y = -y_max * 0.06
+        ax.annotate("", xy=(75, arrow_y), xytext=(25, arrow_y),
+                    arrowprops=dict(arrowstyle="-|>", color=t.get("muted","#A0A7B4"), lw=1.8),
                     annotation_clip=False)
-        ax.text(50, arrow_y - y_max * 0.035, "Attacking Direction",
-                color=muted, fontsize=7.5, ha="center", va="top",
-                clip_on=False)
+        ax.text(50, arrow_y - y_max*0.04, "Attacking Direction",
+                color=t.get("muted","#A0A7B4"), fontsize=8, ha="center",
+                va="top", clip_on=False)
 
-        # ── Draw existing events ───────────────────────────────────────────────
+        # ── Draw existing events ───────────────────────────────────────────
         for ev in (events or []):
             try:
-                ex  = float(ev.get("x", 0))
-                ey  = float(ev.get("y", 0))
+                ex = float(ev.get("x", 0)); ey = float(ev.get("y", 0))
                 col  = str(ev.get("start_color",  current_color) or current_color)
                 edge = str(ev.get("start_edge",   current_edge)  or current_edge)
                 mk   = ev.get("start_marker", "o") or "o"
-                sz   = float(ev.get("start_size", current_size) or current_size) * 18
-
-                et = str(ev.get("event_type", "")).lower()
-                if et in ("pass", "carry", "cross", "dribble"):
+                sz   = float(ev.get("start_size", 9) or 9) * 15
+                # Arrow for pass/carry/cross/dribble
+                et = str(ev.get("event_type","")).lower()
+                if et in ("pass","carry","cross","dribble"):
                     ex2 = ev.get("x2"); ey2 = ev.get("y2")
                     if ex2 is not None and ey2 is not None:
                         try:
-                            fx2, fy2 = float(ex2), float(ey2)
-                            if not (_math.isnan(fx2) or _math.isnan(fy2)):
+                            if not (_math.isnan(float(ex2)) or _math.isnan(float(ey2))):
                                 arr_col = str(ev.get("arrow_color", col) or col)
-                                pitch_obj.arrows(ex, ey, fx2, fy2,
-                                                 ax=ax, color=arr_col,
-                                                 width=2.2, headwidth=4,
-                                                 headlength=3, alpha=0.92,
-                                                 zorder=5)
+                                ax.annotate("", xy=(float(ex2), float(ey2)),
+                                            xytext=(ex, ey),
+                                            arrowprops=dict(arrowstyle="-|>",
+                                                            color=arr_col, lw=1.8))
                         except Exception:
                             pass
-
-                pitch_obj.scatter(ex, ey, ax=ax, s=sz, marker=mk,
-                                  color=col, edgecolors=edge,
-                                  linewidth=1.4, alpha=0.95, zorder=6)
+                ax.scatter([ex], [ey], s=sz, marker=mk, color=col,
+                           edgecolors=edge, linewidth=1.5, zorder=6)
             except Exception:
                 pass
 
-        # ── Pending start point (half-opacity crosshair) ───────────────────────
+        # ── Pending start point ────────────────────────────────────────────
         if start_point is not None:
             try:
                 spx, spy = float(start_point[0]), float(start_point[1])
                 mk = current_marker if current_marker else "o"
-                pitch_obj.scatter(spx, spy, ax=ax,
-                                  s=float(current_size) * 18,
-                                  marker=mk, color=current_color,
-                                  edgecolors=current_edge,
-                                  linewidth=2, zorder=7, alpha=0.55)
-                arm = y_max * 0.025
-                ax.plot([spx - arm*1.5, spx + arm*1.5], [spy, spy],
-                        color=current_color, lw=1.2, alpha=0.6, zorder=7)
-                ax.plot([spx, spx], [spy - arm, spy + arm],
-                        color=current_color, lw=1.2, alpha=0.6, zorder=7)
+                ax.scatter([spx], [spy], s=float(current_size)*15,
+                           marker=mk, color=current_color, edgecolors=current_edge,
+                           linewidth=2, zorder=7, alpha=0.6)
+                # Crosshair
+                ax.plot([spx-2, spx+2], [spy, spy], color=current_color, lw=1, alpha=0.5)
+                ax.plot([spx, spx], [spy-2*aspect, spy+2*aspect], color=current_color, lw=1, alpha=0.5)
             except Exception:
                 pass
 
-        # ── Fix axis limits for pixel mapping (must match what mplsoccer drew) ─
-        # mplsoccer sets xlim/ylim to include some padding around the pitch.
-        # Capture those limits BEFORE saving so the pixel mapper is exact.
-        ax.figure.canvas.draw()
-        X_MIN, X_MAX = ax.get_xlim()
-        Y_MIN, Y_MAX = ax.get_ylim()
+        # Use FIXED axis limits — no tight bbox so pixel mapping is exact
+        # xlim and ylim define the full coordinate space rendered
+        X_MIN, X_MAX = X_MIN_pre, X_MAX_pre
+        Y_MIN, Y_MAX = Y_MIN_pre, Y_MAX_pre
+        ax.set_xlim(X_MIN, X_MAX)
+        ax.set_ylim(Y_MIN, Y_MAX)
+        # Do NOT use set_aspect("equal") — it letterboxes the axes inside the
+        # figure and breaks the linear pixel→coord mapping.  Instead the figure
+        # size is pre-computed to match the coordinate aspect ratio exactly.
+        ax.set_aspect("auto")
+        ax.axis("off")
+        fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
 
-        # Save at EXACT figure size, no tight bbox (preserves pixel↔coord mapping)
+        # Save at EXACT figure size — no bbox_inches='tight' to preserve mapping
+        DPI = 100
         buf = _io.BytesIO()
         fig.savefig(buf, format="PNG", dpi=DPI,
                     bbox_inches=None, pad_inches=0,
-                    facecolor=bg_color)
+                    facecolor=t["bg"])
         buf.seek(0)
         plt.close(fig)
 
         pil_img = _Image.open(buf).convert("RGB")
         img_w, img_h = pil_img.size
+
+        # Return the axis coordinate bounds so the click mapper can use them
+        # We pass X_MIN, X_MAX, Y_MIN, Y_MAX via the pad slot (as a tuple)
         coord_bounds = (X_MIN, X_MAX, Y_MIN, Y_MAX)
         return pil_img, img_w, img_h, y_max, coord_bounds
 
@@ -405,39 +433,6 @@ def _pdf(fig):
                   bbox_extra_artists=extras or None)
     b.seek(0); return b.read()
 
-def _store_fig(key, fig, dpi=180):
-    """Store figure as PNG bytes in session state, then close it.
-    Prevents matplotlib figures from being pickled by Streamlit (which crashes the app).
-    """
-    try:
-        b = io.BytesIO()
-        fig.canvas.draw()
-        extras = list(fig.legends)
-        for ax in fig.axes:
-            leg = ax.get_legend()
-            if leg is not None:
-                extras.append(leg)
-        fig.savefig(b, format="png", dpi=dpi, bbox_inches="tight", pad_inches=.18,
-                    bbox_extra_artists=extras or None)
-        b.seek(0)
-        st.session_state[key] = b.read()
-    except Exception as e:
-        st.error(f"Figure save error: {e}")
-    finally:
-        try:
-            plt.close(fig)
-        except Exception:
-            pass
-
-def _preview_stored(key):
-    """Show a stored PNG bytes figure."""
-    val = st.session_state.get(key)
-    if val is not None and isinstance(val, bytes):
-        st.image(val, use_container_width=True)
-        return val
-    return None
-
-
 def _clean(s):
     return pd.to_numeric(
         s.astype(str).str.replace("%","",regex=False)
@@ -469,51 +464,19 @@ def req_badge(cols):
         f"<b style='color:#6b8cae;font-size:.78rem'>Requires:</b> {badges}</div>",
         unsafe_allow_html=True)
 
-def dl_row(fig_or_bytes, name):
+def dl_row(fig, name):
     c1, c2 = st.columns(2)
-    if isinstance(fig_or_bytes, bytes):
-        # Already rendered bytes — create PDF from bytes via PIL
-        with c1:
-            st.download_button("⬇ PNG", fig_or_bytes, f"{name}.png",
-                               "image/png", key=f"p_{name}_{hash(fig_or_bytes)}")
-        with c2:
-            # Build a quick PDF from the PNG bytes
-            try:
-                import io as _io
-                from matplotlib.backends.backend_pdf import PdfPages as _PP
-                from PIL import Image as _PILI
-                import matplotlib.pyplot as _plt
-                import numpy as _np
-                pil_img = _PILI.open(_io.BytesIO(fig_or_bytes))
-                w_in = pil_img.width / 180; h_in = pil_img.height / 180
-                fig_tmp = _plt.figure(figsize=(w_in, h_in))
-                ax_tmp = fig_tmp.add_axes([0,0,1,1])
-                ax_tmp.imshow(_np.array(pil_img)); ax_tmp.axis("off")
-                pdf_b = _io.BytesIO()
-                with _PP(pdf_b) as pp:
-                    pp.savefig(fig_tmp, bbox_inches="tight", pad_inches=0)
-                _plt.close(fig_tmp)
-                pdf_b.seek(0)
-                st.download_button("⬇ PDF", pdf_b.read(), f"{name}.pdf",
-                                   "application/pdf", key=f"f_{name}_{hash(fig_or_bytes)}")
-            except Exception:
-                pass
-    else:
-        with c1:
-            st.download_button("⬇ PNG", _bytes(fig_or_bytes), f"{name}.png",
-                               "image/png", key=f"p_{name}_{id(fig_or_bytes)}")
-        with c2:
-            st.download_button("⬇ PDF", _pdf(fig_or_bytes), f"{name}.pdf",
-                               "application/pdf", key=f"f_{name}_{id(fig_or_bytes)}")
-        plt.close(fig_or_bytes)
+    with c1:
+        st.download_button("⬇ PNG", _bytes(fig), f"{name}.png",
+                           "image/png", key=f"p_{name}_{id(fig)}")
+    with c2:
+        st.download_button("⬇ PDF", _pdf(fig), f"{name}.pdf",
+                           "application/pdf", key=f"f_{name}_{id(fig)}")
+    plt.close(fig)
 
-def preview(fig_or_bytes, name):
-    if isinstance(fig_or_bytes, bytes):
-        st.image(fig_or_bytes, use_container_width=True)
-        dl_row(fig_or_bytes, name)
-    else:
-        st.image(_bytes(fig_or_bytes, dpi=180), use_container_width=True)
-        dl_row(fig_or_bytes, name)
+def preview(fig, name):
+    st.image(_bytes(fig, dpi=180), use_container_width=True)
+    dl_row(fig, name)
 
 def load_img(f):
     if f is None: return None
@@ -630,23 +593,9 @@ def legend_controls_full(prefix, all_items, default_active=None):
         with c5:
             ncol = st.number_input("Columns", 1, 8, min(4, max(1, len(all_items))), key=f"{prefix}_leg_ncol")
         markerscale = st.slider("Marker scale", 0.5, 3.0, 1.0, 0.1, key=f"{prefix}_leg_ms")
-        # ── Extended legend controls ──────────────────────────────────────────
-        st.markdown("**Extended style**")
-        c6, c7 = st.columns(2)
-        with c6:
-            font_color = st.color_picker("Font color", "#FFFFFF", key=f"{prefix}_leg_fc")
-            bg_color   = st.color_picker("Background", "#111111", key=f"{prefix}_leg_bg")
-        with c7:
-            opacity    = st.slider("Opacity", 0.0, 1.0, 1.0, 0.05, key=f"{prefix}_leg_op")
-            labelspacing = st.slider("Row spacing", 0.1, 2.0, 0.5, 0.1, key=f"{prefix}_leg_ls")
-        border_color = st.color_picker("Border color", "#333333", key=f"{prefix}_leg_bc")
-        border_lw    = st.slider("Border width", 0.0, 3.0, 0.0, 0.25, key=f"{prefix}_leg_blw")
     return dict(show=show, active=active, pos=pos, fontsize=fs,
                 title=title_txt or None, frame=frame, ncol=int(ncol),
-                markerscale=markerscale,
-                font_color=font_color, bg_color=bg_color,
-                opacity=opacity, labelspacing=labelspacing,
-                border_color=border_color, border_lw=border_lw)
+                markerscale=markerscale)
 
 def apply_legend_style(ax, legend_cfg, theme):
     """
@@ -689,395 +638,12 @@ def apply_legend_style(ax, legend_cfg, theme):
         frameon=legend_cfg.get("frame", False),
         bbox_to_anchor=bbox,
         ncol=int(legend_cfg.get("ncol") or min(4, len(hs))),
-        markerscale=float(legend_cfg.get("markerscale", 1.0)),
-        labelspacing=float(legend_cfg.get("labelspacing", 0.5)))
+        markerscale=float(legend_cfg.get("markerscale", 1.0)))
     leg.set_in_layout(True)
-    fc = legend_cfg.get("font_color") or theme.get("text", "white")
     for txt in leg.get_texts():
-        txt.set_color(fc)
+        txt.set_color(theme.get("text", "white"))
     if leg.get_title():
-        leg.get_title().set_color(legend_cfg.get("font_color") or theme.get("muted","#888888"))
-    # Background / border / opacity
-    frame_patch = leg.get_frame()
-    if frame_patch is not None:
-        bg_col = legend_cfg.get("bg_color", None)
-        if bg_col:
-            try:
-                frame_patch.set_facecolor(bg_col)
-            except Exception:
-                pass
-        blw = float(legend_cfg.get("border_lw", 0.0))
-        bc  = legend_cfg.get("border_color", "#333333")
-        frame_patch.set_linewidth(blw)
-        if blw > 0:
-            frame_patch.set_edgecolor(bc)
-    op = float(legend_cfg.get("opacity", 1.0))
-    leg.set_alpha(op)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ADVANCED CUSTOMIZATION SYSTEM
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Feature flags: which control groups are relevant for a given chart type.
-# Charts call advanced_customization_controls(prefix, features=[...]) to get
-# only the panels they need.  Everything not in `features` is silently omitted.
-_ADV_FEATURES_ALL = ["pitch","figure","markers","arrows","lines","text","title"]
-
-def advanced_customization_controls(prefix, features=None, theme=None):
-    """
-    Render professional-level customization expanders in the current column/
-    sidebar context.  Returns an adv_cfg dict consumed by apply_advanced_customization().
-
-    Parameters
-    ----------
-    prefix   : unique string key prefix (to avoid widget key collisions)
-    features : list of feature groups to show; None = all groups.
-               Valid values: "pitch", "figure", "markers", "arrows",
-                             "lines", "text", "title"
-    theme    : current theme dict (used as defaults for colors)
-    """
-    if features is None:
-        features = _ADV_FEATURES_ALL
-    features = set(features)
-    theme = theme or {}
-
-    cfg = {}
-
-    # ── PITCH ─────────────────────────────────────────────────────────────────
-    if "pitch" in features:
-        with st.expander("🟩 Pitch Customization", expanded=False):
-            c1, c2 = st.columns(2)
-            with c1:
-                pitch_color = st.color_picker("Pitch color",
-                    theme.get("pitch", "#1f5f3b"), key=f"{prefix}_adv_pc")
-                line_color  = st.color_picker("Line color",
-                    theme.get("pitch_lines", "#E6E6E6"), key=f"{prefix}_adv_lc")
-                goal_color  = st.color_picker("Goal color",
-                    theme.get("goal", "#E6E6E6"), key=f"{prefix}_adv_gc")
-            with c2:
-                line_width  = st.slider("Line width", 0.5, 4.0, 1.5, 0.1,
-                    key=f"{prefix}_adv_lw")
-                pitch_pad   = st.slider("Pitch padding", 0.0, 10.0, 2.0, 0.5,
-                    key=f"{prefix}_adv_pp")
-
-            # Stripes
-            stripe_on = st.checkbox("Show stripes", False, key=f"{prefix}_adv_st")
-            if stripe_on:
-                cs1, cs2, cs3 = st.columns(3)
-                with cs1:
-                    stripe_color = st.color_picker("Stripe color",
-                        theme.get("pitch_stripe", "#1a5c38"), key=f"{prefix}_adv_sc")
-                with cs2:
-                    stripe_alpha = st.slider("Stripe alpha", 0.0, 1.0, 0.35, 0.05,
-                        key=f"{prefix}_adv_sa")
-                with cs3:
-                    stripe_color2 = st.color_picker("Alt stripe color",
-                        pitch_color, key=f"{prefix}_adv_sc2")
-            else:
-                stripe_color = None; stripe_alpha = 0.35; stripe_color2 = None
-
-            st.markdown("**Show/hide pitch elements**")
-            el1, el2, el3 = st.columns(3)
-            with el1:
-                show_center_circle = st.checkbox("Centre circle", True, key=f"{prefix}_adv_cc")
-                show_penalty       = st.checkbox("Penalty areas", True, key=f"{prefix}_adv_pa")
-            with el2:
-                show_six_yard      = st.checkbox("Six-yard box", True, key=f"{prefix}_adv_sy")
-                show_corner_arcs   = st.checkbox("Corner arcs", True, key=f"{prefix}_adv_ca")
-            with el3:
-                show_halfway       = st.checkbox("Halfway line", True, key=f"{prefix}_adv_hl")
-
-        cfg["pitch"] = dict(
-            pitch_color=pitch_color, line_color=line_color, goal_color=goal_color,
-            line_width=line_width, pitch_pad=pitch_pad,
-            stripe=stripe_on, stripe_color=stripe_color,
-            stripe_alpha=stripe_alpha, stripe_color2=stripe_color2,
-            show_center_circle=show_center_circle, show_penalty=show_penalty,
-            show_six_yard=show_six_yard, show_corner_arcs=show_corner_arcs,
-            show_halfway=show_halfway,
-        )
-
-    # ── FIGURE ────────────────────────────────────────────────────────────────
-    if "figure" in features:
-        with st.expander("📐 Figure Settings", expanded=False):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                fig_w   = st.slider("Width (in)", 6.0, 24.0, 12.0, 0.5, key=f"{prefix}_adv_fw")
-                fig_dpi = st.slider("DPI", 72, 400, 180, 10, key=f"{prefix}_adv_dpi")
-            with c2:
-                fig_h   = st.slider("Height (in)", 4.0, 18.0, 8.0, 0.5, key=f"{prefix}_adv_fh")
-                fig_bg  = st.color_picker("Background",
-                    theme.get("bg", "#0E1117"), key=f"{prefix}_adv_fbg")
-            with c3:
-                transparent = st.checkbox("Transparent bg", False, key=f"{prefix}_adv_tr")
-
-            st.markdown("**Margins (fraction 0–0.3)**")
-            m1, m2, m3, m4 = st.columns(4)
-            with m1: mg_l = st.slider("Left",   0.0, 0.3, 0.05, 0.01, key=f"{prefix}_adv_ml")
-            with m2: mg_r = st.slider("Right",  0.0, 0.3, 0.05, 0.01, key=f"{prefix}_adv_mr")
-            with m3: mg_t = st.slider("Top",    0.0, 0.3, 0.05, 0.01, key=f"{prefix}_adv_mt")
-            with m4: mg_b = st.slider("Bottom", 0.0, 0.3, 0.05, 0.01, key=f"{prefix}_adv_mb")
-
-            pad_inches = st.slider("Export pad (in)", 0.0, 0.5, 0.18, 0.02,
-                key=f"{prefix}_adv_pad")
-
-        cfg["figure"] = dict(
-            width=fig_w, height=fig_h, dpi=fig_dpi,
-            bg=fig_bg, transparent=transparent,
-            margin_left=mg_l, margin_right=mg_r,
-            margin_top=mg_t, margin_bottom=mg_b,
-            pad_inches=pad_inches,
-        )
-
-    # ── MARKERS ───────────────────────────────────────────────────────────────
-    if "markers" in features:
-        with st.expander("🔵 Marker Style", expanded=False):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                mk_size   = st.slider("Size", 10, 600, 120, 5, key=f"{prefix}_adv_mksz")
-                mk_alpha  = st.slider("Alpha", 0.1, 1.0, 0.92, 0.02, key=f"{prefix}_adv_mkal")
-            with c2:
-                mk_fill   = st.color_picker("Fill color", "#00C2FF", key=f"{prefix}_adv_mkfc")
-                mk_edge   = st.color_picker("Edge color", "#FFFFFF", key=f"{prefix}_adv_mkec")
-            with c3:
-                mk_ew     = st.slider("Edge width", 0.0, 4.0, 1.2, 0.1, key=f"{prefix}_adv_mkew")
-                mk_zorder = st.slider("Z-order", 1, 10, 5, 1, key=f"{prefix}_adv_mkzo")
-            mk_shape = st.selectbox("Default shape", MKL, index=MKL.index("Circle"),
-                key=f"{prefix}_adv_mksh")
-        cfg["markers"] = dict(
-            size=mk_size, alpha=mk_alpha,
-            fill=mk_fill, edge=mk_edge,
-            edge_width=mk_ew, zorder=mk_zorder,
-            shape=MARKER_OPTS[mk_shape],
-        )
-
-    # ── ARROWS ────────────────────────────────────────────────────────────────
-    if "arrows" in features:
-        with st.expander("➡️ Arrow Style", expanded=False):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                arr_w      = st.slider("Width", 0.5, 6.0, 2.0, 0.1, key=f"{prefix}_adv_arw")
-                arr_alpha  = st.slider("Alpha", 0.1, 1.0, 0.85, 0.05, key=f"{prefix}_adv_aral")
-            with c2:
-                arr_color  = st.color_picker("Color", "#FFFFFF", key=f"{prefix}_adv_arc")
-                arr_hsize  = st.slider("Head size", 0.1, 1.5, 0.5, 0.05, key=f"{prefix}_adv_arhs")
-            with c3:
-                arr_hw     = st.slider("Head width", 0.1, 2.0, 0.8, 0.05, key=f"{prefix}_adv_arhw")
-                arr_zorder = st.slider("Z-order", 1, 10, 4, 1, key=f"{prefix}_adv_arzo")
-            arr_style  = st.selectbox("Line style",
-                ["solid","dashed","dotted","dashdot"],
-                key=f"{prefix}_adv_arls")
-            arr_curve  = st.slider("Curvature (-1 to 1)", -1.0, 1.0, 0.0, 0.05,
-                key=f"{prefix}_adv_arcv")
-        cfg["arrows"] = dict(
-            width=arr_w, alpha=arr_alpha, color=arr_color,
-            head_size=arr_hsize, head_width=arr_hw,
-            linestyle=arr_style, curvature=arr_curve, zorder=arr_zorder,
-        )
-
-    # ── LINES ─────────────────────────────────────────────────────────────────
-    if "lines" in features:
-        with st.expander("📏 Line Style", expanded=False):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                ln_w     = st.slider("Width", 0.5, 5.0, 1.5, 0.1, key=f"{prefix}_adv_lnw")
-            with c2:
-                ln_color = st.color_picker("Color", "#FFFFFF", key=f"{prefix}_adv_lnc")
-            with c3:
-                ln_alpha = st.slider("Alpha", 0.1, 1.0, 0.9, 0.05, key=f"{prefix}_adv_lnal")
-            ln_style = st.selectbox("Style", ["solid","dashed","dotted","dashdot"],
-                key=f"{prefix}_adv_lnst")
-        cfg["lines"] = dict(
-            width=ln_w, color=ln_color,
-            alpha=ln_alpha, style=ln_style,
-        )
-
-    # ── TEXT ──────────────────────────────────────────────────────────────────
-    if "text" in features:
-        with st.expander("🔤 Text Style", expanded=False):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                tx_family  = st.selectbox("Font family",
-                    ["sans-serif","serif","monospace","DejaVu Sans","Arial","Georgia"],
-                    key=f"{prefix}_adv_txfm")
-                tx_size    = st.slider("Font size", 7, 24, 11, 1, key=f"{prefix}_adv_txsz")
-            with c2:
-                tx_weight  = st.selectbox("Weight", ["normal","bold","light","semibold"],
-                    key=f"{prefix}_adv_txwt")
-                tx_color   = st.color_picker("Color",
-                    theme.get("text", "#FFFFFF"), key=f"{prefix}_adv_txc")
-            with c3:
-                tx_alpha   = st.slider("Opacity", 0.1, 1.0, 1.0, 0.05, key=f"{prefix}_adv_txal")
-                tx_align   = st.selectbox("Alignment", ["left","center","right"],
-                    key=f"{prefix}_adv_txali")
-            tx_outline   = st.checkbox("Outline", False, key=f"{prefix}_adv_txol")
-            tx_ol_width  = st.slider("Outline width", 0.5, 5.0, 2.0, 0.25,
-                key=f"{prefix}_adv_txolw") if tx_outline else 0.0
-        cfg["text"] = dict(
-            family=tx_family, size=tx_size, weight=tx_weight,
-            color=tx_color, alpha=tx_alpha, align=tx_align,
-            outline=tx_outline, outline_width=tx_ol_width,
-        )
-
-    # ── TITLE ─────────────────────────────────────────────────────────────────
-    if "title" in features:
-        with st.expander("🏷️ Title Style", expanded=False):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                ti_size   = st.slider("Font size", 10, 36, 16, 1, key=f"{prefix}_adv_tisz")
-                ti_weight = st.selectbox("Weight", ["bold","normal","light"],
-                    key=f"{prefix}_adv_tiwt")
-            with c2:
-                ti_color  = st.color_picker("Color",
-                    theme.get("text", "#FFFFFF"), key=f"{prefix}_adv_tic")
-                ti_pad    = st.slider("Padding", 0.0, 30.0, 8.0, 1.0,
-                    key=f"{prefix}_adv_tipd")
-            with c3:
-                ti_loc    = st.selectbox("Alignment", ["left","center","right"],
-                    key=f"{prefix}_adv_tiloc")
-                ti_y      = st.slider("Y position", 0.85, 1.05, 1.0, 0.01,
-                    key=f"{prefix}_adv_tiy")
-        cfg["title"] = dict(
-            size=ti_size, weight=ti_weight, color=ti_color,
-            pad=ti_pad, loc=ti_loc, y=ti_y,
-        )
-
-    return cfg
-
-
-def apply_advanced_customization(fig, adv_cfg, theme=None):
-    """
-    Post-process a matplotlib figure with advanced customization settings.
-    Safe to call with an empty or partial adv_cfg — only keys present are applied.
-    Does NOT touch chart internals (pitch drawing, data plotting).
-    """
-    if not adv_cfg:
-        return
-    theme = theme or {}
-
-    # ── Figure settings ───────────────────────────────────────────────────────
-    fc = adv_cfg.get("figure")
-    if fc:
-        try:
-            w = fc.get("width"); h = fc.get("height")
-            if w and h:
-                fig.set_size_inches(w, h)
-            dpi = fc.get("dpi")
-            if dpi:
-                fig.set_dpi(dpi)
-            bg = fc.get("bg")
-            if bg:
-                fig.patch.set_facecolor(bg)
-            if fc.get("transparent"):
-                fig.patch.set_alpha(0.0)
-            # Apply margins if any were changed from defaults
-            ml = fc.get("margin_left", 0.05)
-            mr = fc.get("margin_right", 0.05)
-            mt = fc.get("margin_top", 0.05)
-            mb = fc.get("margin_bottom", 0.05)
-            # Only adjust if user changed from defaults
-            try:
-                fig.subplots_adjust(left=ml, right=1-mr, top=1-mt, bottom=mb)
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-    # ── Pitch color overrides (applied to axes backgrounds) ──────────────────
-    pc = adv_cfg.get("pitch")
-    if pc:
-        try:
-            for ax in fig.axes:
-                ax.set_facecolor(pc.get("pitch_color", ax.get_facecolor()))
-                # Recolor all existing lines on the pitch
-                lc = pc.get("line_color")
-                lw = pc.get("line_width")
-                if lc or lw:
-                    for line in ax.get_lines():
-                        if lc:
-                            try: line.set_color(lc)
-                            except Exception: pass
-                        if lw:
-                            try: line.set_linewidth(lw)
-                            except Exception: pass
-        except Exception:
-            pass
-
-    # ── Title style ───────────────────────────────────────────────────────────
-    tc = adv_cfg.get("title")
-    if tc:
-        try:
-            for ax in fig.axes:
-                t = ax.title
-                if t.get_text():
-                    if tc.get("color"): t.set_color(tc["color"])
-                    if tc.get("size"):  t.set_fontsize(tc["size"])
-                    if tc.get("weight"): t.set_fontweight(tc["weight"])
-                    if tc.get("pad") is not None: t.set_position((0.5, 1.0))
-        except Exception:
-            pass
-
-    # ── Text style (axis labels, tick labels) ─────────────────────────────────
-    txc = adv_cfg.get("text")
-    if txc:
-        import matplotlib.patheffects as pe
-        effects = []
-        if txc.get("outline") and txc.get("outline_width", 0) > 0:
-            effects = [pe.withStroke(linewidth=txc["outline_width"], foreground="black")]
-        try:
-            for ax in fig.axes:
-                for txt in ax.texts:
-                    try:
-                        if txc.get("color"): txt.set_color(txc["color"])
-                        if txc.get("alpha") is not None: txt.set_alpha(txc["alpha"])
-                        if txc.get("family"): txt.set_fontfamily(txc["family"])
-                        if effects: txt.set_path_effects(effects)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-
-def pitch_kw_from_adv(adv_cfg, theme):
-    """
-    Extract pitch-related kwargs from adv_cfg to pass to make_pitch / mplsoccer Pitch.
-    Returns a dict of theme overrides.
-    """
-    pc = adv_cfg.get("pitch", {}) if adv_cfg else {}
-    overrides = {}
-    if pc.get("pitch_color"):
-        overrides["pitch"] = pc["pitch_color"]
-    if pc.get("line_color"):
-        overrides["pitch_lines"] = pc["line_color"]
-    if pc.get("stripe") and pc.get("stripe_color"):
-        overrides["pitch_stripe"] = pc["stripe_color"]
-    elif not pc.get("stripe"):
-        overrides["pitch_stripe"] = None
-    # Merge overrides into a copy of theme
-    merged = {**theme, **overrides}
-    return merged
-
-
-def apply_figure_adv(fig, adv_cfg):
-    """Apply only figure-level settings (size, DPI, bg, margins). Safe wrapper."""
-    fc = (adv_cfg or {}).get("figure")
-    if not fc:
-        return
-    try:
-        w = fc.get("width"); h = fc.get("height")
-        if w and h:
-            fig.set_size_inches(w, h)
-        dpi = fc.get("dpi")
-        if dpi:
-            fig.set_dpi(dpi)
-        bg = fc.get("bg")
-        if bg and not fc.get("transparent"):
-            fig.patch.set_facecolor(bg)
-        if fc.get("transparent"):
-            fig.patch.set_alpha(0.0)
-    except Exception:
-        pass
-
+        leg.get_title().set_color(theme.get("muted","#888888"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # IMAGE OVERLAY CONTROLS
@@ -1087,10 +653,7 @@ def tagged_events_map(events_df, pitch_mode="rect", pitch_width=68.0,
                       legend_cfg=None, title="Tagged Events"):
     theme = THEMES.get(theme_name, THEMES.get("The Athletic Dark", {}))
     pitch = make_pitch(pitch_mode=pitch_mode, pitch_width=pitch_width, theme=theme)
-    y_max = float(pitch_width if pitch_mode == "rect" else 100.0)
-    fig_w = 12.0
-    fig_h = fig_w * (y_max / 100.0) * 0.72   # same ratio as tagging pitch
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    fig, ax = plt.subplots(figsize=(12, 7.2))
     fig.patch.set_facecolor(theme.get("bg", "#0E1117"))
     pitch.draw(ax=ax)
     ax.set_facecolor(theme.get("pitch", "#1f5f3b"))
@@ -1133,8 +696,8 @@ def tagged_events_map(events_df, pitch_mode="rect", pitch_width=68.0,
                                     markersize=8, label=label)
 
     y_max = float(pitch_width if pitch_mode == "rect" else 100.0)
-    # Don't override mplsoccer's axis limits — it sets them correctly
-    # for the pitch type. Just set title and legend.
+    ax.set_xlim(-2, 102)
+    ax.set_ylim(-2, y_max + 2)
     if show_thirds and charts and hasattr(charts, "_add_pitch_thirds"):
         charts._add_pitch_thirds(ax, pitch_mode, pitch_width, theme, False)
     ax.set_title(title, color=theme.get("text", "white"), fontsize=16, weight="bold")
@@ -1211,17 +774,9 @@ def ev_sidebar(prefix):
         pm   = "rect" if ps == "Rectangular" else "square"
         pw   = st.slider("Pitch width", 50.0, 80.0, 68.0, 1.0,
                          key=f"{prefix}_pw") if pm == "rect" else 100.0
-        st.markdown('<div class="divd"></div>', unsafe_allow_html=True)
-        st.markdown("### 🔧 Advanced Customization")
-        current_theme = THEMES.get(tn, {})
-        adv_cfg = advanced_customization_controls(
-            prefix=f"{prefix}_adv",
-            features=["pitch", "figure", "markers", "arrows", "lines", "text", "title"],
-            theme=current_theme,
-        )
 
     S = dict(tn=tn, ad="ltr" if "Left" in adir else "rtl",
-             fy=fy, pm=pm, pw=pw, adv=adv_cfg)
+             fy=fy, pm=pm, pw=pw)
     if f is None:
         return None, S
     try:
@@ -1363,7 +918,6 @@ with st.sidebar:
         "🍕 Radars & Pizza",
         "🧠 Player Scouting",
         "🖱️ Tagging Tool",
-        "📄 Report Builder",
     ], key="nav")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1544,10 +1098,7 @@ if section == "🎯 Pro Shot Map":
                         other_override=oth_ov or None,
                         minutes_played=float(min_pl) if min_pl else None,
                     )
-                adv = S.get("adv", {})
-                apply_advanced_customization(fig, adv, theme)
-                apply_figure_adv(fig, adv)
-                _store_fig("psm_fig", fig)
+                st.session_state["psm_fig"] = fig
             except Exception as e:
                 st.error(f"Error: {e}")
         if "psm_fig" in st.session_state:
@@ -1623,22 +1174,18 @@ if section == "📨 Pro Pass Map":
     with R:
         if gen:
             try:
-                adv = S.get("adv", {})
-                arr_cfg = adv.get("arrows", {})
                 fig = opta_pass_map_pro(
                     df, cfg=cfg,
                     successful_color=succ_col,
                     unsuccessful_color=unsucc_col,
-                    arrow_alpha=arr_cfg.get("alpha", arrow_alpha),
-                    arrow_width=arr_cfg.get("width", arrow_w),
+                    arrow_alpha=arrow_alpha,
+                    arrow_width=arrow_w,
                     pitch_mode=S["pm"], pitch_width=S["pw"],
                     successful_override=succ_ov or None,
                     unsuccessful_override=un_ov  or None,
                     accuracy_override=acc_ov    or None,
                 )
-                apply_advanced_customization(fig, adv, THEMES.get(cfg["theme_name"], {}))
-                apply_figure_adv(fig, adv)
-                _store_fig("ppm_fig", fig)
+                st.session_state["ppm_fig"] = fig
             except Exception as e:
                 st.error(f"Error: {e}")
         if "ppm_fig" in st.session_state:
@@ -1685,8 +1232,7 @@ if section == "⚔️ Attacking Charts":
                 st.markdown('</div>', unsafe_allow_html=True)
             with R:
                 if gen:
-                    adv = S.get("adv", {})
-                    theme = {**THEMES[S["tn"]], **pitch_kw_from_adv(adv, THEMES[S["tn"]])}
+                    theme = THEMES[S["tn"]]
                     sc_f  = {k:v for k,v in sc.items()   if k in leg_cfg["active"]}
                     sm_f  = {k:v for k,v in sm_m.items() if k in leg_cfg["active"]}
                     fig = shot_map(df, shot_colors=sc_f, shot_markers=sm_f,
@@ -1694,20 +1240,13 @@ if section == "⚔️ Attacking Charts":
                                    show_xg=show_xg, theme_name=S["tn"],
                                    legend_cfg=leg_cfg)
                     ax = fig.axes[0]
-                    tc_cfg = adv.get("title", {})
-                    ax.set_title(t,
-                        color=tc_cfg.get("color", theme["text"]),
-                        fontsize=tc_cfg.get("size", 16),
-                        fontweight=tc_cfg.get("weight", "bold"),
-                        loc=tc_cfg.get("loc", "center"))
+                    ax.set_title(t, color=theme["text"], fontsize=16, weight="bold")
                     draw_attack_direction(ax, cfg_sm, theme, S["pm"], S["pw"])
                     apply_legend_style(ax, leg_cfg, theme)
                     if blocks:
                         draw_stat_blocks_bottom(fig, blocks, theme, y=0.02)
                     apply_overlay(fig, ov)
-                    apply_advanced_customization(fig, adv, theme)
-                    apply_figure_adv(fig, adv)
-                    _store_fig("atk_sm", fig)
+                    st.session_state["atk_sm"] = fig
                 if "atk_sm" in st.session_state:
                     preview(st.session_state["atk_sm"], "shot_map")
                 else:
@@ -1746,7 +1285,7 @@ if section == "⚔️ Attacking Charts":
                     fig = _opta_goal_combo(df,gl_title,gl_sub,
                         player_ov.get("img"),logo_ov.get("img"),
                         gl_color,gl_edge,gl_ds,gl_tn,S["pm"],S["pw"],stats or None)
-                    _store_fig("atk_gl", fig)
+                    st.session_state["atk_gl"] = fig
                 if "atk_gl" in st.session_state:
                     preview(st.session_state["atk_gl"],"opta_goal_location")
                 else:
@@ -1769,7 +1308,7 @@ if section == "⚔️ Attacking Charts":
                     fig = shot_zone_map(df,theme_name=S["tn"],pitch_mode=S["pm"],
                                         pitch_width=S["pw"],title=sz_t)
                     apply_overlay(fig,ov)
-                    _store_fig("atk_sz", fig)
+                    st.session_state["atk_sz"] = fig
                 if "atk_sz" in st.session_state:
                     preview(st.session_state["atk_sz"],"shot_zones")
                 else:
@@ -1802,41 +1341,24 @@ if section == "⚔️ Attacking Charts":
                 st.markdown('</div>',unsafe_allow_html=True)
             with R:
                 if gen:
-                    adv = S.get("adv", {})
                     theme = THEMES[S["tn"]]
-                    mk_cfg = adv.get("markers", {})
-                    effective_size  = mk_cfg.get("size", tm_s)
-                    effective_alpha = mk_cfg.get("alpha", tm_a)
-                    effective_fill  = mk_cfg.get("fill", tm_c)
-                    effective_edge  = mk_cfg.get("edge", tm_e)
                     if tm_v:
                         fig,ax,vp = make_full_vertical_pitch(S["pm"],S["pw"],theme)
                         d2 = df.dropna(subset=["x","y"])
-                        vp.scatter(d2["x"],d2["y"],ax=ax,s=effective_size,
-                                   marker=MARKER_OPTS[tm_ml],color=effective_fill,
-                                   edgecolors=effective_edge,
-                                   linewidth=mk_cfg.get("edge_width",2),
-                                   alpha=effective_alpha,
-                                   zorder=mk_cfg.get("zorder",5))
-                        tc_c = adv.get("title",{}).get("color", theme["text"])
-                        ax.set_title(tm_t,color=tc_c,fontsize=adv.get("title",{}).get("size",16),
-                                     fontweight=adv.get("title",{}).get("weight","bold"))
+                        vp.scatter(d2["x"],d2["y"],ax=ax,s=tm_s,
+                                   marker=MARKER_OPTS[tm_ml],color=tm_c,
+                                   edgecolors=tm_e,linewidth=2,alpha=tm_a,zorder=5)
+                        ax.set_title(tm_t,color=theme["text"],fontsize=16,weight="bold")
                     else:
                         fig = touch_map(df,pitch_mode=S["pm"],pitch_width=S["pw"],
-                                        theme_name=S["tn"],dot_color=effective_fill,
-                                        edge_color=effective_edge,
-                                        dot_size=effective_size,alpha=effective_alpha,
-                                        marker=MARKER_OPTS[tm_ml],
+                                        theme_name=S["tn"],dot_color=tm_c,edge_color=tm_e,
+                                        dot_size=tm_s,alpha=tm_a,marker=MARKER_OPTS[tm_ml],
                                         legend_cfg=leg_cfg)
                         ax = fig.axes[0]
-                        tc_c = adv.get("title",{}).get("color", theme["text"])
-                        ax.set_title(tm_t,color=tc_c,fontsize=adv.get("title",{}).get("size",16),
-                                     fontweight=adv.get("title",{}).get("weight","bold"))
+                        ax.set_title(tm_t,color=theme["text"],fontsize=16,weight="bold")
                         draw_attack_direction(ax,cfg_tm,theme,S["pm"],S["pw"],tm_v)
                     apply_overlay(fig,ov)
-                    apply_advanced_customization(fig, adv, theme)
-                    apply_figure_adv(fig, adv)
-                    _store_fig("atk_tm", fig)
+                    st.session_state["atk_tm"] = fig
                 if "atk_tm" in st.session_state:
                     preview(st.session_state["atk_tm"],"touch_map")
                 else:
@@ -1875,7 +1397,7 @@ if section == "⚔️ Attacking Charts":
                         ax.set_title(ht_t,color=theme["text"],fontsize=16,weight="bold")
                         draw_attack_direction(ax,cfg_ht,theme,S["pm"],S["pw"],ht_v)
                     apply_overlay(fig,ov)
-                    _store_fig("atk_ht", fig)
+                    st.session_state["atk_ht"] = fig
                 if "atk_ht" in st.session_state:
                     preview(st.session_state["atk_ht"],"start_heatmap")
                 else:
@@ -1908,7 +1430,7 @@ if section == "⚔️ Attacking Charts":
                                       title=xt_t,color_a=xt_ca,color_b=xt_cb,
                                       theme_name=S["tn"])
                     apply_overlay(fig,ov)
-                    _store_fig("atk_xt", fig)
+                    st.session_state["atk_xt"] = fig
                 if "atk_xt" in st.session_state:
                     preview(st.session_state["atk_xt"],"xg_timeline")
                 else:
@@ -1994,7 +1516,6 @@ if section == "🛡️ Defensive Charts":
                 st.markdown('</div>',unsafe_allow_html=True)
             with R:
                 if gen:
-                    adv = S.get("adv", {})
                     theme=THEMES[S["tn"]]
                     dc_f={k:v for k,v in dc.items() if k in leg_cfg["active"]}
                     dm_f={k:v for k,v in dm.items() if k in leg_cfg["active"]}
@@ -2003,18 +1524,12 @@ if section == "🛡️ Defensive Charts":
                                               theme_name=S["tn"],
                                               legend_cfg=leg_cfg)
                     ax=fig.axes[0]
-                    tc_cfg = adv.get("title", {})
-                    ax.set_title(t,
-                        color=tc_cfg.get("color", theme["text"]),
-                        fontsize=tc_cfg.get("size", 16),
-                        fontweight=tc_cfg.get("weight", "bold"))
+                    ax.set_title(t,color=theme["text"],fontsize=16,weight="bold")
                     draw_attack_direction(ax,cfg_da,theme,S["pm"],S["pw"],dv)
                     apply_legend_style(ax,leg_cfg,theme)
                     if blocks: draw_stat_blocks_bottom(fig,blocks,theme,y=0.02)
                     apply_overlay(fig,ov)
-                    apply_advanced_customization(fig, adv, theme)
-                    apply_figure_adv(fig, adv)
-                    _store_fig("def_da", fig)
+                    st.session_state["def_da"]=fig
                 if "def_da" in st.session_state: preview(st.session_state["def_da"],"defensive_actions")
                 else: empty("🛡️","Configure and generate")
 
@@ -2043,7 +1558,7 @@ if section == "🛡️ Defensive Charts":
                                               theme_name=S["tn"],marker_size=bms,
                                               show_zone_values=bz)
                     apply_overlay(fig,ov)
-                    _store_fig("def_br", fig)
+                    st.session_state["def_br"]=fig
                 if "def_br" in st.session_state: preview(st.session_state["def_br"],"ball_regains")
                 else: empty("🗺️","Configure and generate")
 
@@ -2073,7 +1588,7 @@ if section == "🛡️ Defensive Charts":
                     ax=fig.axes[0]
                     draw_attack_direction(ax,cfg_pr,theme,S["pm"],S["pw"],pv)
                     apply_overlay(fig,ov)
-                    _store_fig("def_pr", fig)
+                    st.session_state["def_pr"]=fig
                 if "def_pr" in st.session_state: preview(st.session_state["def_pr"],"pressure_map")
                 else: empty("⚡","Configure and generate")
 
@@ -2103,7 +1618,7 @@ if section == "🛡️ Defensive Charts":
                                         title=mm_t,color_a=mm_ca,color_b=mm_cb,
                                         theme_name=S["tn"])
                     apply_overlay(fig,ov)
-                    _store_fig("def_mm", fig)
+                    st.session_state["def_mm"]=fig
                 if "def_mm" in st.session_state: preview(st.session_state["def_mm"],"momentum")
                 else: empty("📊","Configure and generate")
 
@@ -2138,7 +1653,7 @@ if section == "🛡️ Defensive Charts":
                                     theme_name=S["tn"])
                     fig.axes[0].set_title(t,color=THEMES[S["tn"]]["text"],fontsize=16,weight="bold")
                     apply_overlay(fig,ov)
-                    _store_fig("def_ob", fig)
+                    st.session_state["def_ob"]=fig
                 if "def_ob" in st.session_state: preview(st.session_state["def_ob"],"outcome_distribution")
                 else: empty("📊","Configure and generate")
     st.stop()
@@ -2177,7 +1692,6 @@ if section == "🔄 Distribution Charts":
                 st.markdown('</div>',unsafe_allow_html=True)
             with R:
                 if gen:
-                    adv = S.get("adv", {})
                     theme=THEMES[S["tn"]]
                     al=leg_cfg["active"]
                     pc_f={k:v for k,v in pc.items() if k in al}
@@ -2188,19 +1702,12 @@ if section == "🔄 Distribution Charts":
                                   result_scope=ps,min_packing=ppk,
                                   legend_cfg=leg_cfg)
                     ax=fig.axes[0]
-                    tc_cfg = adv.get("title", {})
-                    ax.set_title(t,
-                        color=tc_cfg.get("color", theme["text"]),
-                        fontsize=tc_cfg.get("size", 16),
-                        fontweight=tc_cfg.get("weight", "bold"),
-                        loc=tc_cfg.get("loc", "center"))
+                    ax.set_title(t,color=theme["text"],fontsize=16,weight="bold")
                     draw_attack_direction(ax,cfg_pm,theme,S["pm"],S["pw"],dv)
                     apply_legend_style(ax,leg_cfg,theme)
                     if blocks: draw_stat_blocks_bottom(fig,blocks,theme,y=0.02)
                     apply_overlay(fig,ov)
-                    apply_advanced_customization(fig, adv, theme)
-                    apply_figure_adv(fig, adv)
-                    _store_fig("dist_pm", fig)
+                    st.session_state["dist_pm"]=fig
                 if "dist_pm" in st.session_state: preview(st.session_state["dist_pm"],"pass_map")
                 else: empty("➡️","Configure and generate")
 
@@ -2223,20 +1730,15 @@ if section == "🔄 Distribution Charts":
                 st.markdown('</div>',unsafe_allow_html=True)
             with R:
                 if gen:
-                    adv = S.get("adv", {})
                     theme=THEMES[S["tn"]]
-                    arr_cfg = adv.get("arrows", {})
                     fig=progressive_carries_map(df,title=t,theme_name=S["tn"],
                                                  pitch_mode=S["pm"],pitch_width=S["pw"],
-                                                 carry_color=arr_cfg.get("color", cc),
-                                                 min_distance=md,
+                                                 carry_color=cc,min_distance=md,
                                                  vertical_pitch=dv)
                     ax=fig.axes[0]
                     draw_attack_direction(ax,cfg_pc,theme,S["pm"],S["pw"],dv)
                     apply_overlay(fig,ov)
-                    apply_advanced_customization(fig, adv, theme)
-                    apply_figure_adv(fig, adv)
-                    _store_fig("dist_pc", fig)
+                    st.session_state["dist_pc"]=fig
                 if "dist_pc" in st.session_state: preview(st.session_state["dist_pc"],"progressive_carries")
                 else: empty("🏃","Configure and generate")
 
@@ -2259,17 +1761,13 @@ if section == "🔄 Distribution Charts":
                 st.markdown('</div>',unsafe_allow_html=True)
             with R:
                 if gen and plcol:
-                    adv = S.get("adv", {})
-                    theme = THEMES[S["tn"]]
                     fig=passing_network(df,player_col=plcol,
                                          recipient_col=rccol or "recipient",
                                          title=t,theme_name=S["tn"],
                                          pitch_mode=S["pm"],pitch_width=S["pw"],
                                          node_color=nc,edge_color=ec,min_passes=mp)
                     apply_overlay(fig,ov)
-                    apply_advanced_customization(fig, adv, theme)
-                    apply_figure_adv(fig, adv)
-                    _store_fig("dist_pn", fig)
+                    st.session_state["dist_pn"]=fig
                 if "dist_pn" in st.session_state: preview(st.session_state["dist_pn"],"passing_network")
                 else: empty("🕸️","Configure and generate")
     st.stop()
@@ -2327,7 +1825,7 @@ if section == "🎯 Specialist Charts":
                                         logo_w=logo_ov["w"],logo_h=logo_ov["h"],
                                         footer_left=fl,footer_right=fr,
                                         active_legend_items=leg_cfg_gm["active"])
-                    _store_fig("spec_gm", fig)
+                    st.session_state["spec_gm"]=fig
                 if "spec_gm" in st.session_state: preview(st.session_state["spec_gm"],"goal_mouth_map")
                 else: empty("🥅","Configure and generate")
 
@@ -2363,7 +1861,7 @@ if section == "🎯 Specialist Charts":
                                               logo_x=logo_ov["x"],logo_y=logo_ov["y"],
                                               logo_w=logo_ov["w"],logo_h=logo_ov["h"],
                                               active_legend_items=leg_cfg_gsr["active"])
-                    _store_fig("spec_gsr", fig)
+                    st.session_state["spec_gsr"]=fig
                 if "spec_gsr" in st.session_state: preview(st.session_state["spec_gsr"],"shot_report")
                 else: empty("🎯","Configure and generate")
 
@@ -2425,7 +1923,7 @@ if section == "🎯 Specialist Charts":
                                     edgecolors="white",linewidth=0.8,alpha=0.9,zorder=5)
                     ax.set_title(t,color=theme["text"],fontsize=16,weight="bold")
                     apply_overlay(fig,ov)
-                    _store_fig("spec_vp", fig)
+                    st.session_state["spec_vp"]=fig
                 if "spec_vp" in st.session_state: preview(st.session_state["spec_vp"],"vertical_map")
                 else: empty("📍","Configure and generate")
 
@@ -2462,7 +1960,7 @@ if section == "🎯 Specialist Charts":
                                                shot_colors=sc_f,shot_markers=sm_f,
                                                theme_name=S["tn"])
                         apply_overlay(fig,ov)
-                        _store_fig("spec_sc", fig)
+                        st.session_state["spec_sc"]=fig
                     if "spec_sc" in st.session_state: preview(st.session_state["spec_sc"],"shot_detail_card")
                     else: empty("🃏","Select a shot and generate")
     st.stop()
@@ -2592,7 +2090,7 @@ if section == "🍕 Radars & Pizza":
                                 ax.tick_params(colors="#6b8cae")
                                 for sp2 in ax.spines.values(): sp2.set_color("#1e3a5f")
                             apply_overlay(fig,ov)
-                            _store_fig(fk, fig)
+                            st.session_state[fk]=fig
                         except Exception as e: st.error(str(e))
                     if fk in st.session_state: preview(st.session_state[fk],ck)
                     else: empty("🍕","Configure and generate")
@@ -2633,7 +2131,7 @@ if section == "🍕 Radars & Pizza":
                         ax.tick_params(colors="#6b8cae")
                         for sp3 in ax.spines.values(): sp3.set_color("#1e3a5f")
                         apply_overlay(fig,ov)
-                        _store_fig("piz_sc_fig", fig)
+                        st.session_state["piz_sc_fig"]=fig
                     if "piz_sc_fig" in st.session_state: preview(st.session_state["piz_sc_fig"],"scatter")
                     else: empty("📈","Configure and generate")
     st.stop()
@@ -2854,29 +2352,26 @@ if section == "🖱️ Tagging Tool":
                 key_c=(int(click["x"]),int(click["y"]))
                 if key_c!=st.session_state["tag_last_click"]:
                     st.session_state["tag_last_click"]=key_c
-
-                    # ── Precise pixel → pitch coordinate mapping ──────────────
-                    # coord_bounds = (X_MIN, X_MAX, Y_MIN, Y_MAX) captured from
-                    # ax.get_xlim() / ax.get_ylim() AFTER mplsoccer draws the pitch.
-                    # The figure was saved with bbox_inches=None, pad_inches=0,
-                    # so pixel (0,0) = figure top-left = (X_MIN, Y_MAX) in axis coords
-                    # and pixel (img_w-1, img_h-1) = (X_MAX, Y_MIN).
+                    # ── Exact pixel → pitch coordinate mapping ──────────────
+                    # pad_tag is a tuple (X_MIN, X_MAX, Y_MIN, Y_MAX).
+                    # The figure height is pre-computed to exactly match the
+                    # coordinate aspect ratio, and set_aspect("auto") is used
+                    # so there is zero letterboxing — pixels map linearly to
+                    # pitch coordinates across the entire image.
                     if isinstance(pad_tag, tuple) and len(pad_tag)==4:
                         X_MIN_c, X_MAX_c, Y_MIN_c, Y_MAX_c = pad_tag
                     else:
-                        X_MIN_c, X_MAX_c = -3.0, 103.0
-                        Y_MIN_c = -float(y_max_tag) * 0.08
-                        Y_MAX_c =  float(y_max_tag) * 1.08
+                        X_MIN_c, X_MAX_c = -4.0, 104.0
+                        Y_MIN_c, Y_MAX_c = -float(y_max_tag)*0.18, float(y_max_tag)*1.05
 
-                    px = int(click["x"]); py = int(click["y"])
-                    # x: left→right  maps X_MIN→X_MAX
-                    x_pitch = X_MIN_c + (px / max(img_w - 1, 1)) * (X_MAX_c - X_MIN_c)
-                    # y: top→bottom  maps Y_MAX→Y_MIN  (image origin is top-left)
-                    y_pitch = Y_MAX_c - (py / max(img_h - 1, 1)) * (Y_MAX_c - Y_MIN_c)
+                    x_coord_range = X_MAX_c - X_MIN_c   # 108.0
+                    y_coord_range = Y_MAX_c - Y_MIN_c
 
-                    # Clamp to valid pitch playing surface
-                    x_pitch = round(max(0.0, min(100.0, x_pitch)), 2)
-                    y_pitch = round(max(0.0, min(float(y_max_tag), y_pitch)), 2)
+                    x_pitch = round(X_MIN_c + (int(click["x"]) / max(img_w, 1)) * x_coord_range, 2)
+                    y_pitch = round(Y_MAX_c - (int(click["y"]) / max(img_h, 1)) * y_coord_range, 2)
+                    # Clamp to valid pitch range
+                    x_pitch = max(0.0, min(100.0, x_pitch))
+                    y_pitch = max(0.0, min(float(y_max_tag), y_pitch))
                     if two_click and st.session_state["tag_start"] is None:
                         st.session_state["tag_start"]=(x_pitch,y_pitch)
                     else:
@@ -3014,876 +2509,4 @@ if section == "🖱️ Tagging Tool":
                     st.error(f"Chart error: {e}")
         else:
             st.info("No events tagged yet. Click the pitch above to start tagging.")
-    st.stop()
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 📄  REPORT BUILDER
-# ─────────────────────────────────────────────────────────────────────────────
-if section == "📄 Report Builder":
-    hdr("📄", "Report Builder", "Assemble professional scouting reports from saved charts · annotate · export PNG/PDF")
-
-    # ── session-state initialisation ──────────────────────────────────────────
-    def _rb_init():
-        defaults = {
-            "rb_title":       "Scouting Report",
-            "rb_subtitle":    "",
-            "rb_scout":       "",
-            "rb_date":        "",
-            "rb_match":       "",
-            "rb_notes":       "",
-            "rb_slots":       [],       # list of {key, label, bytes}
-            "rb_annotations": [],       # list of annotation dicts per slot index
-            "rb_images":      [],       # list of inserted image dicts
-            "rb_logo_club":   None,
-            "rb_logo_comp":   None,
-            "rb_logo_team":   None,
-            "rb_photo":       None,
-        }
-        for k, v in defaults.items():
-            if k not in st.session_state:
-                st.session_state[k] = v
-    _rb_init()
-
-    # ── catalog of saved figures across the whole app ─────────────────────────
-    FIGURE_CATALOG = {
-        "atk_sm":   "⚔️ Shot Map",
-        "atk_gl":   "⚔️ Goal Location",
-        "atk_sz":   "⚔️ Shot Zones",
-        "atk_tm":   "⚔️ Touch Map",
-        "atk_ht":   "⚔️ Start Heatmap",
-        "atk_xt":   "⚔️ xG Timeline",
-        "psm_fig":  "🎯 Pro Shot Map",
-        "ppm_fig":  "📨 Pro Pass Map",
-        "def_da":   "🛡️ Defensive Actions",
-        "def_br":   "🛡️ Ball Regains",
-        "def_pr":   "🛡️ Pressure Map",
-        "def_mo":   "🛡️ Momentum Chart",
-        "def_ob":   "🛡️ Outcome Distribution",
-        "dist_pm":  "🔄 Pass Map",
-        "dist_pc":  "🔄 Progressive Carries",
-        "dist_pn":  "🔄 Passing Network",
-        "spec_gm":  "🎯 Goal Mouth",
-        "spec_sr":  "🎯 Shot Report",
-        "spec_vm":  "🎯 Vertical Map",
-        "spec_sd":  "🎯 Shot Detail Card",
-        "spec_ps":  "🎯 Pass Sonar",
-        "spec_dt":  "🎯 Defensive Territory",
-        "pizza_fig":"🍕 Pizza Radar",
-    }
-
-    available = {k: v for k, v in FIGURE_CATALOG.items()
-                 if k in st.session_state and st.session_state[k] is not None}
-
-    # ── helper: convert a session-state figure (now bytes) to bytes ──────────
-    def _fig_to_bytes(fig_or_bytes):
-        if isinstance(fig_or_bytes, bytes):
-            return fig_or_bytes
-        try:
-            return _bytes(fig_or_bytes, dpi=180)
-        except Exception:
-            return None
-
-    # ── ANNOTATION TYPES ──────────────────────────────────────────────────────
-    ANNOTATION_TYPES = [
-        "Text", "Rectangle", "Circle", "Ellipse",
-        "Straight Arrow", "Curved Arrow", "Highlight Box", "Number Label",
-    ]
-
-    # ── helper: draw a single annotation onto a matplotlib Axes ──────────
-    def _draw_annotation(ax, ann, ax_w_pts, ax_h_pts):
-        """Draw one annotation dict onto ax. Coords are 0-100 % of axes."""
-        import matplotlib.patches as mpatches
-        import matplotlib.patheffects as pe
-        from matplotlib.transforms import blended_transform_factory
-
-        atype  = ann.get("type", "Text")
-        x_pct  = ann.get("x", 50) / 100.0
-        y_pct  = 1.0 - ann.get("y", 50) / 100.0   # flip: 0=top in UI
-        w_pct  = ann.get("w", 20) / 100.0
-        h_pct  = ann.get("h", 10) / 100.0
-        rot    = ann.get("rotation", 0)
-        fc     = ann.get("fill_color",   "#FF0000")
-        bc     = ann.get("border_color", "#FF4060")
-        bw     = ann.get("border_width", 1.5)
-        alpha  = ann.get("opacity", 0.7)
-        zorder = ann.get("zorder", 10)
-        fsize  = ann.get("font_size", 12)
-        ffam   = ann.get("font", "sans-serif")
-        text   = ann.get("text", "")
-        label_n = ann.get("label_n", 1)
-
-        tr = ax.transAxes
-
-        if atype == "Text":
-            ha = ann.get("ha", "left")
-            try:
-                txt = ax.text(x_pct, y_pct, text,
-                              transform=tr,
-                              fontsize=fsize, fontfamily=ffam,
-                              color=bc, alpha=alpha, zorder=zorder,
-                              rotation=rot, ha=ha, va="top",
-                              fontweight="bold")
-                txt.set_path_effects([pe.withStroke(linewidth=2, foreground="black")])
-            except Exception:
-                pass
-
-        elif atype in ("Rectangle", "Highlight Box"):
-            try:
-                # Use a regular Rectangle — FancyBboxPatch angle param unreliable
-                patch = mpatches.Rectangle(
-                    (x_pct, y_pct - h_pct), w_pct, h_pct,
-                    transform=tr,
-                    facecolor=fc, edgecolor=bc,
-                    linewidth=bw, alpha=alpha, zorder=zorder,
-                    angle=rot, rotation_point="xy",
-                )
-                ax.add_patch(patch)
-                if text:
-                    ax.text(x_pct + w_pct / 2, y_pct - h_pct / 2, text,
-                            transform=tr,
-                            fontsize=fsize, fontfamily=ffam,
-                            color=bc, alpha=min(1.0, alpha + 0.3),
-                            zorder=zorder + 1, ha="center", va="center")
-            except Exception:
-                pass
-
-        elif atype in ("Circle", "Ellipse"):
-            try:
-                is_circle = (atype == "Circle")
-                ew = min(w_pct, h_pct) if is_circle else w_pct
-                eh = min(w_pct, h_pct) if is_circle else h_pct
-                patch = mpatches.Ellipse(
-                    (x_pct + ew / 2, y_pct - eh / 2), ew, eh,
-                    transform=tr,
-                    facecolor=fc, edgecolor=bc,
-                    linewidth=bw, alpha=alpha, zorder=zorder,
-                    angle=rot,
-                )
-                ax.add_patch(patch)
-                if text:
-                    ax.text(x_pct + ew / 2, y_pct - eh / 2, text,
-                            transform=tr,
-                            fontsize=fsize, color=bc,
-                            zorder=zorder + 1, ha="center", va="center")
-            except Exception:
-                pass
-
-        elif atype == "Straight Arrow":
-            try:
-                x2_pct = ann.get("x2", min(100, ann.get("x", 50) + ann.get("w", 20))) / 100.0
-                y2_pct = 1.0 - ann.get("y2", min(100, ann.get("y", 50) + ann.get("h", 10))) / 100.0
-                ax.annotate("",
-                            xy=(x2_pct, y2_pct),
-                            xytext=(x_pct, y_pct),
-                            xycoords=tr, textcoords=tr,
-                            arrowprops=dict(
-                                arrowstyle="-|>",
-                                color=bc, lw=bw, alpha=alpha,
-                                mutation_scale=bw * 8),
-                            zorder=zorder)
-            except Exception:
-                pass
-
-        elif atype == "Curved Arrow":
-            try:
-                x2_pct = ann.get("x2", min(100, ann.get("x", 50) + ann.get("w", 20))) / 100.0
-                y2_pct = 1.0 - ann.get("y2", min(100, ann.get("y", 50) + ann.get("h", 10))) / 100.0
-                curve  = ann.get("curvature", 0.3)
-                ax.annotate("",
-                            xy=(x2_pct, y2_pct),
-                            xytext=(x_pct, y_pct),
-                            xycoords=tr, textcoords=tr,
-                            arrowprops=dict(
-                                arrowstyle="-|>",
-                                connectionstyle=f"arc3,rad={curve}",
-                                color=bc, lw=bw, alpha=alpha,
-                                mutation_scale=bw * 8),
-                            zorder=zorder)
-            except Exception:
-                pass
-
-        elif atype == "Number Label":
-            try:
-                r = min(w_pct, h_pct) / 2
-                circle = mpatches.Circle(
-                    (x_pct, y_pct), radius=r,
-                    transform=tr,
-                    facecolor=fc, edgecolor=bc,
-                    linewidth=bw, alpha=alpha, zorder=zorder,
-                )
-                ax.add_patch(circle)
-                ax.text(x_pct, y_pct, str(label_n),
-                        transform=tr,
-                        fontsize=fsize, fontfamily=ffam,
-                        color=bc, zorder=zorder + 1,
-                        ha="center", va="center", fontweight="bold")
-            except Exception:
-                pass
-
-    # ── helper: build the full report figure ──────────────────────────────────
-    def build_report_figure(slots, annotations_per_slot, extra_images,
-                             meta, logos, spacing=0.02, report_dpi=180):
-        """
-        Assemble a professional scouting report.
-        Charts are placed with CORRECT aspect ratios — no stretching.
-        Layout uses a fixed A3-landscape page (420×297mm equivalent).
-        """
-        from matplotlib.offsetbox import OffsetImage, AnnotationBbox
-        from matplotlib.patches import FancyBboxPatch, Rectangle as MplRect
-        import numpy as np
-        from PIL import Image as _PILImage
-
-        # ── Page setup ─────────────────────────────────────────────────────
-        PAGE_W   = 20.0   # inches
-        MARGIN   = 0.35   # left/right margin fraction of PAGE_W
-        BG       = "#0a0f1a"
-        HDR_BG   = "#0d1829"
-        CARD_BG  = "#111827"
-        ACCENT   = "#00d4ff"
-        TEXT_H   = "#e8f0fe"
-        TEXT_M   = "#6b8cae"
-        TEXT_S   = "#a0aec0"
-        BORDER   = "#1e3a5f"
-
-        has_notes = bool(meta.get("notes", "").strip())
-
-        # ── Compute actual pixel dims of each chart image ───────────────────
-        chart_info = []   # (pil_img, px_w, px_h, aspect)
-        for slot in slots:
-            ib = slot.get("img_bytes")
-            if not ib:
-                chart_info.append(None)
-                continue
-            try:
-                pil = _PILImage.open(io.BytesIO(ib)).convert("RGB")
-                pw, ph = pil.size
-                chart_info.append((pil, pw, ph, pw / max(ph, 1)))
-            except Exception:
-                chart_info.append(None)
-
-        # ── Compute figure height ───────────────────────────────────────────
-        HDR_H    = 1.80   # inches
-        SEP_H    = 0.08   # separator line height
-        NOTES_H  = 1.20 if has_notes else 0
-        FOOT_H   = 0.35
-
-        # Each chart card: title bar + image at natural aspect + padding
-        CARD_PAD = 0.18   # inches top/bottom padding per card
-        TITLE_H  = 0.30   # chart title bar height
-        CONTENT_W = PAGE_W * (1 - 2 * MARGIN)  # usable width in inches
-
-        card_heights = []
-        for info in chart_info:
-            if info is None:
-                card_heights.append(2.0)
-                continue
-            _, pw, ph, asp = info
-            img_h_in = CONTENT_W / asp        # height at natural aspect
-            img_h_in = min(img_h_in, 8.0)     # cap tall charts
-            img_h_in = max(img_h_in, 2.5)     # floor short charts
-            card_heights.append(TITLE_H + img_h_in + CARD_PAD * 2)
-
-        SPACING = 0.20   # gap between cards
-        total_h = (HDR_H + SEP_H
-                   + sum(card_heights)
-                   + SPACING * max(0, len(slots) - 1)
-                   + NOTES_H + FOOT_H + 0.3)
-        total_h = max(total_h, 8.0)
-
-        fig = plt.figure(figsize=(PAGE_W, total_h))
-        fig.patch.set_facecolor(BG)
-
-        def add_axes_abs(left_in, bottom_in, w_in, h_in):
-            """Add axes using absolute inch coordinates."""
-            return fig.add_axes([
-                left_in  / PAGE_W,
-                bottom_in / total_h,
-                w_in     / PAGE_W,
-                h_in     / total_h,
-            ])
-
-        # Current vertical cursor — build TOP → BOTTOM
-        cur_top = total_h   # inches from bottom
-
-        # ── HEADER ─────────────────────────────────────────────────────────
-        hdr_bottom = cur_top - HDR_H
-        ax_hdr = add_axes_abs(0, hdr_bottom, PAGE_W, HDR_H)
-        ax_hdr.set_facecolor(HDR_BG)
-        ax_hdr.set_xlim(0, 1); ax_hdr.set_ylim(0, 1)
-        ax_hdr.axis("off")
-
-        # Accent gradient bar at bottom of header
-        ax_hdr.add_patch(MplRect((0, 0), 1, 0.025,
-                                  transform=ax_hdr.transAxes,
-                                  facecolor=ACCENT, zorder=5))
-
-        # Left side: logos
-        logo_cursor_x = 0.015
-        logo_zoom_base = 0.9  # will be auto-scaled
-        for logo_img in [logos.get("club"), logos.get("comp"), logos.get("team")]:
-            if logo_img is None:
-                continue
-            try:
-                arr = np.array(logo_img.convert("RGBA"))
-                h_px, w_px = arr.shape[:2]
-                # Target logo height = 70% of header in data units
-                target_h_pts = HDR_H * 0.70 * 72  # pts
-                zoom = target_h_pts / max(h_px, 1)
-                zoom = min(zoom, 1.5)
-                im  = OffsetImage(arr, zoom=zoom)
-                ab  = AnnotationBbox(im,
-                                     (logo_cursor_x + 0.045, 0.55),
-                                     xycoords="axes fraction",
-                                     frameon=False, zorder=6)
-                ax_hdr.add_artist(ab)
-                logo_cursor_x += 0.10
-            except Exception:
-                pass
-
-        # Text block
-        tx = logo_cursor_x + 0.015
-        title_txt  = meta.get("title", "Scouting Report")
-        sub_txt    = meta.get("subtitle", "")
-        match_txt  = meta.get("match", "")
-        scout_txt  = meta.get("scout", "")
-        date_txt   = meta.get("date", "")
-
-        ax_hdr.text(tx, 0.82, title_txt,
-                    transform=ax_hdr.transAxes,
-                    fontsize=26, fontweight="black",
-                    color=TEXT_H, va="top", clip_on=False)
-        y_sub = 0.52
-        if sub_txt:
-            ax_hdr.text(tx, y_sub, sub_txt,
-                        transform=ax_hdr.transAxes,
-                        fontsize=14, color=ACCENT,
-                        va="top", clip_on=False, style="italic")
-            y_sub -= 0.24
-        info_parts = []
-        if match_txt: info_parts.append(f"⚽  {match_txt}")
-        if scout_txt: info_parts.append(f"👤  Scout: {scout_txt}")
-        if date_txt:  info_parts.append(f"📅  {date_txt}")
-        if info_parts:
-            ax_hdr.text(tx, y_sub, "   ·   ".join(info_parts),
-                        transform=ax_hdr.transAxes,
-                        fontsize=10, color=TEXT_S,
-                        va="top", clip_on=False)
-
-        # Player photo — right side
-        if logos.get("photo") is not None:
-            try:
-                arr = np.array(logos["photo"].convert("RGBA"))
-                h_px = arr.shape[0]
-                zoom = (HDR_H * 0.80 * 72) / max(h_px, 1)
-                zoom = min(zoom, 1.2)
-                im  = OffsetImage(arr, zoom=zoom)
-                ab  = AnnotationBbox(im, (0.975, 0.56),
-                                     xycoords="axes fraction",
-                                     frameon=False, zorder=6)
-                ax_hdr.add_artist(ab)
-            except Exception:
-                pass
-
-        cur_top = hdr_bottom
-
-        # ── SEPARATOR ──────────────────────────────────────────────────────
-        sep_bottom = cur_top - SEP_H
-        ax_sep = add_axes_abs(0, sep_bottom, PAGE_W, SEP_H)
-        ax_sep.set_facecolor(ACCENT)
-        ax_sep.axis("off")
-        cur_top = sep_bottom
-
-        # ── CHART CARDS ────────────────────────────────────────────────────
-        ML = PAGE_W * MARGIN        # left margin in inches
-        CW = CONTENT_W              # content width in inches
-
-        for slot_idx, (slot, info, card_h) in enumerate(
-                zip(slots, chart_info, card_heights)):
-
-            if slot_idx > 0:
-                cur_top -= SPACING
-
-            card_bottom = cur_top - card_h
-
-            # Card background
-            ax_card_bg = add_axes_abs(ML - 0.15, card_bottom,
-                                      CW + 0.30, card_h)
-            ax_card_bg.set_facecolor(CARD_BG)
-            ax_card_bg.axis("off")
-            # Border
-            ax_card_bg.add_patch(MplRect((0, 0), 1, 1,
-                                          transform=ax_card_bg.transAxes,
-                                          fill=False, edgecolor=BORDER,
-                                          linewidth=1.2, zorder=2))
-            # Accent left stripe
-            ax_card_bg.add_patch(MplRect((0, 0), 0.004, 1,
-                                          transform=ax_card_bg.transAxes,
-                                          facecolor=ACCENT, zorder=3))
-
-            # Card title bar
-            tb_bottom = cur_top - TITLE_H
-            ax_title = add_axes_abs(ML, tb_bottom, CW, TITLE_H)
-            ax_title.set_facecolor(CARD_BG)
-            ax_title.axis("off")
-            lbl = slot.get("label", f"Chart {slot_idx+1}")
-            ax_title.text(0.012, 0.55, lbl,
-                          transform=ax_title.transAxes,
-                          fontsize=11, fontweight="bold",
-                          color=ACCENT, va="center")
-            # Thin separator under title
-            ax_title.axhline(0, color=BORDER, lw=1)
-
-            # Chart image — PRESERVE ASPECT RATIO
-            if info is not None:
-                pil_img, px_w, px_h, asp = info
-                img_h_in = CW / asp
-                img_h_in = min(img_h_in, 8.0)
-                img_h_in = max(img_h_in, 2.5)
-
-                img_bottom = tb_bottom - CARD_PAD - img_h_in
-                ax_img = add_axes_abs(ML, img_bottom, CW, img_h_in)
-                ax_img.set_facecolor(CARD_BG)
-                ax_img.axis("off")
-
-                arr = np.array(pil_img)
-                ax_img.imshow(arr, aspect="equal", zorder=1,
-                              interpolation="lanczos")
-                ax_img.set_xlim(0, px_w)
-                ax_img.set_ylim(px_h, 0)
-
-                # Draw annotations on top of image
-                ann_list = (annotations_per_slot[slot_idx]
-                            if slot_idx < len(annotations_per_slot) else [])
-                for ann in ann_list:
-                    try:
-                        _draw_annotation(ax_img, ann, 0, 0)
-                    except Exception:
-                        pass
-
-            cur_top = card_bottom
-
-        # ── NOTES ──────────────────────────────────────────────────────────
-        if has_notes:
-            cur_top -= SPACING * 0.5
-            notes_bottom = cur_top - NOTES_H
-            ax_notes = add_axes_abs(ML, notes_bottom, CW, NOTES_H)
-            ax_notes.set_facecolor("#0d1f35")
-            ax_notes.axis("off")
-            ax_notes.add_patch(MplRect((0, 0), 1, 1,
-                                        transform=ax_notes.transAxes,
-                                        fill=False, edgecolor=BORDER, lw=1))
-            ax_notes.add_patch(MplRect((0, 0), 0.006, 1,
-                                        transform=ax_notes.transAxes,
-                                        facecolor="#ffd060", zorder=3))
-            ax_notes.text(0.015, 0.85, "ANALYST NOTES",
-                          transform=ax_notes.transAxes,
-                          fontsize=9, fontweight="bold",
-                          color="#ffd060", va="top")
-            ax_notes.text(0.015, 0.60, meta["notes"],
-                          transform=ax_notes.transAxes,
-                          fontsize=9.5, color=TEXT_S,
-                          va="top", wrap=True)
-            cur_top = notes_bottom
-
-        # ── FOOTER ─────────────────────────────────────────────────────────
-        ax_foot = add_axes_abs(0, 0, PAGE_W, FOOT_H)
-        ax_foot.set_facecolor("#080d14")
-        ax_foot.axis("off")
-        ax_foot.text(0.5, 0.5,
-                     "Generated by Football Analysis Suite v4",
-                     transform=ax_foot.transAxes,
-                     fontsize=8, color="#2a4a6b",
-                     ha="center", va="center")
-
-        # ── Extra overlay images ────────────────────────────────────────────
-        for ei in extra_images:
-            try:
-                img = ei.get("img")
-                if img is None:
-                    continue
-                arr      = np.array(img.convert("RGBA"))
-                h_px     = arr.shape[0]
-                zoom     = ei.get("zoom", 0.3)
-                alpha_v  = ei.get("opacity", 1.0)
-                x_f      = ei.get("x", 0.5)
-                y_f      = ei.get("y", 0.5)
-                im  = OffsetImage(arr, zoom=zoom, alpha=alpha_v)
-                ab  = AnnotationBbox(im, (x_f, y_f),
-                                     xycoords="figure fraction",
-                                     frameon=False, zorder=20)
-                fig.add_artist(ab)
-            except Exception:
-                pass
-
-        fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
-        return fig
-
-    # ─────────────────────────────────────────────────────────────────────
-    # REPORT BUILDER UI
-    # ─────────────────────────────────────────────────────────────────────
-    tab_meta, tab_charts, tab_ann, tab_imgs, tab_export = st.tabs([
-        "📋 Report Info",
-        "📊 Charts",
-        "✏️ Annotations",
-        "🖼️ Extra Images",
-        "💾 Export",
-    ])
-
-    # ── TAB 1: REPORT INFO ────────────────────────────────────────────────
-    with tab_meta:
-        st.markdown("#### 📋 Report Information")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.session_state["rb_title"]    = st.text_input("Report title", st.session_state["rb_title"], key="rb_ti")
-            st.session_state["rb_subtitle"] = st.text_input("Subtitle",     st.session_state["rb_subtitle"], key="rb_su")
-            st.session_state["rb_match"]    = st.text_input("Match info (e.g. Arsenal 2-1 Chelsea)", st.session_state["rb_match"], key="rb_mi")
-        with c2:
-            st.session_state["rb_scout"]    = st.text_input("Scout name",   st.session_state["rb_scout"], key="rb_sc")
-            st.session_state["rb_date"]     = st.text_input("Date",         st.session_state["rb_date"],  key="rb_da")
-        st.session_state["rb_notes"] = st.text_area("Notes / Analysis", st.session_state["rb_notes"],
-                                                     height=120, key="rb_no")
-
-        st.markdown("#### 🖼️ Logos & Photos")
-        lc1, lc2, lc3, lc4 = st.columns(4)
-        with lc1:
-            club_f = st.file_uploader("Club logo", type=["png","jpg","jpeg","svg"], key="rb_lc")
-            if club_f:
-                try:
-                    st.session_state["rb_logo_club"] = Image.open(club_f).convert("RGBA")
-                except Exception: pass
-        with lc2:
-            comp_f = st.file_uploader("Competition logo", type=["png","jpg","jpeg","svg"], key="rb_lco")
-            if comp_f:
-                try:
-                    st.session_state["rb_logo_comp"] = Image.open(comp_f).convert("RGBA")
-                except Exception: pass
-        with lc3:
-            team_f = st.file_uploader("Team logo", type=["png","jpg","jpeg","svg"], key="rb_lt")
-            if team_f:
-                try:
-                    st.session_state["rb_logo_team"] = Image.open(team_f).convert("RGBA")
-                except Exception: pass
-        with lc4:
-            photo_f = st.file_uploader("Player photo", type=["png","jpg","jpeg"], key="rb_ph")
-            if photo_f:
-                try:
-                    st.session_state["rb_photo"] = Image.open(photo_f).convert("RGBA")
-                except Exception: pass
-
-        if st.button("🔄 Preview header", key="rb_prev_hdr"):
-            meta = dict(
-                title    = st.session_state["rb_title"],
-                subtitle = st.session_state["rb_subtitle"],
-                scout    = st.session_state["rb_scout"],
-                date     = st.session_state["rb_date"],
-                match    = st.session_state["rb_match"],
-                notes    = "",
-            )
-            logos = dict(
-                club  = st.session_state.get("rb_logo_club"),
-                comp  = st.session_state.get("rb_logo_comp"),
-                team  = st.session_state.get("rb_logo_team"),
-                photo = st.session_state.get("rb_photo"),
-            )
-            try:
-                fig_prev = build_report_figure([], [], [], meta, logos)
-                prev_bytes = _bytes(fig_prev, dpi=120)
-                plt.close(fig_prev)
-                st.image(prev_bytes, use_container_width=True)
-            except Exception as e:
-                st.error(f"Preview error: {e}")
-
-    # ── TAB 2: CHARTS ─────────────────────────────────────────────────────
-    with tab_charts:
-        st.markdown("#### 📊 Add Charts to Report")
-
-        if not available:
-            st.info("No charts saved yet. Generate charts in other sections first, then return here.")
-        else:
-            st.markdown("**Available saved charts:**")
-            add_cols = st.columns(4)
-            for i, (k, label) in enumerate(available.items()):
-                with add_cols[i % 4]:
-                    if st.button(f"＋ {label}", key=f"rb_add_{k}"):
-                        fig_obj = st.session_state.get(k)
-                        img_b = _fig_to_bytes(fig_obj)
-                        if img_b:
-                            st.session_state["rb_slots"].append({
-                                "key": k,
-                                "label": label,
-                                "img_bytes": img_b,
-                            })
-                            st.session_state["rb_annotations"].append([])
-                            st.rerun()
-
-        st.markdown("---")
-        slots = st.session_state["rb_slots"]
-        if not slots:
-            st.info("No charts added yet. Click a chart above to add it.")
-        else:
-            st.markdown(f"**Report contains {len(slots)} chart(s):**")
-            for i, slot in enumerate(slots):
-                sc1, sc2, sc3 = st.columns([3, 1, 1])
-                with sc1:
-                    new_lbl = st.text_input(f"Label #{i+1}", slot.get("label",""),
-                                            key=f"rb_slbl_{i}")
-                    st.session_state["rb_slots"][i]["label"] = new_lbl
-                with sc2:
-                    if st.button("🔃 Refresh", key=f"rb_ref_{i}"):
-                        fig_obj = st.session_state.get(slot["key"])
-                        if fig_obj:
-                            st.session_state["rb_slots"][i]["img_bytes"] = _fig_to_bytes(fig_obj)
-                            st.rerun()
-                with sc3:
-                    if st.button("🗑️ Remove", key=f"rb_del_{i}"):
-                        st.session_state["rb_slots"].pop(i)
-                        st.session_state["rb_annotations"].pop(i)
-                        st.rerun()
-                try:
-                    st.image(slot["img_bytes"], use_container_width=True)
-                except Exception:
-                    st.warning("Could not preview this chart.")
-
-    # ── TAB 3: ANNOTATIONS ────────────────────────────────────────────────
-    with tab_ann:
-        slots = st.session_state["rb_slots"]
-        if not slots:
-            st.info("Add charts first in the Charts tab before adding annotations.")
-        else:
-            slot_labels = [f"#{i+1}: {s.get('label','Chart')}" for i, s in enumerate(slots)]
-            col_sel, col_count = st.columns([3, 1])
-            with col_sel:
-                target_slot = st.selectbox("Chart to annotate", slot_labels, key="rb_ann_slot")
-            slot_idx = slot_labels.index(target_slot)
-            with col_count:
-                st.metric("Annotations", len(st.session_state["rb_annotations"][slot_idx]))
-
-            st.markdown("---")
-
-            # ── Live chart preview ─────────────────────────────────────────
-            slot_data = st.session_state["rb_slots"][slot_idx]
-            show_prev = st.checkbox("Show live preview", True, key="rb_ann_showprev")
-            if show_prev and slot_data.get("img_bytes"):
-                from PIL import Image as _PILImage
-                import numpy as np
-                fig_p, ax_p = plt.subplots(figsize=(14, 8))
-                fig_p.patch.set_facecolor("#0E1117")
-                ax_p.set_facecolor("#111827")
-                ax_p.axis("off")
-                try:
-                    pil_p = _PILImage.open(io.BytesIO(slot_data["img_bytes"])).convert("RGB")
-                    arr_p = np.array(pil_p)
-                    ax_p.imshow(arr_p, aspect="equal", zorder=1,
-                                interpolation="lanczos")
-                    ax_p.set_xlim(0, pil_p.width)
-                    ax_p.set_ylim(pil_p.height, 0)
-                except Exception:
-                    pass
-                for ann in st.session_state["rb_annotations"][slot_idx]:
-                    try:
-                        _draw_annotation(ax_p, ann, 0, 0)
-                    except Exception:
-                        pass
-                prev_bytes = _bytes(fig_p, dpi=130)
-                plt.close(fig_p)
-                st.image(prev_bytes, use_container_width=True)
-
-            st.markdown("---")
-            # ── Add annotation form ────────────────────────────────────────
-            st.markdown("#### ➕ Add Annotation")
-            form_c1, form_c2 = st.columns([1, 2])
-
-            with form_c1:
-                ann_type = st.selectbox("Type", ANNOTATION_TYPES, key="rb_ann_type")
-                ann_text = ""
-                if ann_type == "Number Label":
-                    label_n = st.number_input("Number", 1, 99, 1, key="rb_ann_ln")
-                    ann_text = str(int(label_n))
-                elif ann_type not in ("Straight Arrow", "Curved Arrow"):
-                    ann_text = st.text_input("Text", "", key="rb_ann_txt",
-                                             placeholder="Optional label text")
-
-                fill_c   = st.color_picker("Fill color",   "#FF4060", key="rb_ann_fc")
-                border_c = st.color_picker("Stroke/Text color", "#FFFFFF", key="rb_ann_bc")
-                opacity  = st.slider("Opacity", 0.05, 1.0, 0.80, 0.05, key="rb_ann_op")
-
-            with form_c2:
-                st.markdown("**Position & Size** *(% of chart area)*")
-                pos_c1, pos_c2 = st.columns(2)
-                with pos_c1:
-                    ax_ = st.slider("X start (%)", 0, 99, 10, key="rb_ann_x")
-                    ay_ = st.slider("Y start (%)", 0, 99, 10, key="rb_ann_y")
-                with pos_c2:
-                    aw_ = st.slider("Width (%)", 1, 90, 25, key="rb_ann_w")
-                    ah_ = st.slider("Height (%)", 1, 80, 15, key="rb_ann_h")
-
-                st.markdown("**Style**")
-                sty_c1, sty_c2, sty_c3 = st.columns(3)
-                with sty_c1:
-                    border_w = st.slider("Stroke width", 0.5, 8.0, 2.5, 0.5, key="rb_ann_bw")
-                    ar_ = st.slider("Rotation °", -180, 180, 0, key="rb_ann_rot")
-                with sty_c2:
-                    font_sz  = st.slider("Font size", 8, 48, 16, key="rb_ann_fsz")
-                    az_      = st.slider("Z-order", 1, 20, 10, key="rb_ann_z")
-                with sty_c3:
-                    font_fam = st.selectbox("Font",
-                        ["sans-serif", "serif", "monospace", "Arial", "Georgia"],
-                        key="rb_ann_ff")
-
-                if ann_type in ("Straight Arrow", "Curved Arrow"):
-                    st.markdown("**Arrow endpoint**")
-                    ar_c1, ar_c2 = st.columns(2)
-                    with ar_c1:
-                        x2_ = st.slider("End X (%)", 0, 100, 60, key="rb_ann_x2")
-                        y2_ = st.slider("End Y (%)", 0, 100, 40, key="rb_ann_y2")
-                    with ar_c2:
-                        if ann_type == "Curved Arrow":
-                            curve_ = st.slider("Curvature", -1.0, 1.0, 0.3, 0.05, key="rb_ann_cv")
-                        else:
-                            curve_ = 0.0
-                else:
-                    x2_ = y2_ = None; curve_ = 0.0
-
-            if st.button("➕ Add to chart", type="primary", key="rb_ann_add"):
-                new_ann = dict(
-                    type=ann_type, x=ax_, y=ay_, w=aw_, h=ah_,
-                    rotation=ar_, fill_color=fill_c, border_color=border_c,
-                    border_width=border_w, opacity=opacity, zorder=az_,
-                    font_size=font_sz, font=font_fam, text=ann_text,
-                )
-                if ann_type == "Number Label":
-                    new_ann["label_n"] = int(ann_text) if ann_text.isdigit() else 1
-                if x2_ is not None:
-                    new_ann["x2"] = x2_; new_ann["y2"] = y2_
-                if ann_type == "Curved Arrow":
-                    new_ann["curvature"] = curve_
-                st.session_state["rb_annotations"][slot_idx].append(new_ann)
-                st.rerun()
-
-            # ── Existing annotations table ─────────────────────────────────
-            anns = st.session_state["rb_annotations"][slot_idx]
-            if anns:
-                st.markdown(f"---\n#### 📋 Annotations on this chart ({len(anns)})")
-                for ai, ann in enumerate(anns):
-                    col_info, col_del = st.columns([5, 1])
-                    with col_info:
-                        label_str = f"**#{ai+1}** `{ann.get('type')}` " \
-                                    f"at ({ann.get('x')}%, {ann.get('y')}%) " \
-                                    f"— {ann.get('text','') or ''}"
-                        st.markdown(label_str)
-                    with col_del:
-                        if st.button("🗑️", key=f"rb_del_ann_{slot_idx}_{ai}",
-                                     help="Delete this annotation"):
-                            st.session_state["rb_annotations"][slot_idx].pop(ai)
-                            st.rerun()
-
-    # ── TAB 4: EXTRA IMAGES ───────────────────────────────────────────────
-    with tab_imgs:
-        st.markdown("#### 🖼️ Insert Additional Images")
-        st.caption("Add watermarks, logos, photos, or custom graphics onto the report.")
-
-        n_imgs = st.number_input("Number of extra images", 0, 8, 0, key="rb_nimgs")
-        extra_images = []
-        for ii in range(int(n_imgs)):
-            with st.expander(f"Image #{ii+1}", expanded=(ii==0)):
-                img_f = st.file_uploader(f"Upload image #{ii+1}", type=["png","jpg","jpeg"], key=f"rb_ei_{ii}")
-                if img_f:
-                    try:
-                        pil_ei = Image.open(img_f).convert("RGBA")
-                        ic1, ic2 = st.columns(2)
-                        with ic1:
-                            ei_x = st.slider(f"X (fig %)", 0.0, 1.0, 0.5, 0.01, key=f"rb_ei_x_{ii}")
-                            ei_y = st.slider(f"Y (fig %)", 0.0, 1.0, 0.5, 0.01, key=f"rb_ei_y_{ii}")
-                        with ic2:
-                            ei_zoom = st.slider(f"Size (zoom)", 0.05, 1.0, 0.25, 0.01, key=f"rb_ei_z_{ii}")
-                            ei_op   = st.slider(f"Opacity", 0.05, 1.0, 1.0, 0.05, key=f"rb_ei_op_{ii}")
-                        extra_images.append(dict(img=pil_ei, x=ei_x, y=ei_y,
-                                                 zoom=ei_zoom, opacity=ei_op))
-                        st.image(img_f, width=120)
-                    except Exception as e:
-                        st.error(f"Could not load image: {e}")
-
-        # Persist extra_images in session state for export tab
-        st.session_state["rb_extra_images"] = extra_images
-
-    # ── TAB 5: EXPORT ─────────────────────────────────────────────────────
-    with tab_export:
-        st.markdown("#### 💾 Export Report")
-
-        slots = st.session_state["rb_slots"]
-        if not slots:
-            st.info("Add at least one chart in the Charts tab before exporting.")
-        else:
-            ec1, ec2 = st.columns(2)
-            with ec1:
-                exp_dpi = st.slider("Export DPI", 72, 400, 200, 10, key="rb_exp_dpi")
-                exp_spacing = st.slider("Chart spacing", 0.0, 0.1, 0.02, 0.005, key="rb_exp_sp")
-            with ec2:
-                exp_fmt = st.multiselect("Export format(s)", ["PNG","PDF"], default=["PNG"], key="rb_exp_fmt")
-
-            if st.button("🔨 Build report", key="rb_build"):
-                with st.spinner("Building report..."):
-                    meta = dict(
-                        title    = st.session_state["rb_title"],
-                        subtitle = st.session_state["rb_subtitle"],
-                        scout    = st.session_state["rb_scout"],
-                        date     = st.session_state["rb_date"],
-                        match    = st.session_state["rb_match"],
-                        notes    = st.session_state["rb_notes"],
-                    )
-                    logos = dict(
-                        club  = st.session_state.get("rb_logo_club"),
-                        comp  = st.session_state.get("rb_logo_comp"),
-                        team  = st.session_state.get("rb_logo_team"),
-                        photo = st.session_state.get("rb_photo"),
-                    )
-                    extra_imgs = st.session_state.get("rb_extra_images", [])
-                    try:
-                        fig_report = build_report_figure(
-                            slots,
-                            st.session_state["rb_annotations"],
-                            extra_imgs,
-                            meta,
-                            logos,
-                            spacing=exp_spacing,
-                            report_dpi=exp_dpi,
-                        )
-                        # Store as bytes immediately — keeps figure from being GC'd
-                        _rb_png = _bytes(fig_report, dpi=exp_dpi)
-                        _rb_pdf = _pdf(fig_report)
-                        plt.close(fig_report)
-                        st.session_state["rb_report_png"] = _rb_png
-                        st.session_state["rb_report_pdf"] = _rb_pdf
-                        st.success("Report built successfully!")
-                    except Exception as e:
-                        st.error(f"Build error: {e}")
-
-            if "rb_report_png" in st.session_state:
-                st.image(st.session_state["rb_report_png"], use_container_width=True)
-
-                dl1, dl2 = st.columns(2)
-                with dl1:
-                    if "PNG" in exp_fmt:
-                        st.download_button(
-                            "⬇️ Download PNG",
-                            st.session_state["rb_report_png"],
-                            file_name="scouting_report.png",
-                            mime="image/png",
-                            key="rb_dl_png",
-                        )
-                with dl2:
-                    if "PDF" in exp_fmt:
-                        st.download_button(
-                            "⬇️ Download PDF",
-                            st.session_state["rb_report_pdf"],
-                            file_name="scouting_report.pdf",
-                            mime="application/pdf",
-                            key="rb_dl_pdf",
-                        )
-
-                if st.button("🗑️ Clear report", key="rb_clear"):
-                    st.session_state.pop("rb_report_png", None)
-                    st.session_state.pop("rb_report_pdf", None)
-                    st.rerun()
-
     st.stop()
