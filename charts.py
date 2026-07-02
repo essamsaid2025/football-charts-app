@@ -861,36 +861,111 @@ def _legend_active_set(legend_cfg: Optional[dict]):
     return set(legend_cfg.get("active") or [])
 
 
-def _add_legend(ax, handles, theme: dict, loc: str = "lower center", legend_cfg: Optional[dict] = None):
-    handles = _filter_legend_handles(handles, legend_cfg)
-    if not handles:
-        return
+def _stable_axes_bbox(ax):
+    """
+    Return the axes bounding box in figure-fraction coordinates, resolved
+    AFTER any aspect-ratio correction (aspect='equal', adjustable='box') has
+    been applied.
+
+    Root cause this works around: pitch axes are created with
+    aspect='equal'/adjustable='box' (see make_pitch/Pitch). The axes' actual
+    on-figure box can be resized/repositioned the moment the figure is
+    drawn, depending on the data limits at draw time. Anchoring a legend via
+    ax.legend(bbox_to_anchor=<axes-fraction point>) BEFORE that
+    resize/reposition is resolved computes the anchor against a stale box,
+    which is why a legend requested at "lower center" could end up rendered
+    near the TOP of the chart, overlapping titles/labels. Forcing a draw +
+    apply_aspect() first makes ax.get_position() reliable, so anything
+    anchored from it (place_legend_outside_axes) is placed correctly.
+    """
+    fig = ax.figure
+    try:
+        fig.canvas.draw()
+    except Exception:
+        pass
+    try:
+        ax.apply_aspect()
+    except Exception:
+        pass
+    return ax.get_position()
+
+
+def place_legend_outside_axes(ax, handles, theme: dict, loc: str = "lower center",
+                               legend_cfg: Optional[dict] = None, fontsize: float = 9,
+                               ncol: Optional[int] = None, frame: bool = False,
+                               title: Optional[str] = None, markerscale: float = 1.0):
+    """
+    Render a legend fully OUTSIDE the plotted chart/pitch area, anchored to
+    the axes' real (aspect-corrected) figure position, so it never overlaps
+    pitch content/titles/labels and always lands on the requested side,
+    regardless of the axes' aspect-ratio adjustments or entry count.
+    """
     legend_cfg = legend_cfg or {}
-    loc = legend_cfg.get("pos", legend_cfg.get("legend_pos", loc))
-    if "upper" in loc:
-        anchor = (0.5, 0.98)
-    elif "lower" in loc:
-        anchor = (0.5, 0.02)
-    else:
-        anchor = None
-    leg = ax.legend(
+    if not legend_cfg.get("show", legend_cfg.get("show_legend", True)):
+        return None
+    if not handles:
+        return None
+
+    loc = legend_cfg.get("pos", legend_cfg.get("legend_pos", loc)) or loc
+    fontsize = legend_cfg.get("fontsize", legend_cfg.get("legend_fontsize", fontsize))
+    ncol = int(legend_cfg.get("ncol", legend_cfg.get("legend_ncol")) or ncol or min(4, len(handles)))
+    frame = bool(legend_cfg.get("frame", legend_cfg.get("legend_frame", frame)))
+    title = legend_cfg.get("title", legend_cfg.get("legend_title", title)) or None
+    markerscale = legend_cfg.get("markerscale", legend_cfg.get("legend_markerscale", markerscale))
+
+    fig = ax.figure
+    pos = _stable_axes_bbox(ax)
+    cx = pos.x0 + pos.width / 2.0
+    cy = pos.y0 + pos.height / 2.0
+    margin = 0.02
+
+    if "upper" in loc and "left" in loc:
+        anchor, mpl_loc = (max(0.01, pos.x0), min(0.99, pos.y1 + margin)), "lower left"
+    elif "upper" in loc and "right" in loc:
+        anchor, mpl_loc = (min(0.99, pos.x1), min(0.99, pos.y1 + margin)), "lower right"
+    elif "lower" in loc and "left" in loc:
+        anchor, mpl_loc = (max(0.01, pos.x0), max(0.01, pos.y0 - margin)), "upper left"
+    elif "lower" in loc and "right" in loc:
+        anchor, mpl_loc = (min(0.99, pos.x1), max(0.01, pos.y0 - margin)), "upper right"
+    elif "left" in loc:
+        anchor, mpl_loc = (max(0.01, pos.x0 - margin), cy), "center right"
+    elif "right" in loc:
+        anchor, mpl_loc = (min(0.99, pos.x1 + margin), cy), "center left"
+    elif "upper" in loc:
+        anchor, mpl_loc = (cx, min(0.99, pos.y1 + margin)), "lower center"
+    else:  # "lower center", "best", or anything unrecognised -> safe default
+        anchor, mpl_loc = (cx, max(0.01, pos.y0 - margin)), "upper center"
+
+    leg = fig.legend(
         handles=handles,
-        loc=loc,
+        loc=mpl_loc,
         bbox_to_anchor=anchor,
-        ncol=int(legend_cfg.get("ncol", legend_cfg.get("legend_ncol") or min(4, len(handles)))),
-        frameon=bool(legend_cfg.get("frame", legend_cfg.get("legend_frame", False))),
-        fontsize=legend_cfg.get("fontsize", legend_cfg.get("legend_fontsize", 9)),
-        title=legend_cfg.get("title", legend_cfg.get("legend_title") or None),
-        markerscale=legend_cfg.get("markerscale", legend_cfg.get("legend_markerscale", 1.0)),
+        bbox_transform=fig.transFigure,
+        ncol=max(1, ncol),
+        frameon=frame,
+        fontsize=fontsize,
+        title=title,
+        markerscale=markerscale,
     )
     leg.set_in_layout(True)
+    text_col = theme.get("text", "white")
     for t in leg.get_texts():
-        t.set_color(theme.get("text", "white"))
+        t.set_color(text_col)
     if leg.get_title():
         leg.get_title().set_color(theme.get("muted", "#A0A7B4"))
-    if leg.get_frame():
+    if frame:
         leg.get_frame().set_facecolor(theme.get("panel", theme.get("bg", "none")))
         leg.get_frame().set_edgecolor(theme.get("lines", theme.get("pitch_lines", "#333333")))
+    return leg
+
+
+def _add_legend(ax, handles, theme: dict, loc: str = "lower center", legend_cfg: Optional[dict] = None):
+    # "active" filtering only ever controls which entries show up IN THE
+    # LEGEND -- it must never decide whether an event's marker/arrow is
+    # actually drawn on the chart. (pass_map/shot_map/defensive_actions_map
+    # now always render every event in the dataset; see those functions.)
+    handles = _filter_legend_handles(handles, legend_cfg)
+    return place_legend_outside_axes(ax, handles, theme, loc=loc, legend_cfg=legend_cfg)
 
 
 def _is_no_marker(marker) -> bool:
@@ -1193,23 +1268,25 @@ def pass_map(
 
     has_end = d["x2"].notna() & d["y2"].notna()
     d_end = d[has_end].copy()
-    active_labels = _legend_active_set(legend_cfg)
+    # NOTE: legend_cfg["active"] controls which entries appear IN THE LEGEND
+    # (see _add_legend -> _filter_legend_handles). It must never be used to
+    # decide whether an event actually gets drawn -- doing so silently drops
+    # real events from the chart whenever a legend checkbox happens to be
+    # unticked, which is exactly the "events missing from the map although
+    # they exist in the dataset" bug. Every event in `d` is always rendered.
 
     for t in PASS_ORDER:
-        if active_labels is not None and t not in active_labels:
-            continue
         dt = d_end[d_end["outcome"] == t]
         if len(dt) == 0:
             continue
         pitch.arrows(
             dt["x"], dt["y"], dt["x2"], dt["y2"],
             ax=ax, width=2, alpha=0.85,
-            color=pass_colors.get(t, theme.get("muted", "#A0A7B4"))
+            color=pass_colors.get(t, theme.get("muted", "#A0A7B4")),
+            zorder=3, clip_on=False,
         )
 
     for t in PASS_ORDER:
-        if active_labels is not None and t not in active_labels:
-            continue
         dt_all = d[d["outcome"] == t]
         if len(dt_all) == 0:
             continue
@@ -1227,7 +1304,8 @@ def pass_map(
             edgecolors="white",
             linewidth=1.2,
             alpha=0.95,
-            zorder=6
+            zorder=6,
+            clip_on=False,
         )
 
     missing_end_n = int((~has_end).sum())
@@ -1275,11 +1353,12 @@ def shot_map(
     fig, ax = plt.subplots(figsize=_pitch_figsize(vertical_pitch, pitch_width))
     fig.patch.set_facecolor(theme["bg"])
     _draw_pitch(ax, pitch, theme)
-    active_labels = _legend_active_set(legend_cfg)
+    # NOTE: legend_cfg["active"] only controls which entries show up IN THE
+    # LEGEND (via _add_legend/_filter_legend_handles) -- it must never gate
+    # whether an event is actually drawn, or real shots silently vanish
+    # from the map. Every shot in `s` is always rendered.
 
     for t in SHOT_ORDER:
-        if active_labels is not None and t not in active_labels:
-            continue
         stt = s[s["outcome"] == t]
         if len(stt) == 0:
             continue
@@ -1296,7 +1375,8 @@ def shot_map(
                 edgecolors="white",
                 linewidth=1.6,
                 alpha=0.95,
-                zorder=5
+                zorder=5,
+                clip_on=False,
             )
 
         if show_xg and "xg" in stt.columns:
@@ -1350,7 +1430,11 @@ def defensive_actions_map(
     _draw_pitch(ax, pitch, theme)
 
     legend_handles = []
-    active_labels = _legend_active_set(legend_cfg)
+    # NOTE: legend_cfg["active"] only controls which entries appear IN THE
+    # LEGEND (filtered below, once, when building legend_handles) -- it must
+    # never gate whether an action's markers are actually drawn, or real
+    # defensive events silently vanish from the map. Every action type
+    # present in the dataset is always rendered.
 
     for act in DEF_ACTION_COLS:
         if act not in d.columns:
@@ -1367,8 +1451,6 @@ def defensive_actions_map(
         color = def_colors.get(act, theme.get("muted", "#A0A7B4"))
         marker = def_markers.get(act, "o")
         label = act.replace("_", " ").title()
-        if active_labels is not None and label not in active_labels and act not in active_labels:
-            continue
 
         if not success.empty and not _is_no_marker(marker):
             pitch.scatter(
@@ -1380,7 +1462,8 @@ def defensive_actions_map(
                 edgecolors="white",
                 linewidth=1.4,
                 alpha=0.95,
-                zorder=6
+                zorder=6,
+                clip_on=False,
             )
 
         if not fail.empty and not _is_no_marker(marker):
@@ -1393,7 +1476,8 @@ def defensive_actions_map(
                 edgecolors=color,
                 linewidth=2.0,
                 alpha=0.95,
-                zorder=6
+                zorder=6,
+                clip_on=False,
             )
 
         if not _is_no_marker(marker):
