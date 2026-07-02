@@ -51,7 +51,6 @@ if charts:
     defensive_actions_map = getattr(charts, "defensive_actions_map", None)
     THEMES = getattr(charts, "THEMES", {})
     make_pitch = getattr(charts, "make_pitch", None)
-    place_legend_outside_axes = getattr(charts, "place_legend_outside_axes", None)
 
 # 3. Safely unpack features from charts_extra.py
 if charts_extra:
@@ -587,28 +586,12 @@ def legend_controls_full(prefix, all_items, default_active=None):
 
 def apply_legend_style(ax, legend_cfg, theme):
     """
-    Pull handles from the chart's existing legend (set by chart internals),
+    Pull handles from the axis legend (set by chart internals),
     filter by active items, then re-render with user-chosen style.
-
-    Chart functions (pass_map/shot_map/defensive_actions_map, and
-    draw_custom_legend in charts_pro.py) now attach their legend via
-    fig.legend(...) rather than ax.legend(...), so it survives later
-    axes-aspect adjustments (e.g. from draw_attack_direction expanding
-    ylim) without silently relocating. Look for it in both places for
-    backward compatibility, and re-place using the same aspect-safe helper
-    so this second styling pass can never reintroduce the old top/bottom
-    flip or chart-overlap bug.
     """
     active = legend_cfg.get("active", [])
-    # Prefer a figure-level legend (new, stable placement) if present,
-    # otherwise fall back to a legend attached directly to the axes.
-    existing_leg = None
-    fig = ax.figure
-    if getattr(fig, "legends", None):
-        existing_leg = fig.legends[-1]
-    if existing_leg is None:
-        existing_leg = ax.get_legend()
-
+    # Prefer handles already stored in the axis legend
+    existing_leg = ax.get_legend()
     if existing_leg is not None:
         handles = list(existing_leg.legend_handles)
         labels  = [txt.get_text() for txt in existing_leg.get_texts()]
@@ -628,32 +611,13 @@ def apply_legend_style(ax, legend_cfg, theme):
         return
 
     hs, ls = zip(*pairs)
-    for h, l in zip(hs, ls):
-        h.set_label(l)
-
-    _place = globals().get("place_legend_outside_axes")
-    if _place is not None:
-        _place(
-            ax, list(hs), theme,
-            loc=legend_cfg.get("pos", "lower center"),
-            legend_cfg={
-                "show": True,
-                "title": legend_cfg.get("title"),
-                "fontsize": legend_cfg.get("fontsize", 9),
-                "frame": legend_cfg.get("frame", False),
-                "ncol": int(legend_cfg.get("ncol") or min(4, len(hs))),
-                "markerscale": float(legend_cfg.get("markerscale", 1.0)),
-            },
-        )
-        return
-
-    # Fallback if charts.place_legend_outside_axes couldn't be imported.
     pos = legend_cfg.get("pos", "lower center")
     bbox = None
     if "upper" in pos and "center" in pos:
         bbox = (0.5, 0.98)
     elif "lower" in pos and "center" in pos:
         bbox = (0.5, 0.02)
+
     leg = ax.legend(list(hs), list(ls),
         loc=pos,
         fontsize=legend_cfg.get("fontsize", 9),
